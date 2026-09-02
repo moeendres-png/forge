@@ -1,7 +1,6 @@
 package forge.game.ability.effects;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
 
 import com.google.common.collect.Iterables;
@@ -20,6 +19,7 @@ import forge.game.card.CardLists;
 import forge.game.card.CardUtil;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
+import forge.game.player.AmountDistributionDecision;
 import forge.game.replacement.ReplacementType;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
@@ -228,8 +228,9 @@ public class DamageDealEffect extends DamageBaseEffect {
                 CardCollection assigneeCards = new CardCollection(IterableUtil.filter(tgts, Card.class));
 
                 Player assigningPlayer = players.get(0);
-                Map<Card, Integer> map = assigningPlayer.getController().assignCombatDamage(sourceLKI, assigneeCards, null, dmg, null, true);
-                for (Entry<Card, Integer> dt : map.entrySet()) {
+                AmountDistributionDecision distribution = new AmountDistributionDecision(dmg, assigneeCards);
+                distribution.resolve(assigningPlayer.getController());
+                for (Entry<GameEntity, Integer> dt : distribution.validatedResult().entrySet()) {
                     damageMap.put(sourceLKI, dt.getKey(), dt.getValue());
                 }
 

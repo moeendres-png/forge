@@ -24,6 +24,8 @@ import forge.game.card.CardView.CardStateView;
 import forge.game.card.token.TokenInfo;
 import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
+import forge.game.combat.CombatDamageDecisionView;
+import forge.game.combat.CombatDamageSelection;
 import forge.game.cost.*;
 import forge.game.event.GameEventAddLog;
 import forge.game.event.GameEventPlayerStatsChanged;
@@ -280,41 +282,67 @@ public class PlayerControllerHuman extends PlayerController implements IGameCont
     }
 
     @Override
-    public Map<Card, Integer> assignCombatDamage(final Card attacker, final CardCollectionView blockers, final CardCollectionView remaining,
-                                                 final int damageDealt, final GameEntity defender, final boolean overrideOrder) {
-        // Attacker is a poor name here, since the creature assigning damage
-        // could just as easily be the blocker.
-        final Map<Card, Integer> map = Maps.newHashMap();
-
-        if ((attacker.hasKeyword(Keyword.TRAMPLE) && defender != null) || (blockers.size() > 1)
-                || ((attacker.hasKeyword("You may assign CARDNAME's combat damage divided as you choose among " +
-                "defending player and/or any number of creatures they control.")) && overrideOrder &&
-                blockers.size() > 0) || (attacker.hasKeyword("Trample:Planeswalker") && defender instanceof Card)) {
-            GameEntityViewMap<Card, CardView> gameCacheBlockers = GameEntityView.getMap(blockers);
-            final CardView vAttacker = CardView.get(attacker);
-            final GameEntityView vDefender = GameEntityView.get(defender);
-            boolean maySkip = false;
-            if (remaining != null && remaining.size() > 1 && attacker.isAttacking()) {
-                maySkip = true;
-            }
-            final Map<CardView, Integer> result = getGui().assignCombatDamage(vAttacker, gameCacheBlockers.getTrackableKeys(), damageDealt,
-                    vDefender, overrideOrder, maySkip);
-            if (result == null) {
-                return null;
-            }
-            for (final Entry<CardView, Integer> e : result.entrySet()) {
-                if (gameCacheBlockers.containsKey(e.getKey())) {
-                    map.put(gameCacheBlockers.get(e.getKey()), e.getValue());
-                } else if (e.getKey() == null || e.getKey().getId() == -1) {
-                    // null key or key with -1 means defender
-                    map.put(null, e.getValue());
-                }
-            }
-        } else {
-            map.put(blockers.isEmpty() ? null : blockers.get(0), damageDealt);
+    public CombatDamageSelection chooseCombatDamage(final CombatDamageDecisionView decision) {
+        if (decision == null || decision.getSources().isEmpty()) {
+            throw new IllegalStateException("FORGE_HUMAN_COMBAT_DAMAGE_EMPTY_CORE_VIEW");
         }
-        return map;
+        CombatDamageDecisionView.SourceView sourceView = decision.getSources().get(0);
+        if (decision.getSources().size() > 1) {
+            final FCollection<Card> sources = new FCollection<>();
+            for (CombatDamageDecisionView.SourceView source : decision.getSources()) {
+                sources.add(source.getSource());
+            }
+            final Card chosenSource = chooseSingleEntityForEffect(sources, null,
+                    Localizer.getInstance().getMessage("lblAssignCombatDamage"), null);
+            sourceView = decision.getSources().stream()
+                    .filter(source -> source.getSource() == chosenSource).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("FORGE_HUMAN_COMBAT_DAMAGE_STALE_SOURCE"));
+        }
+
+        CombatDamageDecisionView.RecipientView recipientView = sourceView.getRecipients().get(0);
+        if (sourceView.getRecipients().size() > 1) {
+            final FCollection<GameEntity> recipients = new FCollection<>();
+            for (CombatDamageDecisionView.RecipientView recipient : sourceView.getRecipients()) {
+                recipients.add(recipient.getRecipient());
+            }
+            final GameEntity chosenRecipient = chooseSingleEntityForEffect(recipients, null,
+                    Localizer.getInstance().getMessage("lblAssignCombatDamage"), null);
+            recipientView = sourceView.getRecipients().stream()
+                    .filter(recipient -> recipient.getRecipient() == chosenRecipient).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("FORGE_HUMAN_COMBAT_DAMAGE_STALE_RECIPIENT"));
+        }
+
+        final int amount = recipientView.getMinDamage() == recipientView.getMaxDamage()
+                ? recipientView.getMaxDamage()
+                : chooseNumber(null, Localizer.getInstance().getMessage("lblAssignCombatDamage"),
+                        recipientView.getMinDamage(), recipientView.getMaxDamage());
+        return new CombatDamageSelection(sourceView.getSource(), recipientView.getRecipient(), amount);
     }
+
+    @Override
+    public AmountDistributionSelection chooseAmountDistribution(final AmountDistributionDecisionView decision) {
+        if (decision == null || decision.getRecipients().isEmpty()) {
+            throw new IllegalStateException("FORGE_HUMAN_AMOUNT_DISTRIBUTION_EMPTY_CORE_VIEW");
+        }
+        AmountDistributionDecisionView.RecipientView recipientView = decision.getRecipients().get(0);
+        if (decision.getRecipients().size() > 1) {
+            final FCollection<GameEntity> recipients = new FCollection<>();
+            for (AmountDistributionDecisionView.RecipientView recipient : decision.getRecipients()) {
+                recipients.add(recipient.getRecipient());
+            }
+            final GameEntity chosen = chooseSingleEntityForEffect(recipients, null,
+                    Localizer.getInstance().getMessage("lblAssignDamage"), null);
+            recipientView = decision.getRecipients().stream()
+                    .filter(recipient -> recipient.getRecipient() == chosen).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("FORGE_HUMAN_AMOUNT_DISTRIBUTION_STALE_RECIPIENT"));
+        }
+        final int amount = recipientView.getMinAmount() == recipientView.getMaxAmount()
+                ? recipientView.getMaxAmount()
+                : chooseNumber(null, Localizer.getInstance().getMessage("lblAssignDamage"),
+                        recipientView.getMinAmount(), recipientView.getMaxAmount());
+        return new AmountDistributionSelection(recipientView.getRecipient(), amount);
+    }
+
 
     @Override
     public Map<GameEntity, Integer> divideShield(Card effectSource, Map<GameEntity, Integer> affected, int shieldAmount) {
