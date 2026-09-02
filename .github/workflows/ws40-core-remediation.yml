@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/ws40/**'
       - '.github/workflows/ws40-core-remediation.yml'
+      - 'forge-game/src/main/java/forge/game/combat/CombatDamageDecision.java'
       - 'forge-gui-desktop/src/test/java/forge/game/combat/WS40CombatDamageCoreTest.java'
       - 'forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java'
   workflow_dispatch:
@@ -72,9 +73,11 @@ jobs:
           fi
           git config user.name "ws40-foundry-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add forge-game forge-ai forge-gui forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java
+          git add forge-game forge-ai forge-gui \
+            forge-gui-desktop/src/test/java/forge/game/combat/WS40CombatDamageCoreTest.java \
+            forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java
           if git diff --cached --quiet; then
-            echo "No generated engine/test consumer source delta"
+            echo "No generated engine/test source delta"
             exit 0
           fi
           git commit -m "WS40 normalize combat damage core migration"
