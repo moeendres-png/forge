@@ -15,6 +15,7 @@ on:
 permissions:
   contents: write
 
+# WS40 final stable rerun marker: source is normalized before this run.
 jobs:
   patch-build:
     runs-on: ubuntu-latest
