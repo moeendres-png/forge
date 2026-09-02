@@ -104,18 +104,6 @@ public class PlayerControllerForTests extends PlayerController {
         return null; // refused to side
     }
 
-    @Override
-    public Map<Card, Integer> assignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining, int damageDealt, GameEntity defender, boolean overrideOrder) {
-        if (blockers.size() == 1 && damageDealt == 2 && (
-                (attacker.getName().equals("Grizzly Bears") && blockers.get(0).getName().equals("Ajani's Sunstriker")) ||
-                (attacker.getName().equals("Ajani's Sunstriker") && blockers.get(0).getName().equals("Grizzly Bears"))
-        )) {//test_104_3b_player_with_less_than_zero_life_loses_the_game_only_when_a_player_receives_priority_variant_with_combat
-            Map<Card, Integer> result = new HashMap<>();
-            result.put(blockers.get(0), damageDealt);
-            return result;
-        }
-        throw new IllegalStateException("Erring on the side of caution here...");
-    }
 
     @Override
     public Map<GameEntity, Integer> divideShield(Card effectSource, Map<GameEntity, Integer> affected, int shieldAmount) {

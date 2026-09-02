@@ -187,7 +187,7 @@ public class WS40CombatDamageCoreTest extends AITest {
         final CombatDamageDecision decision = new CombatDamageDecision(attacker, false, staged);
         decision.addSource(source, List.of(blocker), defender, source.getNetCombatDamage(), true,
                 true, false, false, false, false);
-        decision.apply(selection(source, blocker, 1));
+        staged.get(source).put(blocker, 1);
         validate(combat, decision, staged);
     }
 
@@ -279,6 +279,7 @@ public class WS40CombatDamageCoreTest extends AITest {
         final Card battleSource = addCard("Runeclaw Bear", attacker);
         final Card planeswalker = addCard("Jace, the Mind Sculptor", defender);
         final Card battle = addCard("Invasion of Zendikar", defender);
+        battle.setProtectingPlayer(defender);
 
         assertDefenderValid(game, attacker, playerSource, defender);
         assertDefenderValid(game, attacker, walkerSource, planeswalker);
