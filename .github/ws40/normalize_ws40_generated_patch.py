@@ -21,6 +21,15 @@ def remove_exact(path: str, needle: str) -> None:
         write(path, text.replace(needle, "", 1))
 
 
+def replace_exact_if_present(path: str, old: str, new: str) -> None:
+    text = read(path)
+    count = text.count(old)
+    if count > 1:
+        raise SystemExit(f"WS40_NORMALIZE_AMBIGUOUS_REPLACE:{path}:{count}:{old!r}")
+    if count == 1:
+        write(path, text.replace(old, new, 1))
+
+
 def remove_java_method(path: str, signature_fragment: str) -> None:
     text = read(path)
     pos = text.find(signature_fragment)
@@ -94,6 +103,20 @@ remove_exact("forge-ai/src/main/java/forge/ai/ComputerUtilCombat.java", "import 
 remove_java_method(
     "forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java",
     "assignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining, int damageDealt, GameEntity defender, boolean overrideOrder)",
+)
+
+# The final-validator underassignment test must bypass the incremental API deliberately;
+# otherwise the Core correctly rejects the malformed partial selection earlier.
+replace_exact_if_present(
+    "forge-gui-desktop/src/test/java/forge/game/combat/WS40CombatDamageCoreTest.java",
+    "        decision.apply(selection(source, blocker, 1));\n        validate(combat, decision, staged);\n",
+    "        staged.get(source).put(blocker, 1);\n        validate(combat, decision, staged);\n",
+)
+# A battle on the battlefield must have its native protector set before Combat builds defender constraints.
+replace_exact_if_present(
+    "forge-gui-desktop/src/test/java/forge/game/combat/WS40CombatDamageCoreTest.java",
+    "        final Card battle = addCard(\"Invasion of Zendikar\", defender);\n\n        assertDefenderValid",
+    "        final Card battle = addCard(\"Invasion of Zendikar\", defender);\n        battle.setProtectingPlayer(defender);\n\n        assertDefenderValid",
 )
 
 checks = {
