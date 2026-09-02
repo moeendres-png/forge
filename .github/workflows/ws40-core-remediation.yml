@@ -33,6 +33,13 @@ jobs:
           test "$(git rev-parse ef4c834dbbca21a099ae751fb52b2326abdf1e02^{tree})" = "abd80b8e9ba1178bcd8e8fb3147ed6df292b4597"
       - name: Apply bounded WS40 patch
         run: python3 .github/ws40/apply_ws40_core_patch.py
+      - name: Normalize generated patch
+        run: python3 .github/ws40/normalize_ws40_generated_patch.py
+      - name: Raw combat-map bypass audit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ! grep -R "getController().assignCombatDamage" forge-game/src/main/java forge-ai/src/main/java forge-gui/src/main/java
       - name: Compile affected engine modules
         run: mvn -B -pl forge-game,forge-ai,forge-gui -am -DskipTests compile
       - name: Run forge-game tests
