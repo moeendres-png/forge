@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/ws40/**'
       - '.github/workflows/ws40-core-remediation.yml'
+      - 'forge-gui-desktop/src/test/java/forge/game/combat/WS40CombatDamageCoreTest.java'
   workflow_dispatch:
 
 permissions:
@@ -31,8 +32,14 @@ jobs:
         run: |
           git merge-base --is-ancestor ef4c834dbbca21a099ae751fb52b2326abdf1e02 HEAD
           test "$(git rev-parse ef4c834dbbca21a099ae751fb52b2326abdf1e02^{tree})" = "abd80b8e9ba1178bcd8e8fb3147ed6df292b4597"
-      - name: Apply bounded WS40 patch
-        run: python3 .github/ws40/apply_ws40_core_patch.py
+      - name: Apply bounded WS40 patch if not materialized
+        shell: bash
+        run: |
+          if grep -q "CombatDamageAssignmentValidator.validateAll" forge-game/src/main/java/forge/game/combat/Combat.java; then
+            echo "WS40 core patch already materialized"
+          else
+            python3 .github/ws40/apply_ws40_core_patch.py
+          fi
       - name: Normalize generated patch
         run: python3 .github/ws40/normalize_ws40_generated_patch.py
       - name: Raw combat-map bypass audit
@@ -40,19 +47,27 @@ jobs:
         run: |
           set -euxo pipefail
           ! grep -R "getController().assignCombatDamage" forge-game/src/main/java forge-ai/src/main/java forge-gui/src/main/java
+          ! grep -R "distributeAIDamage" forge-ai/src/main/java
+          ! grep -R "assignCombatDamage(Card attacker, CardCollectionView blockers" forge-game/src/main/java forge-ai/src/main/java forge-gui/src/main/java
       - name: Compile affected engine modules
-        run: mvn -B -pl forge-game,forge-ai,forge-gui -am -DskipTests compile
+        run: mvn -B -pl forge-game,forge-ai,forge-gui,forge-gui-desktop -am -DskipTests compile
       - name: Run forge-game tests
         run: mvn -B -pl forge-game -am test
-      - name: Commit validated patch
+      - name: Run WS40 native combat qualification matrix
+        run: mvn -B -pl forge-gui-desktop -am -Dtest=forge.game.combat.WS40CombatDamageCoreTest -Dsurefire.failIfNoSpecifiedTests=false test
+      - name: Commit normalized generated source if needed
         shell: bash
         run: |
           if git diff --quiet; then
-            echo "No generated patch delta"
+            echo "No generated source delta"
             exit 0
           fi
           git config user.name "ws40-foundry-bot"
           git config user.email "actions@users.noreply.github.com"
           git add forge-game forge-ai forge-gui
-          git commit -m "WS40 migrate combat damage legality into Forge Core"
+          if git diff --cached --quiet; then
+            echo "No generated engine source delta"
+            exit 0
+          fi
+          git commit -m "WS40 normalize combat damage core migration"
           git push origin HEAD:foundry/ws40-af04-core-remediation
