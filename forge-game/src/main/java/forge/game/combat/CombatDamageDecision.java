@@ -201,9 +201,14 @@ public final class CombatDamageDecision {
             }
         }
 
+        boolean latentLegacyRecipient = false;
         for (int i = 0; i < allowedCards.size(); i++) {
             if (source.legacyOrder && !source.unrestrictedDivide && i > legacyLastAllowed) {
-                break;
+                final GameEntity latent = allowedCards.get(i);
+                if (!(latent instanceof Card card) || card.isInPlay()) {
+                    latentLegacyRecipient = true;
+                }
+                continue;
             }
             final GameEntity recipient = allowedCards.get(i);
             if (recipient instanceof Card card && !card.isInPlay()) {
@@ -214,11 +219,15 @@ public final class CombatDamageDecision {
                     lethalRemaining, false));
         }
 
-        if (source.allowDefender && source.defender != null && canAssignToDefender(source)) {
+        final boolean defenderCurrentlyLegal = source.allowDefender && source.defender != null
+                && canAssignToDefender(source);
+        if (defenderCurrentlyLegal) {
             legal.add(new CombatDamageDecisionView.RecipientView(source.defender, 1, remaining, 0, true));
         }
 
-        if (legal.size() == 1) {
+        final boolean latentTrampleDefender = source.allowDefender && source.defender != null
+                && source.blocked && source.trample && !defenderCurrentlyLegal;
+        if (legal.size() == 1 && !latentLegacyRecipient && !latentTrampleDefender) {
             final CombatDamageDecisionView.RecipientView only = legal.get(0);
             legal.set(0, new CombatDamageDecisionView.RecipientView(only.getRecipient(), remaining,
                     remaining, only.getLethalDamageRemaining(), only.isDefender()));
