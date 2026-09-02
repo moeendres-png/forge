@@ -27,13 +27,11 @@ def remove_java_method(path: str, signature_fragment: str) -> None:
     text = read(path)
     pos = text.find(signature_fragment)
     if pos < 0:
-        # Idempotent on already-normalized generated source.
         return
     if text.find(signature_fragment, pos + 1) >= 0:
         raise SystemExit(f"WS40_NORMALIZE_AMBIGUOUS_METHOD:{path}:{signature_fragment}")
 
     line_start = text.rfind("\n", 0, pos) + 1
-    # Include immediately preceding @Override/@Deprecated annotation lines.
     start = line_start
     while start > 0:
         prev_end = start - 1
@@ -131,6 +129,14 @@ remove_java_method(
 remove_java_method(
     "forge-ai/src/main/java/forge/ai/ComputerUtilCombat.java",
     "distributeAIDamage(final Player self, final Card combatant, CardCollectionView opposedCombatants, final CardCollectionView remaining, int dmgCanDeal, GameEntity defender, boolean overrideOrder)",
+)
+remove_exact(
+    "forge-ai/src/main/java/forge/ai/ComputerUtilCombat.java",
+    "import com.google.common.collect.Maps;\n",
+)
+remove_exact(
+    "forge-ai/src/main/java/forge/ai/ComputerUtilCombat.java",
+    "import forge.game.combat.AttackingBand;\n",
 )
 
 # Fail closed on the core/controller surface after normalization.
