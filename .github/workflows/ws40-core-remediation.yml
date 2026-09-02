@@ -8,6 +8,7 @@ on:
       - '.github/ws40/**'
       - '.github/workflows/ws40-core-remediation.yml'
       - 'forge-gui-desktop/src/test/java/forge/game/combat/WS40CombatDamageCoreTest.java'
+      - 'forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java'
   workflow_dispatch:
 
 permissions:
@@ -30,11 +31,13 @@ jobs:
       - name: Verify exact WS40 parent
         shell: bash
         run: |
+          set -euo pipefail
           git merge-base --is-ancestor ef4c834dbbca21a099ae751fb52b2326abdf1e02 HEAD
           test "$(git rev-parse ef4c834dbbca21a099ae751fb52b2326abdf1e02^{tree})" = "abd80b8e9ba1178bcd8e8fb3147ed6df292b4597"
       - name: Apply bounded WS40 patch if not materialized
         shell: bash
         run: |
+          set -euo pipefail
           if grep -q "CombatDamageAssignmentValidator.validateAll" forge-game/src/main/java/forge/game/combat/Combat.java; then
             echo "WS40 core patch already materialized"
           else
@@ -45,10 +48,10 @@ jobs:
       - name: Raw combat-map bypass audit
         shell: bash
         run: |
-          set -euxo pipefail
-          ! grep -R "getController().assignCombatDamage" forge-game/src/main/java forge-ai/src/main/java forge-gui/src/main/java
-          ! grep -R "distributeAIDamage" forge-ai/src/main/java
-          ! grep -R "assignCombatDamage(Card attacker, CardCollectionView blockers" forge-game/src/main/java forge-ai/src/main/java forge-gui/src/main/java
+          set -euo pipefail
+          if grep -R "getController().assignCombatDamage" forge-game/src/main/java forge-ai/src/main/java forge-gui/src/main/java; then exit 1; fi
+          if grep -R "assignCombatDamage(Card attacker, CardCollectionView blockers" forge-game/src/main/java forge-ai/src/main/java forge-gui/src/main/java forge-gui-desktop/src/test/java; then exit 1; fi
+          if grep -R "static .*distributeAIDamage" forge-ai/src/main/java; then exit 1; fi
       - name: Compile affected engine modules
         run: mvn -B -pl forge-game,forge-ai,forge-gui,forge-gui-desktop -am -DskipTests compile
       - name: Run forge-game tests
@@ -58,15 +61,16 @@ jobs:
       - name: Commit normalized generated source if needed
         shell: bash
         run: |
+          set -euo pipefail
           if git diff --quiet; then
             echo "No generated source delta"
             exit 0
           fi
           git config user.name "ws40-foundry-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add forge-game forge-ai forge-gui
+          git add forge-game forge-ai forge-gui forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java
           if git diff --cached --quiet; then
-            echo "No generated engine source delta"
+            echo "No generated engine/test consumer source delta"
             exit 0
           fi
           git commit -m "WS40 normalize combat damage core migration"
