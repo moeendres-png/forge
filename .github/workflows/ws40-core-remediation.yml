@@ -57,7 +57,11 @@ jobs:
       - name: Run forge-game tests
         run: mvn -B -pl forge-game -am test
       - name: Run WS40 native combat qualification matrix
-        run: mvn -B -pl forge-gui-desktop -am -Dtest=forge.game.combat.WS40CombatDamageCoreTest -Dsurefire.failIfNoSpecifiedTests=false test
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xvfb-run
+          xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=forge.game.combat.WS40CombatDamageCoreTest -Dsurefire.failIfNoSpecifiedTests=false test
       - name: Commit normalized generated source if needed
         shell: bash
         run: |
