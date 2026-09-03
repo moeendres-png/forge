@@ -24,7 +24,7 @@ jobs:
           ref: foundry/ws40-af04-core-remediation
           fetch-depth: 0
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -39,8 +39,8 @@ jobs:
           test -f .github/ws40/apply_ws40_core_patch.py
           test -f .github/ws40/normalize_ws40_generated_patch.py
           test ! -e tools/ws40_apply_core_remediation.py
-          if git grep -n 'tools/ws40_apply_core_remediation.py'; then
-            echo 'obsolete duplicate patcher is still referenced' >&2
+          if git grep -n 'tools/ws40_apply_core_remediation.py' -- ':!.github/workflows/ws40-patch-repro.yml'; then
+            echo 'obsolete duplicate patcher is still referenced outside the reproducibility audit itself' >&2
             exit 1
           fi
 
