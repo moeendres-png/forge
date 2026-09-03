@@ -6,6 +6,7 @@ on:
       - foundry/ws40-af04-core-remediation
     paths:
       - '.github/workflows/ws40-patch-repro.yml'
+      - '.github/ws40/**'
   workflow_dispatch:
 
 permissions:
@@ -37,7 +38,10 @@ jobs:
           git merge-base --is-ancestor "$WS40_BASELINE_COMMIT" HEAD
           test "$(git rev-parse "$WS40_BASELINE_COMMIT^{tree}")" = "$WS40_BASELINE_TREE"
           test -f .github/ws40/apply_ws40_core_patch.py
+          test -f .github/ws40/patch_ws40_existing_sources.py
           test -f .github/ws40/normalize_ws40_generated_patch.py
+          test "$(find .github/ws40/materialized -type f | wc -l)" -eq 8
+          git grep -n 'patch_ws40_existing_sources.py' -- .github/ws40/apply_ws40_core_patch.py
           test ! -e tools/ws40_apply_core_remediation.py
           if git grep -n 'tools/ws40_apply_core_remediation.py' -- ':!.github/workflows/ws40-patch-repro.yml'; then
             echo 'obsolete duplicate patcher is still referenced outside the reproducibility audit itself' >&2
@@ -51,8 +55,7 @@ jobs:
           repro="$RUNNER_TEMP/ws40-repro"
           git worktree add --detach "$repro" "$WS40_BASELINE_COMMIT"
           mkdir -p "$repro/.github/ws40"
-          cp .github/ws40/apply_ws40_core_patch.py "$repro/.github/ws40/apply_ws40_core_patch.py"
-          cp .github/ws40/normalize_ws40_generated_patch.py "$repro/.github/ws40/normalize_ws40_generated_patch.py"
+          cp -a .github/ws40/. "$repro/.github/ws40/"
 
           python3 "$repro/.github/ws40/apply_ws40_core_patch.py"
           python3 "$repro/.github/ws40/normalize_ws40_generated_patch.py"
@@ -162,6 +165,9 @@ jobs:
               'final_commit': git('rev-parse', 'HEAD'),
               'final_tree': git('rev-parse', 'HEAD^{tree}'),
               'canonical_patcher': '.github/ws40/apply_ws40_core_patch.py',
+              'subordinate_existing_source_transform': '.github/ws40/patch_ws40_existing_sources.py',
+              'template_root': '.github/ws40/materialized',
+              'template_file_count': sum(1 for p in pathlib.Path('.github/ws40/materialized').rglob('*') if p.is_file()),
               'normalizer': '.github/ws40/normalize_ws40_generated_patch.py',
               'obsolete_duplicate_absent': not pathlib.Path('tools/ws40_apply_core_remediation.py').exists(),
               'expected_file_count': len((out / 'EXPECTED_FILES.txt').read_text().splitlines()) if (out / 'EXPECTED_FILES.txt').exists() else None,
