@@ -8,6 +8,7 @@ on:
       - '.github/ws40/**'
       - '.github/workflows/ws40-core-remediation.yml'
       - 'forge-game/src/main/java/forge/game/combat/CombatDamageDecision.java'
+      - 'forge-game/src/main/java/forge/game/zone/RestoredSpellCastHistory.java'
       - 'forge-gui-desktop/src/test/java/forge/game/combat/WS40CombatDamageCoreTest.java'
       - 'forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java'
   workflow_dispatch:
