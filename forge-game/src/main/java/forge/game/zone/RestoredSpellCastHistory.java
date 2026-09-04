@@ -70,7 +70,9 @@ public final class RestoredSpellCastHistory {
 
         // The history booleans are not caller inputs. Successful admission through this method is
         // the native event establishing that the serialized state represents a completed paid cast.
-        HISTORY.put(instance.getSpellAbility(), new History(true, true));
+        final History history = new History(true, true);
+        HISTORY.put(ability, history);
+        HISTORY.put(instance.getSpellAbility(), history);
         return instance;
     }
 
