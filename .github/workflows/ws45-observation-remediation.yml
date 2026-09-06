@@ -14,7 +14,7 @@ permissions:
 jobs:
   compile:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,7 +23,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+          cache: maven
       - name: Source lock
         shell: bash
         run: |
@@ -31,8 +31,11 @@ jobs:
           echo "FORGE_HEAD=$(git rev-parse HEAD)"
           echo "FORGE_TREE=$(git rev-parse HEAD^{tree})"
           test "$(git merge-base HEAD f83b77aa75e4f90852bef9243f3c5b32c37dc7e0)" = "f83b77aa75e4f90852bef9243f3c5b32c37dc7e0"
-      - name: Compile Forge game
-        run: ./gradlew :forge-game:compileJava --no-daemon
+      - name: Compile Forge game and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mvn -U -B -pl forge-game -am -DskipTests package
       - name: Persist source identity
         if: always()
         shell: bash
