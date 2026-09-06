@@ -199,7 +199,7 @@ public final class NativeQualificationObservation {
         }
         final CardRules a = first.getRules();
         final CardRules b = second.getRules();
-        if (!CardRules.canBePartnerCommanders(a, b)) {
+        if (!a.canBePartnerCommanders(b)) {
             throw new IllegalArgumentException("WS45_NATIVE_CARD_RULES_REJECT_PARTNER_RELATION");
         }
         final PartnerRelation relation = new PartnerRelation(first.getId(), second.getId());
@@ -234,9 +234,6 @@ public final class NativeQualificationObservation {
                 switch (fact.kind()) {
                     case KNOWN_OBJECT_IDENTITY -> {
                         final Card card = cardById(game, required(fact.objectCardId(), "object"));
-                        // Historical knowledge can outlive a reveal. The live native visibility
-                        // check is still consulted first; the ledger then preserves that knowledge
-                        // for the isolated actor-view authority after restoration.
                         card.getView().canBeShownTo(viewer.getView());
                     }
                     case FACE_DOWN_LOOK_PERMISSION -> {
