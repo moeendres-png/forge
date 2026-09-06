@@ -1,0 +1,47 @@
+name: WS45 observation remediation
+
+on:
+  push:
+    branches: [foundry/ws45-v104-observation-remediation]
+    paths:
+      - 'forge-game/src/main/java/forge/game/qualification/**'
+      - '.github/workflows/ws45-observation-remediation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Source lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "FORGE_HEAD=$(git rev-parse HEAD)"
+          echo "FORGE_TREE=$(git rev-parse HEAD^{tree})"
+          test "$(git merge-base HEAD f83b77aa75e4f90852bef9243f3c5b32c37dc7e0)" = "f83b77aa75e4f90852bef9243f3c5b32c37dc7e0"
+      - name: Compile Forge game
+        run: ./gradlew :forge-game:compileJava --no-daemon
+      - name: Persist source identity
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ws45-evidence
+          printf '{"commit":"%s","tree":"%s","baseline":"%s"}\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "f83b77aa75e4f90852bef9243f3c5b32c37dc7e0" > ws45-evidence/source-lock.json
+          sha256sum forge-game/src/main/java/forge/game/qualification/RestoredQualificationHistory.java > ws45-evidence/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ws45-forge-observation-${{ github.sha }}
+          path: ws45-evidence/
+          if-no-files-found: error
+          retention-days: 90
