@@ -50,6 +50,10 @@ public final class RestoredQualificationHistory {
         STATE_BASED_ACTION
     }
 
+    public enum CommanderRelationKind {
+        PARTNER
+    }
+
     public enum KnowledgeFactKind {
         KNOWN_OBJECT_IDENTITY,
         KNOWN_LIBRARY_RANGE,
@@ -81,6 +85,17 @@ public final class RestoredQualificationHistory {
             ZoneType from,
             ZoneType to,
             CommanderMoveTiming timing) {
+    }
+
+    public record CommanderRelation(
+            int firstCommanderCardId,
+            int secondCommanderCardId,
+            CommanderRelationKind relationKind) {
+        public CommanderRelation {
+            if (firstCommanderCardId == secondCommanderCardId || relationKind == null) {
+                throw new IllegalArgumentException("RESTORE_QUALIFICATION_BAD_COMMANDER_RELATION");
+            }
+        }
     }
 
     public record PredeterminedDraw(
@@ -170,6 +185,7 @@ public final class RestoredQualificationHistory {
         final List<ExtraTurnCreation> extraTurns = new ArrayList<>();
         final List<Elimination> eliminations = new ArrayList<>();
         final List<CommanderZoneMove> commanderMoves = new ArrayList<>();
+        final List<CommanderRelation> commanderRelations = new ArrayList<>();
         RulesRandomness randomness;
         KnowledgePolicy knowledgePolicy;
     }
@@ -229,6 +245,17 @@ public final class RestoredQualificationHistory {
         history(game).commanderMoves.add(new CommanderZoneMove(commander.getId(), from, to, timing));
     }
 
+    public static void restoreCommanderRelation(
+            final Game game,
+            final Card first,
+            final Card second,
+            final CommanderRelationKind relationKind) {
+        if (first == null || second == null || relationKind == null) {
+            throw new IllegalArgumentException("RESTORE_QUALIFICATION_BAD_COMMANDER_RELATION");
+        }
+        history(game).commanderRelations.add(new CommanderRelation(first.getId(), second.getId(), relationKind));
+    }
+
     public static void restoreRulesRandomness(
             final Game game,
             final Long seed,
@@ -267,6 +294,10 @@ public final class RestoredQualificationHistory {
 
     public static List<CommanderZoneMove> getCommanderZoneMoves(final Game game) {
         return List.copyOf(history(game).commanderMoves);
+    }
+
+    public static List<CommanderRelation> getCommanderRelations(final Game game) {
+        return List.copyOf(history(game).commanderRelations);
     }
 
     public static RulesRandomness getRulesRandomness(final Game game) {
