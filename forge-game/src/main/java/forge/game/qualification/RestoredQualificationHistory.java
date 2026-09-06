@@ -28,6 +28,9 @@ import java.util.WeakHashMap;
  * analogous to RestoredSpellCastHistory: a state-loader records already-completed native history
  * while restoring a serialized snapshot, and qualification observers later read that history
  * back from the isolated Forge process instead of reconstructing it from the request.
+ *
+ * WS-45 deliberately stores structured facts rather than canonical request JSON. The observer
+ * must re-serialize these typed records; a request blob cannot be returned as evidence.
  */
 public final class RestoredQualificationHistory {
     private RestoredQualificationHistory() {
@@ -45,6 +48,20 @@ public final class RestoredQualificationHistory {
     public enum CommanderMoveTiming {
         REPLACEMENT_EFFECT_BEFORE_MOVE,
         STATE_BASED_ACTION
+    }
+
+    public enum KnowledgeFactKind {
+        KNOWN_OBJECT_IDENTITY,
+        KNOWN_LIBRARY_RANGE,
+        FACE_DOWN_LOOK_PERMISSION,
+        TEMPORARY_PERMISSION,
+        CHANNEL_UNDER_TEST,
+        HONEY_SENTINEL,
+        INVALIDATION_CONDITION,
+        OBLIGATION,
+        ORDERED_KNOWN_INFORMATION,
+        PERMITTED_PUBLIC_METADATA,
+        PROHIBITED_METADATA
     }
 
     public record ExtraTurnCreation(
@@ -66,28 +83,87 @@ public final class RestoredQualificationHistory {
             CommanderMoveTiming timing) {
     }
 
+    public record PredeterminedDraw(
+            String channel,
+            String operation,
+            String result) {
+        public PredeterminedDraw {
+            if (channel == null || channel.isBlank() || operation == null || operation.isBlank()
+                    || result == null || result.isBlank()) {
+                throw new IllegalArgumentException("RESTORE_QUALIFICATION_BAD_PREDETERMINED_DRAW");
+            }
+        }
+    }
+
     public record RulesRandomness(
-            long seed,
+            Long seed,
+            String seedBinding,
             List<String> channels,
-            boolean providerNativeRngCallsRecorded,
-            List<String> predeterminedSemanticDraws) {
+            List<PredeterminedDraw> predeterminedDraws,
+            boolean pilotRandomnessProhibited,
+            boolean providerNativeRngCallsRecorded) {
         public RulesRandomness {
             channels = List.copyOf(channels);
-            predeterminedSemanticDraws = List.copyOf(predeterminedSemanticDraws);
+            predeterminedDraws = List.copyOf(predeterminedDraws);
+            if (seed == null && (seedBinding == null || seedBinding.isBlank())) {
+                throw new IllegalArgumentException("RESTORE_QUALIFICATION_RANDOMNESS_BINDING_REQUIRED");
+            }
+            if (!pilotRandomnessProhibited) {
+                throw new IllegalArgumentException("RESTORE_QUALIFICATION_PILOT_RANDOMNESS_MUST_BE_PROHIBITED");
+            }
+        }
+    }
+
+    /**
+     * A deliberately typed union record. Only fields meaningful to {@code kind} may be populated.
+     * Stable semantic IDs are qualification identity metadata; they are not Forge legality inputs.
+     */
+    public record KnowledgeFact(
+            KnowledgeFactKind kind,
+            String viewer,
+            String objectId,
+            String playerId,
+            String zone,
+            String permission,
+            String scope,
+            Integer start,
+            Integer count,
+            Boolean ordered,
+            Boolean persistsWhileSameObject,
+            String beforeEvent,
+            String controlledPlayer,
+            String controller,
+            String value,
+            List<String> values) {
+        public KnowledgeFact {
+            if (kind == null) {
+                throw new IllegalArgumentException("RESTORE_QUALIFICATION_KNOWLEDGE_KIND_REQUIRED");
+            }
+            values = values == null ? List.of() : List.copyOf(values);
+        }
+    }
+
+    public record ViewerKnowledgeState(
+            String viewer,
+            List<KnowledgeFact> facts) {
+        public ViewerKnowledgeState {
+            if (viewer == null || viewer.isBlank()) {
+                throw new IllegalArgumentException("RESTORE_QUALIFICATION_VIEWER_REQUIRED");
+            }
+            facts = List.copyOf(facts);
         }
     }
 
     public record KnowledgePolicy(
-            String canonicalPolicy,
-            boolean nativeVisibilityValidated) {
-    }
-
-    public record SetupValidation(
-            boolean constructInsideRulesProcess,
-            boolean exposeNormalizedConstructedState,
-            boolean nativeStructuralValidationRequired,
-            boolean requestedVsNormalizedEqualityRequired,
-            boolean failClosedOnMismatch) {
+            String channelPolicy,
+            List<ViewerKnowledgeState> viewers,
+            boolean nativeReferentsValidated) {
+        public KnowledgePolicy {
+            if (channelPolicy == null || channelPolicy.isBlank() || !nativeReferentsValidated) {
+                throw new IllegalArgumentException("RESTORE_QUALIFICATION_KNOWLEDGE_POLICY_NOT_VALIDATED");
+            }
+            viewers = List.copyOf(viewers);
+        }
     }
 
     private static final class History {
@@ -96,7 +172,6 @@ public final class RestoredQualificationHistory {
         final List<CommanderZoneMove> commanderMoves = new ArrayList<>();
         RulesRandomness randomness;
         KnowledgePolicy knowledgePolicy;
-        SetupValidation setupValidation;
     }
 
     private static final Map<Game, History> HISTORY =
@@ -156,48 +231,30 @@ public final class RestoredQualificationHistory {
 
     public static void restoreRulesRandomness(
             final Game game,
-            final long seed,
+            final Long seed,
+            final String seedBinding,
             final List<String> channels,
-            final boolean providerNativeRngCallsRecorded,
-            final List<String> predeterminedSemanticDraws) {
+            final List<PredeterminedDraw> predeterminedDraws,
+            final boolean pilotRandomnessProhibited,
+            final boolean providerNativeRngCallsRecorded) {
         final History h = history(game);
         if (h.randomness != null) {
             throw new IllegalStateException("RESTORE_QUALIFICATION_RANDOMNESS_ALREADY_SET");
         }
-        h.randomness = new RulesRandomness(seed, channels, providerNativeRngCallsRecorded, predeterminedSemanticDraws);
+        h.randomness = new RulesRandomness(seed, seedBinding, channels, predeterminedDraws,
+                pilotRandomnessProhibited, providerNativeRngCallsRecorded);
     }
 
     public static void restoreKnowledgePolicy(
             final Game game,
-            final String canonicalPolicy,
-            final boolean nativeVisibilityValidated) {
-        if (canonicalPolicy == null || canonicalPolicy.isEmpty() || !nativeVisibilityValidated) {
-            throw new IllegalArgumentException("RESTORE_QUALIFICATION_KNOWLEDGE_POLICY_NOT_VALIDATED");
-        }
+            final String channelPolicy,
+            final List<ViewerKnowledgeState> viewers,
+            final boolean nativeReferentsValidated) {
         final History h = history(game);
         if (h.knowledgePolicy != null) {
             throw new IllegalStateException("RESTORE_QUALIFICATION_KNOWLEDGE_POLICY_ALREADY_SET");
         }
-        h.knowledgePolicy = new KnowledgePolicy(canonicalPolicy, true);
-    }
-
-    public static void restoreSetupValidation(
-            final Game game,
-            final boolean constructInsideRulesProcess,
-            final boolean exposeNormalizedConstructedState,
-            final boolean nativeStructuralValidationRequired,
-            final boolean requestedVsNormalizedEqualityRequired,
-            final boolean failClosedOnMismatch) {
-        final History h = history(game);
-        if (h.setupValidation != null) {
-            throw new IllegalStateException("RESTORE_QUALIFICATION_SETUP_VALIDATION_ALREADY_SET");
-        }
-        h.setupValidation = new SetupValidation(
-                constructInsideRulesProcess,
-                exposeNormalizedConstructedState,
-                nativeStructuralValidationRequired,
-                requestedVsNormalizedEqualityRequired,
-                failClosedOnMismatch);
+        h.knowledgePolicy = new KnowledgePolicy(channelPolicy, viewers, nativeReferentsValidated);
     }
 
     public static List<ExtraTurnCreation> getExtraTurnCreations(final Game game) {
@@ -224,14 +281,6 @@ public final class RestoredQualificationHistory {
         final KnowledgePolicy value = history(game).knowledgePolicy;
         if (value == null) {
             throw new IllegalStateException("RESTORE_QUALIFICATION_KNOWLEDGE_POLICY_UNAVAILABLE");
-        }
-        return value;
-    }
-
-    public static SetupValidation getSetupValidation(final Game game) {
-        final SetupValidation value = history(game).setupValidation;
-        if (value == null) {
-            throw new IllegalStateException("RESTORE_QUALIFICATION_SETUP_VALIDATION_UNAVAILABLE");
         }
         return value;
     }
