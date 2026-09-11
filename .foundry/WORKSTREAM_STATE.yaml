@@ -4,8 +4,8 @@ worktree: /home/moeen/code/ws59-forge-rqc3-engine-remediation
 branch: ws59/forge-rqc3-engine-remediation-20260911
 audit_base_sha: 66caae16015bd403bc0a52fa6689afb5508f74d0
 audit_base_tree: 40fc8f29ce4de31a964972461db2b48b4221e07f
-state_written_against_head: a9a95db6662c2d28814390a9c0c2f986e39aa8b4
-validated_head: a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+state_written_against_head: c8f30969fd002b06b5e962afac67d801cf090977
+validated_head: c8f30969fd002b06b5e962afac67d801cf090977
 objective: 'WS59 Forge RQ-C3 engine remediation: systemically repair the exact A04
   replacement/application defect, C01 stack-spell target-candidacy and alternate-cost
   continuation defect, and G04 missing engine-native concession action seam on one
@@ -47,8 +47,9 @@ forbidden_shortcuts:
 - direct effect-resolution bypass
 - card-name hacks
 ownership: WS59-FORGE-RQC3-ENGINE-REMEDIATION
-status: ACTIVE
-exact_next_action: Terminal validation PASS on a9a95db (10/10 incl 9 WS59 + ReplacementHandler;
-  forge-game 3/3 earlier). Persist evidence/state; safe_push dry-run; report FORGE_RQC3_ENGINE_REMEDIATION_PASS.
+status: COMPLETE
+exact_next_action: Coordinator review of WS59R terminal; then CPL Forge successor
+  pin/requalification.
 technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
 current_reasoning_tier: high
+remaining_scope: []
