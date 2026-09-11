@@ -10,7 +10,7 @@
  - Branch: architecture/ws-a1d-h4f-forge-protocol2-bridge-20260911
  - (Remediation 02 heads recorded under "Validated substantive head" below.)
 
- ## CURRENT TRUTH (Remediation 03 — authoritative; earlier sections are historical)
+ ## CURRENT TRUTH (Remediation 04 — authoritative; earlier sections are historical)
 
  - Action sources: engine-owned `Player.getAllCards()` (every Forge-tracked zone of
    the acting player, incl. Sideboard/Ante/Merged/variants/tokens) UNION
@@ -33,8 +33,11 @@
    Phase-2 preset-seat paragraph below.)
  - Observation: principal-scoped game state AND legal actions AND bridge/next-decision
    metadata (actor-only revision/pending/state-hash; others get null/-1/withheld).
-   Raw fail_reason is never externalized; last_execution_error is exposed only to
-   its bound actor/frame (SESSION_FAILED is generic "session failed"). Required reads
+   Generic external failure policy: fail_reason is emitted on no protocol path
+   (terminal status is the public signal); last_execution_error only to its bound
+   actor while its frame is current; SESSION_FAILED is exactly "session failed";
+   unexpected Throwables yield INTERNAL_ERROR/"internal bridge error"; projection
+   failures yield PROJECTION_FAILED plus the fixed schema field only. Required reads
    throw BridgeProjectionException -> PROJECTION_FAILED; mana pool, commander damage
    and commander casts are required reads (no {} on failure). Visibility is the
    native pair canBeShownTo + canFaceDownBeShownTo with a true-name path
@@ -55,10 +58,18 @@
    (under-disclosure, never over-disclosure); London tuck, combat, triggers, modes,
    targets, X, concede, replay, RNG, partners, non-4P remain unsupported.
  - H4B_FORGE_RECOMMENDATION = PARTIAL. RULES_BEHAVIOR_CREDIT_CHANGE = 0.
+
+ ## Historical Phase-0 environment (superseded details retained as history)
+
  - AUDIT_BASE_SHA: a37a865a53280dd8ad6fad3384d69611e8c5a42f (verified `git rev-parse HEAD`)
  - AUDIT_BASE_TREE: 4471ff068dd23127fc5878bdffa0c0e6de8e6c28 (verified)
- - Lab authority: origin/main = 950d6fd6f7ec2b7f1835d2ed744e2c8d146d4e39 (verified via
-   `git ls-remote`; local Lab checkout is on a research branch ahead of main — untouched).
+ - Original H4F Lab protocol/source authority used during implementation:
+   origin/main = 950d6fd6f7ec2b7f1835d2ed744e2c8d146d4e39 (verified via
+   `git ls-remote` at the time; local Lab checkout on a research branch — untouched).
+ - Current Lab main (read-only reference): c1a760af21469fc1358dbdb9b821f79dcdfaf2db.
+   Drift previously Coordinator-adjudicated UNAFFECTED for the Protocol-2 and
+   manifest surfaces (protocol/manifest blobs identical); H4F was not rebased or
+   retargeted because of it.
  - Lab protocol contract engine_runtime.py at 950d6fd6 fetched read-only via raw GitHub;
    message surface identical to local copy. No Lab mutation performed.
  - Java: OpenJDK 21.0.12 (build targets 17 per parent pom). Maven 3.9.12. No mvnw.
@@ -255,10 +266,17 @@
  - R14 event log: external export removed; canonical + alias fail closed with
    EVENT_LOG_UNSUPPORTED; capability false with honest notes; internal audit
    retained and asserted non-empty; responses proven free of option IDs/labels.
- - R14B diagnostics: fail_reason never externalized (status is the public signal);
-   last_execution_error bound to actor+revision and exposed only there;
-   SESSION_FAILED message is generic "session failed". Sentinel: tuck-failure
-   detail retained internally, absent from all external surfaces.
+ - R14B diagnostics: exact generic external failure policy — fail_reason is never
+   emitted on any protocol path (terminal status "failed"/"aborted" is the public
+   signal); last_execution_error is exposed only to its bound actor while its frame
+   is current; SESSION_FAILED message is exactly "session failed"; SESSION_CLOSED is
+   exactly "session is closed"; unexpected Throwables yield INTERNAL_ERROR with the
+   stable message "internal bridge error"; projection failures yield
+   PROJECTION_FAILED with the stable text plus the fixed schema field identifier
+   only (never the Throwable cause); lifecycle catches use stable generic strings.
+   Full diagnostics live in the internal audit, stderr and test-visible state.
+   Sentinel: tuck-failure detail retained internally, absent from all external
+   surfaces.
  - R15 commander casts: native Player.getCommanders() + Game.getCardState +
    Player.getCommanderCast (no zone-name scan, no tax rules). Real Rograkh game:
    offered from command zone, submitted, count==1 while on Stack, stable at 1
@@ -266,9 +284,62 @@
  - R12: placeholder removed; governance wording corrected (published vs new push);
    this CURRENT TRUTH section authoritative; history preserved with SUPERSEDED marks.
 
-  ## Validated substantive head
- - Remediation 03 substantive: fe7c2dba7aff19a507a907e814e1a3d1c02d1980
+  ## Remote review 04 — R14B/R16/R17/R12 disposition (DIRECTLY_VERIFIED unless noted)
+
+ - R14B settlement: waitForSettle snapshots status per iteration; FAILED ->
+   rejected SESSION_FAILED with exactly "session failed"; CLOSED -> rejected
+   SESSION_CLOSED with exactly "session is closed"; only OVER/genuine game-over
+   settles applied-terminal. Ship-driven FAILED proven rejected via protocol
+   handler (not only session.submit). No timing dependence (failed sessions park
+   no new frames, so the FAILED branch is deterministic).
+ - R16 ordering: actor then revision precede frame-status exposure; wrong actor on
+   a private UNSUPPORTED frame gets WRONG_ACTOR with no reason/count/revision/name;
+   stale correct-actor gets STALE_REVISION without the current blocker; correct
+   actor+revision gets its truthful UNSUPPORTED_DECISION. Proven on the Swords
+   fixture with hash stability.
+ - R17 sanitization: dispatch catch, game-creation/startup/db catches and
+   BridgeMain dispatch catch emit stable generic strings; full Throwables go to
+   stderr via logInternal. PROJECTION_FAILED carries the fixed schema field only.
+   Caller-supplied echoes (deck/handle/game/observer ids, counts) and
+   bridge-generated deterministic messages retained (class A). Sentinel tests:
+   dispatch Throwable, projection cause, logInternal channel.
+ - Execution-note binding: bound at production time to live frame actor+revision;
+   submit clears the boundary; owner observes its note while parked; submit
+   responses carry it only on genuine bound decline; post-advance polls by any
+   principal omit it. (Genuine-decline integration is unreachable in the bounded
+   surface by classifier design; the note path is defense-in-depth. The submit
+   boundary-clearing itself is runtime-proven.)
+ - R12: Lab main vs original authority recorded correctly above; external failure
+   policy stated exactly; no placeholder remains.
+
+ ## Remote review 04 — R14B/R16/R17/R12 disposition (DIRECTLY_VERIFIED unless noted)
+
+ - R14B settlement: waitForSettle snapshots status per iteration; FAILED rejects
+   SESSION_FAILED with exactly "session failed"; CLOSED rejects SESSION_CLOSED
+   with exactly "session is closed"; only OVER/genuine game-over settles applied.
+   Ship-driven FAILED proven rejected through the protocol handler with internal
+   diagnostics retained and generic externals. No timing dependence.
+ - R16 ordering: actor then revision precede frame-status exposure; wrong actor on
+   a private UNSUPPORTED frame gets WRONG_ACTOR with no reason/count/revision/name;
+   stale correct-actor gets STALE_REVISION without the current blocker; correct
+   actor+revision gets its truthful UNSUPPORTED_DECISION. Proven on Swords fixture.
+ - R17 sanitization: dispatch/lifecycle/BridgeMain catches emit stable generic
+   strings; Throwables go to stderr via logInternal; PROJECTION_FAILED carries the
+   fixed schema field only. Caller-supplied echoes and bridge-generated
+   deterministic messages retained. Sentinel tests for dispatch, cause channel and
+   log channel.
+ - Execution-note binding: bound at production time to live frame actor+revision;
+   submit clears the boundary; owner observes its note while parked; clean submits
+   carry no note; post-advance polls by any principal omit it. (Genuine-decline
+   integration is unreachable in the bounded surface by classifier design; the
+   note path is defense-in-depth with mechanism-level proof.)
+ - R12: original authority 950d6fd6 vs current main c1a760af recorded correctly;
+   external failure policy stated exactly; no placeholder remains.
+
+ ## Validated substantive head
+ - Remediation 04 substantive: 86f890dd87438d0cc05193dc8f87ad71f06c860d
    (this file updated separately)
+ - Remediation 03 substantive: fe7c2dba7aff19a507a907e814e1a3d1c02d1980
  - Remediation 02 substantive: a4509c368d39734d30184aba182060f54ab308bf
  - Remediation 01 substantive: 98e538ed336ddd254a4e6055280b4c814bf647ec
  - Prior: 6e91c3403a9 (tests), 48d6e50fd33 (published + state)
