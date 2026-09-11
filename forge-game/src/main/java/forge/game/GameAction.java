@@ -250,19 +250,12 @@ public class GameAction {
                 copied.setBackSide(false);
             }
 
-            // CR 107.3k: a permanent spell's chosen X survives resolution for ETB replacements.
-            // Propagate the resolving spell's cast linkage to the battlefield copy so general
-            // etbCounter/X ETB semantics (not card names) observe the paid X.
-            if (toBattlefield && zoneFrom != null && zoneFrom.is(ZoneType.Stack)
-                    && cause != null && cause.isSpell() && c.equals(cause.getHostCard())) {
-                copied.setCastFrom(zoneFrom);
-                copied.setCastSA(cause);
-                if (cause.getActivatingPlayer() != null) {
-                    copied.setController(cause.getActivatingPlayer(), 0);
-                }
-                copied.setXManaCostPaidByColor(c.getXManaCostPaidByColor());
-                copied.setPromisedGift(c.getPromisedGift());
-            }
+            // NOTE (WS63, CR 107.3m): no Stack->Battlefield cast-linkage copy here.
+            // For battlefield entries copied == c (no copyCard in the branch above),
+            // so the castSA/castFrom set at moveToStack plus the addAndUnfreeze LKI
+            // propagation already carry the resolving spell's chosen X into ETB
+            // trigger/replacement evaluation (see AbilityUtils xCount ETB branch).
+            // A copy-branch-only block here could never execute for real entries.
 
             // need to copy counters when card enters another zone than hand or library
             if (StaticAbilityCountersRemain.countersRemain(lastKnownInfo, zoneTo)) {
