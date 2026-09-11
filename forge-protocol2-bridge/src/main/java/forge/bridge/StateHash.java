@@ -35,7 +35,9 @@ public final class StateHash {
             sb.append("active=").append(idOf(game.getPhaseHandler().getPlayerTurn(), session)).append(';');
             sb.append("timestamp=").append(game.getTimestamp()).append(';');
             sb.append("over=").append(game.isGameOver()).append(';');
-            final List<Player> players = new ArrayList<>(game.getPlayers());
+            final List<Player> players = session == null
+                    ? new ArrayList<>(game.getPlayers())
+                    : session.registryPlayers();
             for (Player player : players) {
                 sb.append("player=").append(session == null ? player.getName() : session.playerIdOf(player));
                 sb.append(",life=").append(player.getLife());

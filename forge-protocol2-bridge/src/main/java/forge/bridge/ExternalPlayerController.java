@@ -57,9 +57,12 @@ import forge.util.collect.FCollectionView;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Predicate;
 
 import org.apache.commons.lang3.tuple.ImmutablePair;
@@ -83,10 +86,10 @@ public final class ExternalPlayerController extends PlayerController {
 
     /**
      * Systemic test seam (package-private, test-only): when set, native enumeration
-     * throws {@link BridgeNativeEnumerationException} for the matching zone. Never
-     * written by production code.
+     * throws {@link BridgeNativeEnumerationException} instead of reading sources.
+     * Never written by production code.
      */
-    static volatile ZoneType enumerationFaultZoneForTests;
+    static volatile boolean enumerationFaultForTests;
 
     public ExternalPlayerController(Game game, Player player, LobbyPlayer lobbyPlayer,
             BridgeSession session) {
@@ -95,11 +98,9 @@ public final class ExternalPlayerController extends PlayerController {
     }
 
     private String actorId() {
-        try {
-            return session.playerIdOf(player);
-        } catch (Throwable t) {
-            return player.getName();
-        }
+        // R11: registry identity only. An unregistered controller player is a corrupt
+        // session and must fail explicitly, never fall back to a display name.
+        return session.playerIdOf(player);
     }
 
     private BridgeUnsupportedDecision unsupported(String callback, String detail) {
@@ -310,29 +311,71 @@ public final class ExternalPlayerController extends PlayerController {
         }
     }
 
+    /**
+     * R8 action-source-zone policy (bounded Commander bridge).
+     *
+     * <p>Sources are united from two engine-owned collections, then every candidate
+     * passes the engine's own {@code canPlay(true)} filter inside
+     * {@code getAllPossibleAbilities} — the bridge adds no legality of its own:
+     * <ul>
+     *   <li>{@code Player.getAllCards()}: every card of the acting player in every
+     *   Forge-tracked zone (Hand, Battlefield, Command, Graveyard, Exile, Library,
+     *   Sideboard incl. companions, Ante remnants, Merged, variant decks, tokens).
+     *   Physical sweep, so no zone is silently omitted.</li>
+     *   <li>{@code Player.getCardsActivatableInExternalZones(true)}: the engine's own
+     *   grant index — cards the player may activate outside its own zones, i.e.
+     *   opponents' Exile/Graveyard/Library/Hand under may-play grants and stack
+     *   cards with stack-restricted abilities. This is a candidate source, not a
+     *   legality oracle (contrast the heuristic timeout-based AvailableActions,
+     *   which is never consulted).</li>
+     * </ul>
+     * <p>Zone matrix (pinned source): directly actionable — Hand, Battlefield,
+     * Command, Graveyard, Exile, Library, own Sideboard, Stack (grant-indexed),
+     * Flashback-virtual (grant-indexed view over graveyard/exile/library/command/
+     * sideboard plus opponents/stack — covered by the union above). Resolution-only
+     * selections (targets/modes) are never priority options. Variant-only zones
+     * (Scheme/Planar/Attraction/Contraption decks, Junkyard, Subgame, ExtraHand)
+     * and Ante remnants are swept via getAllCards but hold no Commander playables;
+     * any canPlay-true surprise there fails the frame UNSUPPORTED via the
+     * classifier rather than being dropped.
+     */
     private List<SpellAbility> enumerateCandidates() {
+        if (enumerationFaultForTests) {
+            throw new BridgeNativeEnumerationException(null, "injected test fault", null);
+        }
+        final Set<Card> sources = Collections.newSetFromMap(new IdentityHashMap<Card, Boolean>());
+        try {
+            sources.addAll(player.getAllCards());
+        } catch (Throwable t) {
+            throw new BridgeNativeEnumerationException(null, "all-cards read failed", t);
+        }
+        try {
+            sources.addAll(player.getCardsActivatableInExternalZones(true));
+        } catch (Throwable t) {
+            throw new BridgeNativeEnumerationException(null, "external-activatables read failed", t);
+        }
         final List<SpellAbility> result = new ArrayList<>();
-        final ZoneType[] zones = new ZoneType[] { ZoneType.Hand, ZoneType.Battlefield,
-                ZoneType.Command, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Library };
-        for (ZoneType zone : zones) {
-            if (zone == enumerationFaultZoneForTests) {
-                throw new BridgeNativeEnumerationException(zone, "injected test fault", null);
+        for (Card card : sources) {
+            if (card == null) {
+                throw new BridgeNativeEnumerationException(null, "null card in source set", null);
             }
-            final List<Card> cards;
             try {
-                cards = new ArrayList<>(player.getCardsIn(zone));
+                result.addAll(card.getAllPossibleAbilities(player, true));
             } catch (Throwable t) {
-                throw new BridgeNativeEnumerationException(zone, "zone read failed", t);
-            }
-            for (Card card : cards) {
-                try {
-                    result.addAll(card.getAllPossibleAbilities(player, true));
-                } catch (Throwable t) {
-                    throw new BridgeNativeEnumerationException(zone, "card enumeration failed", t);
-                }
+                throw new BridgeNativeEnumerationException(safeZoneOf(card),
+                        "card enumeration failed", t);
             }
         }
         return result;
+    }
+
+    private static ZoneType safeZoneOf(Card card) {
+        try {
+            final forge.game.zone.Zone zone = card.getZone();
+            return zone == null ? null : zone.getZoneType();
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     // ---- mulligan: binary external choice, parked ----

@@ -438,7 +438,7 @@ public class BridgeEngineTest {
                 BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
             }
         }
-        ExternalPlayerController.enumerationFaultZoneForTests = ZoneType.Hand;
+        ExternalPlayerController.enumerationFaultForTests = true;
         try {
             BridgeTestSupport.launchConstructed(constructed);
             final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 60000);
@@ -455,7 +455,7 @@ public class BridgeEngineTest {
             Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
             Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash);
         } finally {
-            ExternalPlayerController.enumerationFaultZoneForTests = null;
+            ExternalPlayerController.enumerationFaultForTests = false;
             session.shutdown(5000);
         }
     }
@@ -719,6 +719,214 @@ public class BridgeEngineTest {
         Assert.assertTrue(asP2Look.toString().contains("Grizzly Bears"));
         morph.removeMayLookTemp(p2);
         constructed.session.shutdown(1000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testFlashbackZoneSeenNotSilent() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("flash-ok");
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Think Twice", ZoneType.Graveyard);
+        for (int seat = 0; seat < 4; seat++) {
+            for (int i = 0; i < 5; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        final DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        Assert.assertNotNull(frame, "never reached p1 main phase");
+        final forge.game.player.Player p1 = session.getGame().getPlayers().get(0);
+        // The engine itself surfaces the card through the virtual Flashback zone.
+        boolean inFlashbackZone = false;
+        for (Card card : p1.getCardsIn(ZoneType.Flashback)) {
+            if (card.getName().equals("Think Twice")) {
+                inFlashbackZone = true;
+            }
+        }
+        Assert.assertTrue(inFlashbackZone, "Think Twice must surface via ZoneType.Flashback");
+        // ...and natively playable from the graveyard through its flashback ability.
+        boolean nativeLegal = false;
+        for (Card card : p1.getCardsIn(ZoneType.Graveyard)) {
+            if (!card.getName().equals("Think Twice")) {
+                continue;
+            }
+            for (forge.game.spellability.SpellAbility ability :
+                    card.getAllPossibleAbilities(p1, true)) {
+                if (ability.isSpell() && ability.canPlay()) {
+                    nativeLegal = true;
+                }
+            }
+        }
+        Assert.assertTrue(nativeLegal, "Think Twice must be natively playable here");
+        // Nonzero flashback cost: seen, recognized, failed closed — never filtered.
+        Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
+        Assert.assertTrue(frame.reason.contains("MANA_PAYMENT_CHOICE"), "reason: " + frame.reason);
+        Assert.assertTrue(frame.options.isEmpty());
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testSubmitResponseWithholdsNextActor() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("r9-ok");
+        final BridgeEngine engine = constructed.engine;
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Hand);
+        for (int seat = 0; seat < 4; seat++) {
+            for (int i = 0; i < 5; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        final DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        Assert.assertNotNull(frame);
+        Assert.assertEquals(frame.status, DecisionFrame.Status.SUPPORTED);
+        final java.util.List<String> optionIds = new java.util.ArrayList<>();
+        for (DecisionFrame.Option option : frame.options) {
+            optionIds.add(option.optionId);
+        }
+        // Complete p2 engine response carries nothing of p1's private frame.
+        final JsonObject asP2 = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"r9-p2\","
+                        + "\"message_type\":\"get_game_state\",\"game_id\":\"r9-ok\","
+                        + "\"payload\":{\"observer_player_id\":\"p2\"}}");
+        BridgeTestSupport.assertOk(asP2);
+        final String flatP2 = asP2.toString();
+        Assert.assertFalse(flatP2.contains("Memnite"));
+        for (String id : optionIds) {
+            Assert.assertFalse(flatP2.contains(id), "option id leaked");
+        }
+        Assert.assertEquals(asP2.get("payload").getAsJsonObject().getAsJsonObject("state")
+                .getAsJsonArray("legal_actions").size(), 0);
+        Assert.assertTrue(asP2.get("payload").getAsJsonObject().getAsJsonObject("bridge")
+                .get("pending_decision").isJsonNull());
+        Assert.assertEquals(asP2.get("payload").getAsJsonObject().getAsJsonObject("bridge")
+                .get("revision").getAsInt(), -1);
+        // Actor sees its own decision identity.
+        final JsonObject asP1 = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"r9-p1\","
+                        + "\"message_type\":\"get_game_state\",\"game_id\":\"r9-ok\","
+                        + "\"payload\":{\"observer_player_id\":\"p1\"}}");
+        BridgeTestSupport.assertOk(asP1);
+        Assert.assertTrue(asP1.get("payload").getAsJsonObject().getAsJsonObject("bridge")
+                .get("pending_decision").getAsJsonObject().get("revision").getAsLong()
+                == frame.revision);
+        // Submit pass as p1: the next frame belongs to p2 and must be withheld.
+        DecisionFrame.Option pass = BridgeTestSupport.findOption(frame, "pass_priority");
+        Assert.assertNotNull(pass);
+        final JsonObject submitted = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"r9-sub\","
+                        + "\"message_type\":\"submit_action\",\"game_id\":\"r9-ok\",\"payload\":{"
+                        + "\"revision\":" + frame.revision + ",\"proposal\":{\"proposal_id\":\"s1\","
+                        + "\"actor_id\":\"p1\",\"legal_action_id\":\"" + pass.optionId + "\","
+                        + "\"action_type\":\"pass_priority\"}}}");
+        BridgeTestSupport.assertOk(submitted);
+        final String flatSubmit = submitted.toString();
+        Assert.assertFalse(flatSubmit.contains("opt-"), "next-actor option id leaked: " + flatSubmit);
+        final JsonObject nextDecision = submitted.get("payload").getAsJsonObject()
+                .getAsJsonObject("next_decision");
+        Assert.assertEquals(nextDecision.get("status").getAsString(), "withheld");
+        Assert.assertTrue(submitted.get("payload").getAsJsonObject().getAsJsonObject("bridge")
+                .get("pending_decision").isJsonNull());
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testProjectionFaultFamilies() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("faultfam-ok");
+        final BridgeEngine engine = constructed.engine;
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Hand);
+        for (int seat = 0; seat < 4; seat++) {
+            for (int i = 0; i < 5; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        final String stateRequest = "{\"protocol_version\":\"2.0.0\",\"request_id\":\"ff\","
+                + "\"message_type\":\"get_game_state\",\"game_id\":\"faultfam-ok\"}";
+        StateProjection.failManaPoolForTests = true;
+        try {
+            final JsonObject manaFail = BridgeTestSupport.rpc(engine, stateRequest);
+            Assert.assertFalse(manaFail.get("success").getAsBoolean());
+            Assert.assertEquals(manaFail.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                    .get("code").getAsString(), BridgeErrors.PROJECTION_FAILED);
+        } finally {
+            StateProjection.failManaPoolForTests = false;
+        }
+        StateProjection.failCommanderDamageForTests = true;
+        try {
+            final JsonObject damageFail = BridgeTestSupport.rpc(engine, stateRequest);
+            Assert.assertFalse(damageFail.get("success").getAsBoolean());
+            Assert.assertEquals(damageFail.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                    .get("code").getAsString(), BridgeErrors.PROJECTION_FAILED);
+        } finally {
+            StateProjection.failCommanderDamageForTests = false;
+        }
+        StateProjection.failCommanderCastsForTests = true;
+        try {
+            final JsonObject castsFail = BridgeTestSupport.rpc(engine, stateRequest);
+            Assert.assertFalse(castsFail.get("success").getAsBoolean());
+            Assert.assertEquals(castsFail.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                    .get("code").getAsString(), BridgeErrors.PROJECTION_FAILED);
+        } finally {
+            StateProjection.failCommanderCastsForTests = false;
+        }
+        final JsonObject recovered = BridgeTestSupport.rpc(engine, stateRequest);
+        BridgeTestSupport.assertOk(recovered);
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testRosterStableAcrossLoss() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("loss-ok");
+        final BridgeSession session = constructed.session;
+        for (int seat = 0; seat < 4; seat++) {
+            BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Hand);
+            for (int i = 0; i < 5; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        final DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        Assert.assertNotNull(frame, "never reached p1 main phase");
+        final forge.game.player.Player p4 =
+                constructed.game.getPlayers().get(3);
+        Assert.assertEquals(session.playerIdOf(p4), "p4");
+        Assert.assertEquals(session.getGame().getPlayers().size(), 4);
+        // Real native loss transition, driven while the engine is parked: p4 concedes,
+        // the engine's own SBA processing removes p4 from ingamePlayers on next step.
+        p4.concede();
+        final BridgeSession.SubmitOutcome pass = BridgeTestSupport.submitPass(session, frame);
+        Assert.assertTrue(pass.applied, "pass failed: " + pass.errorCode);
+        Assert.assertEquals(session.getGame().getPlayers().size(), 3);
+        boolean p4ingame = false;
+        for (forge.game.player.Player player : session.getGame().getPlayers()) {
+            if (player == p4) {
+                p4ingame = true;
+            }
+        }
+        Assert.assertFalse(p4ingame, "p4 must be removed from ingamePlayers");
+        // Registry identity is immutable: no throw, no display-name fallback.
+        Assert.assertEquals(session.playerIdOf(p4), "p4");
+        Assert.assertEquals(session.seatOf(p4), 3);
+        Assert.assertTrue(p4 == session.playerById("p4"));
+        // Observation roster preserves all registered participants with stable ids.
+        final JsonObject asP1 = StateProjection.gameState(session, "p1");
+        Assert.assertEquals(asP1.getAsJsonArray("players").size(), 4);
+        for (int i = 0; i < 4; i++) {
+            final JsonObject playerState =
+                    asP1.getAsJsonArray("players").get(i).getAsJsonObject();
+            Assert.assertEquals(playerState.get("player_id").getAsString(), "p" + (i + 1));
+            Assert.assertEquals(playerState.get("seat").getAsInt(), i);
+        }
+        final JsonObject p4State = playerState(asP1, "p4");
+        Assert.assertTrue(p4State.get("has_lost").getAsBoolean());
+        session.shutdown(5000);
     }
 
     private static JsonObject playerState(JsonObject state, String playerId) {

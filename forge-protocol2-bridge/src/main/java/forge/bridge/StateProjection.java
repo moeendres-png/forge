@@ -36,6 +36,11 @@ public final class StateProjection {
     /** Package-private test seam: forces every required read to fail (R4 regression). */
     static volatile boolean failRequiredReadsForTests;
 
+    /** R10 seams: fail one authoritative reader family at a time. Test-only. */
+    static volatile boolean failManaPoolForTests;
+    static volatile boolean failCommanderDamageForTests;
+    static volatile boolean failCommanderCastsForTests;
+
     private interface ThrowingSupplier<T> {
         T get() throws Throwable;
     }
@@ -105,7 +110,7 @@ public final class StateProjection {
         final Player observer = observerPlayerId == null ? null : session.playerById(observerPlayerId);
         final PlayerView observerView = observer == null ? null : observer.getView();
         final List<Player> enginePlayers =
-                require("players", () -> new ArrayList<>(game.getPlayers()));
+                require("players", () -> session.registryPlayers());
         final JsonArray players = new JsonArray();
         for (Player player : enginePlayers) {
             players.add(playerState(session, player, observer, observerView));
@@ -121,21 +126,35 @@ public final class StateProjection {
         return state;
     }
 
-    public static JsonObject bridgeMeta(BridgeSession session) {
+    /**
+     * R9 principal-scoped bridge metadata. Frame-bound fields (revision, pending
+     * decision incl. kind/status/actor/count/reason, state hash) are exposed ONLY to
+     * the frame's actor; anyone else receives null/-1. Session diagnostics that name
+     * only public roster structure (fail reasons name callbacks and seat ids, never
+     * card data) remain visible.
+     */
+    public static JsonObject bridgeMeta(BridgeSession session, String observerPlayerId) {
         final JsonObject meta = new JsonObject();
         meta.addProperty("session_status", session.getStatus().name());
         final DecisionFrame frame = session.getCurrentFrame();
-        if (frame == null) {
-            meta.addProperty("revision", -1);
-            meta.add("pending_decision", JsonNull.INSTANCE);
-        } else {
+        final boolean actorScoped = observerPlayerId != null && frame != null
+                && observerPlayerId.equals(frame.actorPlayerId);
+        if (actorScoped) {
             meta.addProperty("revision", frame.revision);
             meta.add("pending_decision", decisionSummary(frame));
+        } else {
+            meta.addProperty("revision", -1);
+            meta.add("pending_decision", JsonNull.INSTANCE);
         }
-        try {
-            meta.addProperty("state_hash", StateHash.ofGame(session.getGame(), session));
-        } catch (Throwable t) {
-            meta.addProperty("state_hash", "unavailable");
+        if (actorScoped) {
+            try {
+                meta.addProperty("state_hash", StateHash.ofGame(session.getGame(), session));
+            } catch (Throwable t) {
+                meta.addProperty("state_hash", "unavailable");
+            }
+        } else {
+            // The digest covers private zones; only the actor may hold it.
+            meta.add("state_hash", JsonNull.INSTANCE);
         }
         if (!session.getFailReason().isEmpty()) {
             meta.addProperty("fail_reason", session.getFailReason());
@@ -144,6 +163,11 @@ public final class StateProjection {
             meta.addProperty("last_execution_error", session.getLastExecutionError());
         }
         return meta;
+    }
+
+    /** Backwards-compatible entry point: public observer, fully redacted metadata. */
+    public static JsonObject bridgeMeta(BridgeSession session) {
+        return bridgeMeta(session, null);
     }
 
     public static JsonObject decisionSummary(DecisionFrame frame) {
@@ -201,7 +225,7 @@ public final class StateProjection {
             PlayerView observerView) {
         final JsonObject state = new JsonObject();
         state.addProperty("player_id", session.playerIdOf(player));
-        state.addProperty("seat", Math.max(0, session.seatOf(player)));
+        state.addProperty("seat", session.seatOf(player));
         final int life = require("life:" + state.get("player_id").getAsString(), () -> player.getLife());
         final int poison = require("poison:" + state.get("player_id").getAsString(),
                 () -> Math.max(0, player.getPoisonCounters()));
@@ -233,21 +257,34 @@ public final class StateProjection {
         return state;
     }
 
+    /**
+     * R10: commander damage is an advertised visible field, so its read is required.
+     * A legitimately empty map (no damage dealt) still succeeds; only read failure
+     * throws. Never a plausible {} on exception.
+     */
     private static JsonObject commanderDamage(BridgeSession session, Player player) {
-        final JsonObject damage = new JsonObject();
-        try {
+        return require("commander_damage", () -> {
+            if (failCommanderDamageForTests) {
+                throw new BridgeProjectionException("commander_damage", "injected test fault");
+            }
+            final JsonObject damage = new JsonObject();
             for (Map.Entry<Card, Integer> entry : player.getCommanderDamage()) {
                 damage.addProperty(entry.getKey().getName(), entry.getValue());
             }
-        } catch (Throwable t) {
-            // Leave empty rather than fabricate.
-        }
-        return damage;
+            return damage;
+        });
     }
 
+    /**
+     * R10: commander cast counts feed the advertised tax visibility; the read is
+     * required and all-or-nothing. Never a plausible {} on exception.
+     */
     private static JsonObject commanderCasts(BridgeSession session, Player player) {
-        final JsonObject casts = new JsonObject();
-        try {
+        return require("commander_casts", () -> {
+            if (failCommanderCastsForTests) {
+                throw new BridgeProjectionException("commander_casts", "injected test fault");
+            }
+            final JsonObject casts = new JsonObject();
             final List<String> names = session.commanderNames(session.seatOf(player));
             final Map<String, Card> byName = new LinkedHashMap<>();
             for (ZoneType zone : new ZoneType[] { ZoneType.Command, ZoneType.Battlefield,
@@ -260,16 +297,20 @@ public final class StateProjection {
                 final Card card = byName.get(name);
                 casts.addProperty(name, card == null ? 0 : Math.max(0, player.getCommanderCast(card)));
             }
-        } catch (Throwable t) {
-            // Optional metadata with a Lab default: all-or-nothing empty object.
-            return new JsonObject();
-        }
-        return casts;
+            return casts;
+        });
     }
 
+    /**
+     * R10: the mana pool is authoritative engine state; its read is required.
+     * A legitimately empty pool still succeeds. Never a plausible {} on exception.
+     */
     private static JsonObject manaPool(Player player) {
-        final JsonObject pool = new JsonObject();
-        try {
+        return require("mana_pool", () -> {
+            if (failManaPoolForTests) {
+                throw new BridgeProjectionException("mana_pool", "injected test fault");
+            }
+            final JsonObject pool = new JsonObject();
             final PlayerView view = player.getView();
             pool.addProperty("W", Math.max(0, view.getMana(MagicColor.WHITE)));
             pool.addProperty("U", Math.max(0, view.getMana(MagicColor.BLUE)));
@@ -277,10 +318,8 @@ public final class StateProjection {
             pool.addProperty("R", Math.max(0, view.getMana(MagicColor.RED)));
             pool.addProperty("G", Math.max(0, view.getMana(MagicColor.GREEN)));
             pool.addProperty("C", Math.max(0, view.getMana(MagicColor.COLORLESS)));
-        } catch (Throwable t) {
-            // Leave empty rather than fabricate.
-        }
-        return pool;
+            return pool;
+        });
     }
 
     private static JsonObject zones(Player player, Player observer, PlayerView observerView) {

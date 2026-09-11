@@ -506,7 +506,7 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
                     "authoritative state unreadable: " + e.getMessage(), (int) session.auditSize());
         }
-        payload.add("bridge", StateProjection.bridgeMeta(session));
+        payload.add("bridge", StateProjection.bridgeMeta(session, observer));
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 
@@ -598,7 +598,7 @@ public final class BridgeEngine {
         }
         session.setLastExecutionError("");
         final BridgeSession.SubmitOutcome outcome = session.submit(actorId, legalActionId, actionType, revision);
-        return submitResponse(request, session, outcome);
+        return submitResponse(request, session, outcome, actorId);
     }
 
     private String passPriority(BridgeProtocol.Request request) {
@@ -651,7 +651,7 @@ public final class BridgeEngine {
         session.setLastExecutionError("");
         final BridgeSession.SubmitOutcome outcome =
                 session.submit(actorId, pass.optionId, "pass_priority", revision);
-        return submitResponse(request, session, outcome);
+        return submitResponse(request, session, outcome, actorId);
     }
 
     private String resolveMulligan(BridgeProtocol.Request request) {
@@ -716,11 +716,11 @@ public final class BridgeEngine {
         session.setLastExecutionError("");
         final BridgeSession.SubmitOutcome outcome =
                 session.submit(playerId, chosen.optionId, "mulligan", revision);
-        return submitResponse(request, session, outcome);
+        return submitResponse(request, session, outcome, playerId);
     }
 
     private String submitResponse(BridgeProtocol.Request request, BridgeSession session,
-            BridgeSession.SubmitOutcome outcome) {
+            BridgeSession.SubmitOutcome outcome, String submitterId) {
         if (!outcome.applied) {
             return BridgeProtocol.fail(request.requestId, "error", outcome.errorCode,
                     outcome.errorMessage, BridgeErrors.NO_PENDING_DECISION.equals(outcome.errorCode),
@@ -744,12 +744,18 @@ public final class BridgeEngine {
         final DecisionFrame next = session.getCurrentFrame();
         if (next == null) {
             payload.add("next_decision", new JsonObject());
-        } else {
+        } else if (submitterId != null && submitterId.equals(next.actorPlayerId)) {
             payload.add("next_decision", StateProjection.decisionSummary(next));
+        } else {
+            // R9: the next frame belongs to another actor. Withhold its private
+            // metadata; the owner reads it through its own principal-scoped calls.
+            final JsonObject withheld = new JsonObject();
+            withheld.addProperty("status", "withheld");
+            payload.add("next_decision", withheld);
         }
         final Game game = session.getGame();
         payload.addProperty("game_over", game != null && game.isGameOver());
-        payload.add("bridge", StateProjection.bridgeMeta(session));
+        payload.add("bridge", StateProjection.bridgeMeta(session, submitterId));
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 

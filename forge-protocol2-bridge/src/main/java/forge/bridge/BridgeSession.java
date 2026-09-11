@@ -6,6 +6,7 @@ import forge.game.player.Player;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -101,6 +102,15 @@ public final class BridgeSession {
     private final String gameId;
     private final Map<String, String> deckHandleToDeckId;
     private final List<List<String>> seatCommanderNames = new ArrayList<>();
+    /**
+     * R11 immutable principal registry: native Player -&gt; seat, bound once from
+     * Forge's registered roster (all participants regardless of outcome) after real
+     * Game construction and before execution. Never recomputed from the shrinking
+     * ingame list; never falls back to display names.
+     */
+    private final Map<Player, Integer> seatRegistry =
+            Collections.synchronizedMap(new IdentityHashMap<Player, Integer>());
+    private final List<Player> registryOrder = new ArrayList<>();
 
     private volatile Match match;
     private volatile Game game;
@@ -131,6 +141,14 @@ public final class BridgeSession {
     public synchronized void attach(Match match, Game game) {
         this.match = match;
         this.game = game;
+        seatRegistry.clear();
+        registryOrder.clear();
+        int seat = 0;
+        for (Player player : game.getRegisteredPlayers()) {
+            seatRegistry.put(player, seat);
+            registryOrder.add(player);
+            seat++;
+        }
     }
 
     public synchronized void setSeatCommanderNames(List<List<String>> names) {
@@ -165,39 +183,44 @@ public final class BridgeSession {
         this.lastExecutionError = message == null ? "" : message;
     }
 
-    // ---- player identity ----
+    // ---- player identity (immutable registry) ----
 
-    /** Stable seat: index in registration order. */
+    /** Stable seat from the immutable registry. Unknown players fail explicitly. */
     public int seatOf(Player player) {
-        final Game g = game;
-        if (g == null) {
-            return -1;
+        if (player == null) {
+            throw new BridgeUnknownPlayerException("null player");
         }
-        final List<Player> players = g.getPlayers();
-        for (int i = 0; i < players.size(); i++) {
-            if (players.get(i).equals(player)) {
-                return i;
-            }
+        final Integer seat = seatRegistry.get(player);
+        if (seat == null) {
+            throw new BridgeUnknownPlayerException("player not in registered roster");
         }
-        return -1;
+        return seat.intValue();
     }
 
+    /** Stable principal id. Never a display name. */
     public String playerIdOf(Player player) {
-        final int seat = seatOf(player);
-        return seat < 0 ? player.getName() : "p" + (seat + 1);
+        return "p" + (seatOf(player) + 1);
     }
 
     public Player playerById(String playerId) {
-        final Game g = game;
-        if (g == null || playerId == null) {
+        if (playerId == null) {
             return null;
         }
-        for (Player player : g.getPlayers()) {
-            if (playerIdOf(player).equals(playerId)) {
-                return player;
+        synchronized (this) {
+            for (int i = 0; i < registryOrder.size(); i++) {
+                if (("p" + (i + 1)).equals(playerId)) {
+                    return registryOrder.get(i);
+                }
             }
         }
         return null;
+    }
+
+    /** Immutable registered roster in registration order (survives player loss). */
+    public List<Player> registryPlayers() {
+        synchronized (this) {
+            return new ArrayList<>(registryOrder);
+        }
     }
 
     // ---- game thread lifecycle ----
