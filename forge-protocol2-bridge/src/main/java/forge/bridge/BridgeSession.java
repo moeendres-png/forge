@@ -398,8 +398,10 @@ public final class BridgeSession {
 
     /**
      * Validates and delivers a proposal selection. All negative controls fire here,
-     * before the engine is touched: unknown game/session state, unsupported frame,
-     * missing or wrong actor, missing or stale revision, unknown or consumed option.
+     * before the engine is touched. R16 ordering protects private frame metadata:
+     * after syntactic checks and lifecycle checks, the caller must prove actor and
+     * revision BEFORE any frame-specific status, reason, count or option data is
+     * exposed. Only the authenticated current actor ever sees UNSUPPORTED reasons.
      * Actor, option, action type and revision are all mandatory (defense in depth:
      * this boundary rejects nulls even if an upstream parser failed to enforce them).
      */
@@ -445,10 +447,6 @@ public final class BridgeSession {
                 return SubmitOutcome.rejected(BridgeErrors.NO_PENDING_DECISION,
                         "engine is not awaiting an external decision", currentHash());
             }
-            if (frame.status != DecisionFrame.Status.SUPPORTED) {
-                return SubmitOutcome.rejected(BridgeErrors.UNSUPPORTED_DECISION,
-                        "parked decision is not representable: " + frame.reason, currentHash());
-            }
             if (!actorId.equals(frame.actorPlayerId)) {
                 return SubmitOutcome.rejected(BridgeErrors.WRONG_ACTOR,
                         "option belongs to " + frame.actorPlayerId, currentHash());
@@ -456,6 +454,10 @@ public final class BridgeSession {
             if (revision.longValue() != frame.revision) {
                 return SubmitOutcome.rejected(BridgeErrors.STALE_REVISION,
                         "frame revision " + frame.revision + " expected, got " + revision, currentHash());
+            }
+            if (frame.status != DecisionFrame.Status.SUPPORTED) {
+                return SubmitOutcome.rejected(BridgeErrors.UNSUPPORTED_DECISION,
+                        "parked decision is not representable: " + frame.reason, currentHash());
             }
             option = frame.find(optionId);
             if (option == null) {
@@ -478,6 +480,14 @@ public final class BridgeSession {
         return waitForSettle(frame.revision, preHash, actorId);
     }
 
+    /**
+     * R14B deterministic settlement. Status is snapshotted per iteration and FAILED /
+     * CLOSED never route through the successful terminal path: a submission whose
+     * execution drove the session into FAILED is rejected SESSION_FAILED (generic
+     * message; the diagnostic stays internal), and CLOSED is rejected
+     * SESSION_CLOSED. Only OVER / genuine game-over settle as applied-terminal, and
+     * only when neither FAILED nor CLOSED won the race. No timing dependence.
+     */
     private SubmitOutcome waitForSettle(long answeredRevision, String preHash, String actorId) {
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
         while (System.nanoTime() < deadline) {
@@ -488,16 +498,22 @@ public final class BridgeSession {
                 audit("decision_settled", settleDetails(answeredRevision, frame.revision, preHash, postHash));
                 return SubmitOutcome.applied(preHash, postHash, executionOk);
             }
-            if (isTerminal() || (game != null && game.isGameOver())) {
+            final Status observed = status;
+            if (observed == Status.FAILED) {
+                audit("decision_failed", settleDetails(answeredRevision, -1, preHash, preHash));
+                return SubmitOutcome.rejected(BridgeErrors.SESSION_FAILED,
+                        "session failed", preHash);
+            }
+            if (observed == Status.CLOSED) {
+                audit("decision_closed", settleDetails(answeredRevision, -1, preHash, preHash));
+                return SubmitOutcome.rejected(BridgeErrors.SESSION_CLOSED,
+                        "session is closed", preHash);
+            }
+            if (observed == Status.OVER || (game != null && game.isGameOver())) {
                 final String postHash = StateHash.ofGame(game, this);
                 audit("decision_terminal", settleDetails(answeredRevision, -1, preHash, postHash));
                 return SubmitOutcome.applied(preHash, postHash,
                         !isExecutionErrorBoundTo(actorId, answeredRevision));
-            }
-            final Status s = status;
-            if (s == Status.FAILED) {
-                return SubmitOutcome.rejected(BridgeErrors.SESSION_FAILED,
-                        "session failed: " + failReason, preHash);
             }
             try {
                 Thread.sleep(25);

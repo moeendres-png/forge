@@ -40,6 +40,13 @@ public final class BridgeEngine {
     private final Map<String, ImportedDeck> decks = new ConcurrentHashMap<>();
     private final Map<String, BridgeSession> sessions = new ConcurrentHashMap<>();
 
+    /**
+     * Bounded test-only fault seam (package-private, single-shot auto-clearing):
+     * when set, dispatch throws it to exercise the global unexpected-Throwable
+     * sanitizer. Never written by production code.
+     */
+    static volatile Throwable dispatchFaultForTests;
+
     /** Thrown when no valid 40-hex engine identity is bound (hard gate F3). */
     static final class EngineIdentityException extends RuntimeException {
         EngineIdentityException() {
@@ -94,6 +101,14 @@ public final class BridgeEngine {
                     || type.equals(BridgeProtocol.SHUTDOWN_ENGINE);
             if (!identityExempt) {
                 requireUsable();
+            }
+            if (dispatchFaultForTests != null) {
+                final Throwable fault = dispatchFaultForTests;
+                dispatchFaultForTests = null;
+                if (fault instanceof RuntimeException) {
+                    throw (RuntimeException) fault;
+                }
+                throw new RuntimeException(fault);
             }
             switch (type) {
                 case BridgeProtocol.START_ENGINE:
@@ -166,9 +181,16 @@ public final class BridgeEngine {
         } catch (EngineIdentityException e) {
             return identityError(request);
         } catch (Throwable e) {
+            // R17: raw engine/Java text never reaches Protocol-2. Stable generic
+            // external message; full diagnostic goes to stderr only.
+            logInternal("dispatch failed for " + type, e);
             return BridgeProtocol.error(request.requestId, BridgeErrors.INTERNAL_ERROR,
-                    e.getClass().getSimpleName() + ": " + e.getMessage(), 0);
+                    "internal bridge error", 0);
         }
+    }
+
+    static void logInternal(String context, Throwable error) {
+        System.err.println("[bridge] " + context + ": " + error);
     }
 
     private static String identityError(BridgeProtocol.Request request) {
@@ -292,8 +314,9 @@ public final class BridgeEngine {
         try {
             db = StaticData.instance().getCommonCards();
         } catch (Throwable e) {
+            logInternal("card database unavailable", e);
             return BridgeProtocol.error(request.requestId, BridgeErrors.DECK_IMPORT_FAILED,
-                    "card database unavailable: " + e.getMessage(), 0);
+                    "card database unavailable", 0);
         }
         final Deck forgeDeck = new Deck(name == null || name.isEmpty() ? deckId : name);
         final List<String> unresolved = new ArrayList<>();
@@ -432,8 +455,9 @@ public final class BridgeEngine {
         try {
             game = match.createGame();
         } catch (Throwable e) {
+            logInternal("engine rejected game creation", e);
             return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
-                    "engine rejected game creation: " + e.getMessage(), 0);
+                    "engine rejected game creation", 0);
         }
         session.attach(match, game);
         sessions.put(gameId, session);
@@ -478,8 +502,9 @@ public final class BridgeEngine {
         try {
             session.launch();
         } catch (Throwable e) {
+            logInternal("could not start game thread", e);
             return BridgeProtocol.error(request.requestId, BridgeErrors.INTERNAL_ERROR,
-                    "could not start game thread: " + e.getMessage(), 0);
+                    "could not start game thread", 0);
         }
         final JsonObject payload = new JsonObject();
         payload.addProperty("game_id", session.getGameId());
@@ -508,8 +533,10 @@ public final class BridgeEngine {
         try {
             payload.add("state", StateProjection.gameState(session, observer));
         } catch (BridgeProjectionException e) {
+            // R17: only the fixed schema field identifier leaves; the Throwable cause
+            // stays internal (audit/stderr/test-visible exception object).
             return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
-                    "authoritative state unreadable: " + e.getMessage(), (int) session.auditSize());
+                    "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
         }
         payload.add("bridge", StateProjection.bridgeMeta(session, observer));
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
@@ -733,7 +760,7 @@ public final class BridgeEngine {
             payload.add("state", StateProjection.gameState(session, null));
         } catch (BridgeProjectionException e) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
-                    "authoritative state unreadable: " + e.getMessage(), (int) session.auditSize());
+                    "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
         }
         final JsonObject decision = new JsonObject();
         decision.addProperty("executed", outcome.executionOk);

@@ -77,7 +77,7 @@ public final class BridgeMain {
             System.err.println("[bridge] dispatch failed: " + e);
             e.printStackTrace(System.err);
             return BridgeProtocol.error(request.requestId, BridgeErrors.INTERNAL_ERROR,
-                    e.getClass().getSimpleName() + ": " + e.getMessage(), 0);
+                    "internal bridge error", 0);
         }
     }
 }

@@ -40,6 +40,13 @@ public final class StateProjection {
     static volatile boolean failCommanderDamageForTests;
     static volatile boolean failCommanderCastsForTests;
 
+    /**
+     * R17 seam: single-shot auto-clearing cause fault. When set, the next required
+     * read throws it wrapped as the cause of a BridgeProjectionException, exercising
+     * cause sanitization. Never written by production code.
+     */
+    static volatile Throwable projectionCauseForTests;
+
     private interface ThrowingSupplier<T> {
         T get() throws Throwable;
     }
@@ -53,6 +60,14 @@ public final class StateProjection {
             throw new BridgeProjectionException(field, "injected test fault");
         }
         try {
+            if (projectionCauseForTests != null) {
+                final Throwable fault = projectionCauseForTests;
+                projectionCauseForTests = null;
+                if (fault instanceof RuntimeException) {
+                    throw (RuntimeException) fault;
+                }
+                throw new RuntimeException(fault);
+            }
             return reader.get();
         } catch (BridgeProjectionException e) {
             throw e;

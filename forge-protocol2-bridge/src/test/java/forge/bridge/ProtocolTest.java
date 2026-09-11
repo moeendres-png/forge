@@ -126,8 +126,7 @@ public class ProtocolTest {
     }
 
     @Test
-    public void testIdentityMissingFailsClosed() {
-        final String saved = System.getProperty("forge.engine.sha");
+    public void testIdentityMissingFailsClosed() {        final String saved = System.getProperty("forge.engine.sha");
         System.setProperty("forge.engine.sha", "not-a-sha");
         try {
             final JsonObject response = dispatch("{\"protocol_version\":\"2.0.0\","
@@ -238,5 +237,53 @@ public class ProtocolTest {
         Assert.assertFalse(response.get("success").getAsBoolean());
         Assert.assertEquals(response.get("errors").getAsJsonArray().get(0).getAsJsonObject()
                 .get("code").getAsString(), BridgeErrors.ENGINE_NOT_STARTED);
+    }
+
+    @Test
+    public void testDispatchUnexpectedThrowableSanitized() {
+        BridgeEngine.dispatchFaultForTests =
+                new RuntimeException("PRIVATE-ENGINE-SENTINEL-7Q blew up");
+        final java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+        final java.io.PrintStream savedErr = System.err;
+        System.setErr(new java.io.PrintStream(captured));
+        try {
+            final JsonObject response = dispatch("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"sentinel1\",\"message_type\":\"start_engine\"}");
+            Assert.assertFalse(response.get("success").getAsBoolean());
+            Assert.assertEquals(response.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                    .get("code").getAsString(), BridgeErrors.INTERNAL_ERROR);
+            Assert.assertEquals(response.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                    .get("message").getAsString(), "internal bridge error");
+            Assert.assertFalse(response.toString().contains("PRIVATE-ENGINE-SENTINEL-7Q"),
+                    response.toString());
+        } finally {
+            System.setErr(savedErr);
+            BridgeEngine.dispatchFaultForTests = null;
+        }
+        Assert.assertTrue(captured.toString().contains("PRIVATE-ENGINE-SENTINEL-7Q"),
+                "internal stderr diagnostics must retain the sentinel");
+    }
+
+    @Test
+    public void testProjectionCauseRetainedInternally() {
+        final RuntimeException cause = new RuntimeException("PRIVATE-ENGINE-SENTINEL-ZONE");
+        final BridgeProjectionException failure = new BridgeProjectionException("mana_pool", cause);
+        Assert.assertSame(failure.getCause(), cause);
+        Assert.assertEquals(failure.getField(), "mana_pool");
+    }
+
+    @Test
+    public void testInternalLogChannelRetainsDetail() {
+        final java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+        final java.io.PrintStream savedErr = System.err;
+        System.setErr(new java.io.PrintStream(captured));
+        try {
+            BridgeEngine.logInternal("lifecycle probe",
+                    new RuntimeException("PRIVATE-ENGINE-SENTINEL-LC"));
+        } finally {
+            System.setErr(savedErr);
+        }
+        Assert.assertTrue(captured.toString().contains("PRIVATE-ENGINE-SENTINEL-LC"));
+        Assert.assertTrue(captured.toString().contains("lifecycle probe"));
     }
 }

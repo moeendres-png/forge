@@ -222,13 +222,25 @@ public class BridgeEngineTest {
             }
         }
         Assert.assertNotNull(ship);
+        // R14B: a submission whose execution fails the session is REJECTED (never
+        // reported applied), with a generic external message. Diagnostics stay internal.
         final BridgeSession.SubmitOutcome outcome = session.submit(frame.actorPlayerId,
                 ship.optionId, "mulligan", frame.revision);
-        Assert.assertTrue(outcome.applied, "ship delivery failed: " + outcome.errorCode);
+        Assert.assertFalse(outcome.applied, "FAILED settlement must reject");
+        Assert.assertEquals(outcome.errorCode, BridgeErrors.SESSION_FAILED);
+        Assert.assertEquals(outcome.errorMessage, "session failed");
+        Assert.assertFalse(outcome.errorMessage.contains("tuckCardsViaMulligan"));
         session.awaitTerminal(30000);
         Assert.assertEquals(session.getStatus(), BridgeSession.Status.FAILED);
         Assert.assertTrue(session.getFailReason().contains("tuckCardsViaMulligan"),
                 "fail reason must name the blocker: " + session.getFailReason());
+        boolean auditHasBlocker = false;
+        for (BridgeSession.AuditEvent event : session.auditSnapshot()) {
+            if (event.details.toString().contains("tuckCardsViaMulligan")) {
+                auditHasBlocker = true;
+            }
+        }
+        Assert.assertTrue(auditHasBlocker, "internal audit must retain the diagnostic");
         session.shutdown(2000);
     }
 
@@ -374,10 +386,31 @@ public class BridgeEngineTest {
         Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
         Assert.assertTrue(frame.reason.contains("TARGETING"), "reason: " + frame.reason);
         Assert.assertTrue(frame.options.isEmpty());
+        Assert.assertEquals(frame.actorPlayerId, "p1");
+        final String hash = StateHash.ofGame(session.getGame(), session);
+        // R16: wrong actor learns nothing about the private frame.
+        final BridgeSession.SubmitOutcome wrongActor = session.submit("p2", "opt-anything",
+                "pass_priority", frame.revision);
+        Assert.assertFalse(wrongActor.applied);
+        Assert.assertEquals(wrongActor.errorCode, BridgeErrors.WRONG_ACTOR);
+        Assert.assertFalse(wrongActor.errorMessage.contains("TARGETING"));
+        Assert.assertFalse(wrongActor.errorMessage.contains("Swords to Plowshares"));
+        Assert.assertFalse(wrongActor.errorMessage.contains("revision"),
+                "no revision detail for wrong actor: " + wrongActor.errorMessage);
+        // R16: stale revision from the correct actor learns nothing current.
+        final BridgeSession.SubmitOutcome stale = session.submit("p1", "opt-anything",
+                "pass_priority", frame.revision - 1);
+        Assert.assertFalse(stale.applied);
+        Assert.assertEquals(stale.errorCode, BridgeErrors.STALE_REVISION);
+        Assert.assertFalse(stale.errorMessage.contains("TARGETING"));
+        // R16: correct actor at correct revision gets its own truthful fail-closed result.
         final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
                 "pass_priority", frame.revision);
         Assert.assertFalse(attempt.applied);
         Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
+        Assert.assertTrue(attempt.errorMessage.contains("TARGETING"));
+        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash,
+                "rejected submissions must not mutate state");
         session.shutdown(5000);
     }
 
@@ -890,6 +923,40 @@ public class BridgeEngineTest {
     }
 
     @Test(timeOut = 300000)
+    public void testProjectionCauseSanitized() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("faultcause-ok");
+        final BridgeEngine engine = constructed.engine;
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Hand);
+        for (int seat = 0; seat < 4; seat++) {
+            for (int i = 0; i < 5; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        StateProjection.projectionCauseForTests =
+                new RuntimeException("PRIVATE-ENGINE-SENTINEL-ZONE exploded");
+        try {
+            final JsonObject response = BridgeTestSupport.rpc(engine,
+                    "{\"protocol_version\":\"2.0.0\",\"request_id\":\"pc1\","
+                            + "\"message_type\":\"get_game_state\",\"game_id\":\"faultcause-ok\"}");
+            Assert.assertFalse(response.get("success").getAsBoolean());
+            final JsonObject error = response.get("errors").getAsJsonArray().get(0)
+                    .getAsJsonObject();
+            Assert.assertEquals(error.get("code").getAsString(), BridgeErrors.PROJECTION_FAILED);
+            Assert.assertFalse(error.get("message").getAsString()
+                    .contains("PRIVATE-ENGINE-SENTINEL-ZONE"), error.toString());
+            Assert.assertTrue(error.get("message").getAsString().contains("authoritative"),
+                    error.toString());
+        } finally {
+            StateProjection.projectionCauseForTests = null;
+        }
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
     public void testRosterStableAcrossLoss() {
         final BridgeTestSupport.ConstructedGame constructed =
                 BridgeTestSupport.buildConstructedGame("loss-ok");
@@ -1100,9 +1167,14 @@ public class BridgeEngineTest {
             }
         }
         Assert.assertNotNull(ship);
+        // R14B: the submission that fails the session is itself rejected (never
+        // reported applied), with a generic external message.
         final BridgeSession.SubmitOutcome outcome = session.submit(mulligan.actorPlayerId,
                 ship.optionId, "mulligan", mulligan.revision);
-        Assert.assertTrue(outcome.applied);
+        Assert.assertFalse(outcome.applied, "FAILED settlement must reject");
+        Assert.assertEquals(outcome.errorCode, BridgeErrors.SESSION_FAILED);
+        Assert.assertEquals(outcome.errorMessage, "session failed");
+        Assert.assertFalse(outcome.errorMessage.contains("tuckCardsViaMulligan"));
         session.awaitTerminal(30000);
         Assert.assertEquals(session.getStatus(), BridgeSession.Status.FAILED);
         // Internal state retains the diagnostic sentinel...
@@ -1162,6 +1234,32 @@ public class BridgeEngineTest {
         Assert.assertFalse(boundOther.has("last_execution_error"));
         final JsonObject boundPublic = StateProjection.bridgeMeta(live.session, null);
         Assert.assertFalse(boundPublic.has("last_execution_error"));
+        // Submit resets the error boundary: a park-time diagnostic is NOT attributed
+        // to the subsequent execution, so the owner's clean submit carries no note...
+        DecisionFrame.Option livePass = BridgeTestSupport.findOption(parked, "pass_priority");
+        Assert.assertNotNull(livePass);
+        final JsonObject boundSubmit = BridgeTestSupport.rpc(live.engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"dg4\","
+                        + "\"message_type\":\"submit_action\",\"game_id\":\"diag-live\",\"payload\":{"
+                        + "\"revision\":" + parked.revision + ",\"proposal\":{\"proposal_id\":\"b1\","
+                        + "\"actor_id\":\"p1\",\"legal_action_id\":\"" + livePass.optionId + "\","
+                        + "\"action_type\":\"pass_priority\"}}}");
+        BridgeTestSupport.assertOk(boundSubmit);
+        final JsonObject boundDecision =
+                boundSubmit.get("payload").getAsJsonObject().getAsJsonObject("decision");
+        Assert.assertTrue(boundDecision.get("executed").getAsBoolean());
+        Assert.assertFalse(boundDecision.has("execution_note"));
+        Assert.assertFalse(boundSubmit.toString().contains("SENTINEL-PRIVATE-9Z"));
+        // ...and once the next actor's frame parks, the stale error is gone everywhere.
+        final DecisionFrame next = live.session.getCurrentFrame();
+        Assert.assertNotNull(next);
+        Assert.assertNotEquals(next.revision, parked.revision);
+        Assert.assertFalse(StateProjection.bridgeMeta(live.session, next.actorPlayerId)
+                .has("last_execution_error"));
+        Assert.assertFalse(StateProjection.bridgeMeta(live.session, "p1")
+                .has("last_execution_error"));
+        Assert.assertFalse(StateProjection.bridgeMeta(live.session, null)
+                .has("last_execution_error"));
         live.session.shutdown(5000);
         session.shutdown(2000);
     }
