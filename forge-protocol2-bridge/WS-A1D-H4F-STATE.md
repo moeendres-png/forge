@@ -58,7 +58,9 @@
    no_pending_decision/unsupported metadata). `submit_action`/`pass_priority`/
    `resolve_mulligan` validate session/actor/revision/option BEFORE touching the engine,
    deliver the selection, then wait for the next park (or terminal) to answer with
-   post-state. No Lab polling of internals, no AI, no defaults, no auto-pass.
+   post-state. Compat aliases with identical verified semantics: create_game (commander
+   request), get_state, shutdown, get_event_log. No Lab polling of internals, no AI,
+   no defaults, no auto-pass.
  - F5 completeness: offered set = {pass} + every canPlay(true) SA across actor zones
    (Hand/Battlefield/Command/Graveyard/Exile/Library). Structural classifier marks a
    frame UNSUPPORTED (zero options, explicit reason) if ANY candidate needs targeting,
@@ -77,16 +79,21 @@
    porting rules (forbidden), using PlayerControllerAi (F1), AvailableActions (heuristic).
 
  ## Implementation status
- - [x] Module scaffold + root pom module entry
- - [ ] BridgeMain / Protocol / HeadlessBridgeGui / VersionInfo
- - [ ] ExternalPlayerController / BridgeCostDecisionMaker / classifier
- - [ ] BridgeEngine dispatch (20 messages + 3 compat aliases) / sessions / projection / audit
- - [ ] Fixture decks (simple-only + targeted-bolt negative)
- - [ ] Tests: protocol unit, in-JVM engine, separate-process JSONL
- - [ ] Evidence + handoff
+ - [x] Module scaffold + root pom module entry (1-line tracked diff; all else additive)
+ - [x] BridgeMain / Protocol / HeadlessBridgeGui / VersionInfo (F2 stdout redirect, F3 identity)
+ - [x] ExternalPlayerController / BridgeCostDecisionMaker / classifier (F1/F5/F7)
+ - [x] BridgeEngine dispatch (20 messages + 4 compat aliases) / sessions / projection / audit
+ - [x] Fixture decks (45 scripts manually verified; simple-only + Swords negative)
+ - [x] Tests: 12 protocol unit + 8 engine + 1 separate-process = 21 green, full reactor green
+ - [x] Evidence + handoff (this file + Coordinator report)
 
  ## Validated substantive head
- - TBD (updated per commit)
+ - 969f2d59da1 (decision boundary) + tests commit; see `git log` for hashes.
+ - Full reactor `mvn -pl forge-protocol2-bridge -am test`: BUILD SUCCESS
+   (forge-game 3/3, bridge 21/21), no Xvfb, child proven with DISPLAY unset +
+   -Djava.awt.headless=true.
 
  ## Exact next action
- - Implement bridge sources, build the reactor slice, run tests.
+ - Coordinator remote review; if warranted, authorization for publication and
+   Lab-side H4B runtime integration (Lab adapter needs bounded-subset handling since
+   global legal_actions_supported/action_submission_supported stay false).
