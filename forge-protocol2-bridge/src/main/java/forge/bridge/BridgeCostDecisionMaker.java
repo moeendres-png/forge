@@ -48,11 +48,15 @@ import forge.game.spellability.SpellAbility;
 /**
  * Cost decisions for externally controlled plays.
  *
- * <p>Mirrors ONLY provably choice-free resolutions (self tap/untap, computed mana
- * amounts, pool mana). Every other cost part declines ({@code null}), which makes the
- * engine roll the ability back with no state change. Nothing here selects, orders,
- * targets or confirms anything — any discretionary cost was already excluded from
- * supported frames by the structural classifier and would fail closed there.
+ * <p>Mirrors ONLY provably choice-free resolutions: self tap/untap and computed
+ * add-mana amounts. The mana-cost visit returns an unused placeholder because the
+ * real gate lives in the controller, which accepts only zero/no-cost mana payment
+ * and declines anything nonzero before execution (no Forge weighted pool
+ * auto-payment is reachable). Every other cost part declines ({@code null}), which
+ * makes the engine roll the ability back with no state change. Nothing here
+ * selects, orders, targets or confirms anything — any discretionary cost was
+ * already excluded from supported frames by the structural classifier and would
+ * fail closed there.
  */
 public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
@@ -68,7 +72,8 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
     @Override
     public PaymentDecision visit(CostPartMana cost) {
         // Decision unused by CostPartMana.payAsDecided ("the whole payment is interactive");
-        // the actual pool-only deduction happens in the controller. Mirrors HumanCostDecision.
+        // the controller's zero/no-cost-only gate performs the real fail-closed check.
+        // Mirrors HumanCostDecision's placeholder shape without its interactive path.
         return new PaymentDecision(0);
     }
 

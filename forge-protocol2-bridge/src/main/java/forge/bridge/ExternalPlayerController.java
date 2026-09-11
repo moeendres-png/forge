@@ -71,11 +71,13 @@ import org.apache.commons.lang3.tuple.Pair;
 /**
  * External-decision player controller: the native interception boundary.
  *
- * <p>Priority and mulligan callbacks rendezvous with the protocol thread through
- * parked {@link DecisionFrame}s. The starting-player callback honors the seat the
- * caller supplied at game creation (audited). Every other discretionary callback
- * throws {@link BridgeUnsupportedDecision} so an unrepresented decision aborts loudly
- * instead of being answered by AI, defaults, first-option, randomness or silent pass.
+ * <p>Priority, mulligan and starting-player callbacks rendezvous with the protocol
+ * thread through parked {@link DecisionFrame}s. Forge rules/RNG selects which
+ * controller receives the starting-player choice; that chooser is offered the
+ * complete native player set with no preset seat and no default. Every other
+ * discretionary callback throws {@link BridgeUnsupportedDecision} so an
+ * unrepresented decision aborts loudly instead of being answered by AI, defaults,
+ * first-option, randomness or silent pass.
  *
  * <p>Execution uses the real {@link PlaySpellAbility} pipeline; the engine keeps full
  * legality, cost and timing authority, including rollback on failure.

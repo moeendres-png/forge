@@ -17,7 +17,6 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -26,10 +25,33 @@ import org.jupnp.UpnpServiceConfiguration;
 /**
  * No-display {@link IGuiBase} for the bridge process.
  *
- * <p>Every UI affordance is a no-op or a fail-closed default. The engine path used by
- * the bridge ({@code Match.createGame}/{@code Match.startGame} with
- * {@link ExternalPlayerController}) never touches these; they exist only so
- * {@code FModel.initialize} and card loading can run without Swing, AWT or Xvfb.
+ * <p>R18 method classification (return-valued methods only; void methods are
+ * display-only no-ops and cannot answer decisions):
+ * <ul>
+ *   <li>A — pure infrastructure/capability/presentation query. Deterministic values
+ *   with no possibility of answering an MTG/user decision: isRunningOnDesktop,
+ *   isLibgdxPort, getCurrentVersion, getAssetsDir, isGuiThread, getAvatarCount,
+ *   getSleevesCount, getScreenScale, isSupportedAudioFormat, hasNetGame,
+ *   encodeSymbols (pure string transform). Null image/audio/GUI-match handles
+ *   (getImageFetcher, getSkinIcon, getUnskinnedIcon, getCardArt,
+ *   createLayeredImage, createAudioClip, createAudioMusic, getNewGuiGame,
+ *   hostMatch, getUpnpPlatformService) mean the subsystem is absent: any use fails
+ *   loudly (NullPointerException into the qualified FAILED path), never silently.
+ *   {@code download} reports failure (false = nothing fetched); the executor
+ *   runnables (invokeInEdtNow/Later/AndWait, runBackgroundTask) execute inline with
+ *   no content of their own. browseToUrl already throws.</li>
+ *   <li>B — interactive/user/choice-bearing affordance. MUST throw via
+ *   {@link #unsupportedInteraction}: showOptionDialog, showInputDialog,
+ *   showFileDialog, getSaveFile, order, getChoices, chooseCard, showBoxedProduct.
+ *   No default option, first option, empty selection, null answer or AI fallback.</li>
+ *   <li>C — none. Every return-valued method is classified A or B above with a
+ *   source-based justification; there are no uncertain methods.</li>
+ * </ul>
+ * <p>The engine path used by the bridge ({@code Match.createGame}/
+ * {@code Match.startGame} with {@link ExternalPlayerController}) never touches the
+ * B methods; they exist only so {@code FModel.initialize} and card loading can run
+ * without Swing, AWT or Xvfb. If game execution ever reaches one, the exception
+ * propagates into the qualified generic FAILED/INTERNAL failure handling.
  */
 public final class HeadlessBridgeGui implements IGuiBase {
 
@@ -71,6 +93,15 @@ public final class HeadlessBridgeGui implements IGuiBase {
 
     public String getInstalledAssetsDir() {
         return assetsDir;
+    }
+
+    /**
+     * R18 fail-closed helper for choice-bearing GUI affordances. Carries only the
+     * stable operation identifier — never caller-supplied options, messages or game
+     * data — so the exception text is principal-safe by construction.
+     */
+    private static UnsupportedOperationException unsupportedInteraction(String operation) {
+        return new UnsupportedOperationException("bridge-gui:" + operation);
     }
 
     @Override
@@ -191,7 +222,7 @@ public final class HeadlessBridgeGui implements IGuiBase {
 
     @Override
     public boolean showBoxedProduct(String title, String message, List<PaperCard> list) {
-        return false;
+        throw unsupportedInteraction("showBoxedProduct");
     }
 
     @Override
@@ -205,40 +236,40 @@ public final class HeadlessBridgeGui implements IGuiBase {
 
     @Override
     public int showOptionDialog(String message, String title, FSkinProp icon, List<String> options, int defaultOption) {
-        return defaultOption;
+        throw unsupportedInteraction("showOptionDialog");
     }
 
     @Override
     public String showInputDialog(String message, String title, FSkinProp icon, String initialInput,
             List<String> inputOptions, boolean isNumeric) {
-        return initialInput;
+        throw unsupportedInteraction("showInputDialog");
     }
 
     @Override
     public String showFileDialog(String title, String defaultDir) {
-        return null;
+        throw unsupportedInteraction("showFileDialog");
     }
 
     @Override
     public File getSaveFile(File defaultFile) {
-        return null;
+        throw unsupportedInteraction("getSaveFile");
     }
 
     @Override
     public <T> List<T> order(String title, String top, int remainingObjectsMin, int remainingObjectsMax,
             List<T> sourceChoices, List<T> destChoices) {
-        return Collections.emptyList();
+        throw unsupportedInteraction("order");
     }
 
     @Override
     public <T> List<T> getChoices(String message, int min, int max, Collection<T> choices,
             Collection<T> selected, FSerializableFunction<T, String> display) {
-        return Collections.emptyList();
+        throw unsupportedInteraction("getChoices");
     }
 
     @Override
     public PaperCard chooseCard(String title, String message, List<PaperCard> list) {
-        return null;
+        throw unsupportedInteraction("chooseCard");
     }
 
     @Override
