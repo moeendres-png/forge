@@ -1,0 +1,54 @@
+schema_version: '2.0'
+repository: moeendres-png/forge
+worktree: /home/moeen/code/ws59-forge-rqc3-engine-remediation
+branch: ws59/forge-rqc3-engine-remediation-20260911
+audit_base_sha: 66caae16015bd403bc0a52fa6689afb5508f74d0
+audit_base_tree: 40fc8f29ce4de31a964972461db2b48b4221e07f
+state_written_against_head: 66caae16015bd403bc0a52fa6689afb5508f74d0
+validated_head: null
+objective: 'WS59 Forge RQ-C3 engine remediation: systemically repair the exact A04
+  replacement/application defect, C01 stack-spell target-candidacy and alternate-cost
+  continuation defect, and G04 missing engine-native concession action seam on one
+  Forge successor lineage.'
+in_scope:
+- Forge Rules Core / controller seams required by A04
+- Forge Rules Core / targeting-cost continuation required by C01
+- Forge engine-native authoritative concession action required by G04
+- Forge-side focused regression/runtime tests
+- bounded remediation evidence and source-lock records
+out_of_scope:
+- CPL provider workaround
+- fabricated provider legal actions
+- RQ-C3 First-Wave behavior credit
+- unrelated card-specific hacks
+- Architecture Freeze
+- Production Provider selection
+dependencies:
+- WS55R terminal e39c7de053573625e51006b917bef43468161752
+- Coordinator AG-1/AG-2/AG-3 adjudication
+hard_gates:
+- Rules Core remains sole Legal Action authority
+- no card-name special-case remediation
+- unsupported reachable paths fail closed
+- A04 exact fixture reproduces before fix and passes after systemic fix
+- C01 exact fixture reaches authoritative target/cost continuation without provider
+  reconstruction
+- G04 concession is engine-native and available according to CR 104.3a semantics
+- multiplayer leave-game cleanup remains engine-owned
+- fresh relevant Forge tests pass
+forbidden_shortcuts:
+- first option
+- random option
+- default yes/no
+- GUI default
+- internal engine AI fallback
+- provider pseudo-option
+- manual outcome injection
+- direct effect-resolution bypass
+- card-name hacks
+ownership: WS59-FORGE-RQC3-ENGINE-REMEDIATION
+status: ACTIVE
+exact_next_action: Run WS59 targeted tests (A04/C01/G04) then relevant suites; inspect
+  diff; commit; terminal validation on clean HEAD.
+technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
+current_reasoning_tier: high

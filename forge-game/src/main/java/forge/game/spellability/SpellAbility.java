@@ -1574,19 +1574,78 @@ public abstract class SpellAbility extends CardTraitBase implements ISpellAbilit
                     return false;
                 }
                 if (hasParam("TargetType") && !e.isValid(getParam("TargetType").split(","), getActivatingPlayer(), getHostCard(), this)) {
-                    return false;
+                    // General spell-stack exception: for a Stack-zone host proxy of a
+                    // TargetType effect, TargetType validity is owned by
+                    // canTargetSpellAbility (SpellAbility authority), not Card.isValid.
+                    // Defer to the proxy check; do not fail here.
+                    boolean defer = false;
+                    if (e instanceof Card proxyCard && proxyCard.getZone() != null
+                            && proxyCard.getZone().is(ZoneType.Stack)) {
+                        defer = isStackSpellProxyTargetable(proxyCard);
+                    }
+                    if (!defer) {
+                        return false;
+                    }
                 }
             }
 
             if (entity instanceof Card c) {
                 if (c.getZone() != null && !tr.getZone().contains(c.getZone().getZoneType())) {
-                    return false;
+                    // General spell-stack exception (CR 115): a card on the stack whose
+                    // spell is targetable via the engine's own canTargetSpellAbility is a
+                    // legal target proxy for TargetType stack effects, independent of TgtZone.
+                    // This preserves engine-native targeting authority without reconstructing
+                    // legality and without card-name special cases.
+                    // Use current zone (not LKI) for the stack check.
+                    boolean onStack = c.getZone().is(ZoneType.Stack);
+                    boolean hasTT = hasParam("TargetType");
+                    if (!(onStack && hasTT && isStackSpellProxyTargetable(c))) {
+                        return false;
+                    }
                 }
             }
         }
 
         // Restrictions coming from target
         return entity.canBeTargetedBy(this);
+    }
+
+    /**
+     * General stack-spell proxy check for {@link #canTarget(GameObject, boolean)}.
+     * A host card on the stack is a legal target proxy exactly when the engine's own
+     * {@link #canTargetSpellAbility(SpellAbility)} deems one of its stack spells
+     * targetable. No card names, no provider filtering, no fallback.
+     */
+    private boolean isStackSpellProxyTargetable(final Card proxy) {
+        if (proxy == null) {
+            return false;
+        }
+        // Use current zone (not LKI-based isInZone) for stack proxies: the host card
+        // is in the Stack zone object even when last-known-zone lags.
+        if (proxy.getZone() == null || !proxy.getZone().is(ZoneType.Stack)) {
+            return false;
+        }
+        final Card host = getHostCard();
+        if (host == null || host.getGame() == null) {
+            return false;
+        }
+        for (final SpellAbilityStackInstance si : host.getGame().getStack()) {
+            final SpellAbility stackSA = si.getSpellAbility();
+            if (stackSA == null || stackSA.getHostCard() == null) {
+                continue;
+            }
+            // Match by object identity: the stack instance's host is the proxy card.
+            if (stackSA.getHostCard() != proxy && !stackSA.getHostCard().equals(proxy)) {
+                // Fall back to ID match for stack/battlefield copies sharing IDs.
+                if (stackSA.getHostCard().getId() != proxy.getId()) {
+                    continue;
+                }
+            }
+            if (canTargetSpellAbility(stackSA)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // is this a wrapping ability (used by trigger abilities)

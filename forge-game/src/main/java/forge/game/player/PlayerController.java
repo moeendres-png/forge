@@ -386,6 +386,30 @@ public abstract class PlayerController {
         return false;
     }
 
+    /**
+     * Engine-native concession legality (CR 104.3a: a player may concede at any time).
+     * Intentionally not priority-gated: available whenever the player is still in the
+     * game and the game itself is not over. Rules Core alone owns this decision;
+     * provider transport must never fabricate it.
+     */
+    public boolean canConcede() {
+        return player != null && player.isInGame() && !getGame().isGameOver();
+    }
+
+    /**
+     * Engine-native authoritative concession action (CR 104.3a) with native
+     * multiplayer leave-game cleanup (CR 800.4 via GameAction concede and
+     * Game.onPlayerLost). Provider may transport this action but must never
+     * fabricate it; orchestration direct-call of Player.concede() bypasses this seam
+     * and is not the solution.
+     */
+    public void concede() {
+        if (!canConcede()) {
+            throw new IllegalStateException("FORGE_CONCESSION_NOT_LEGAL");
+        }
+        getGame().getAction().concede(player);
+    }
+
     public boolean canPlayUnlimitedLands() {
         return false;
     }

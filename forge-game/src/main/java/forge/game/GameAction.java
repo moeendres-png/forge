@@ -250,6 +250,20 @@ public class GameAction {
                 copied.setBackSide(false);
             }
 
+            // CR 107.3k: a permanent spell's chosen X survives resolution for ETB replacements.
+            // Propagate the resolving spell's cast linkage to the battlefield copy so general
+            // etbCounter/X ETB semantics (not card names) observe the paid X.
+            if (toBattlefield && zoneFrom != null && zoneFrom.is(ZoneType.Stack)
+                    && cause != null && cause.isSpell() && c.equals(cause.getHostCard())) {
+                copied.setCastFrom(zoneFrom);
+                copied.setCastSA(cause);
+                if (cause.getActivatingPlayer() != null) {
+                    copied.setController(cause.getActivatingPlayer(), 0);
+                }
+                copied.setXManaCostPaidByColor(c.getXManaCostPaidByColor());
+                copied.setPromisedGift(c.getPromisedGift());
+            }
+
             // need to copy counters when card enters another zone than hand or library
             if (StaticAbilityCountersRemain.countersRemain(lastKnownInfo, zoneTo)) {
                 copied.setCounters(HashMultiset.create(lastKnownInfo.getCounters()));
@@ -558,6 +572,29 @@ public class GameAction {
         }
 
         // do ETB counters after zone add
+        // General ETB materialization safety: if the Moved replacement populated the
+        // ETB table keyed by the pre-move object sharing the entering permanent's ID,
+        // remap to the battlefield copy so counters land on the permanent.
+        if (toBattlefield && !table.isEmpty() && copied != null) {
+            List<GameEntity> etbKeys = new ArrayList<>(table.columnKeySet());
+            for (GameEntity key : etbKeys) {
+                if (key instanceof Card cardKey && key != copied && cardKey.getId() == copied.getId()) {
+                    Map<Optional<Player>, com.google.common.collect.Multiset<CounterType>> col =
+                            new HashMap<>(table.column(key));
+                    table.column(key).clear();
+                    for (Map.Entry<Optional<Player>, com.google.common.collect.Multiset<CounterType>> e : col.entrySet()) {
+                        com.google.common.collect.Multiset<CounterType> existing = table.get(e.getKey(), copied);
+                        if (existing == null) {
+                            table.put(e.getKey(), copied, e.getValue());
+                        } else {
+                            for (com.google.common.collect.Multiset.Entry<CounterType> ce : e.getValue().entrySet()) {
+                                existing.add(ce.getElement(), ce.getCount());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         table.replaceCounterEffect(game, null, true, true, params);
 
         game.getTriggerHandler().clearSuppression(TriggerType.Always);
@@ -1906,6 +1943,20 @@ public class GameAction {
             }
         }
         return checkAgain;
+    }
+
+    /**
+     * Engine-native authoritative concession (CR 104.3a: concession at any time;
+     * CR 800.4 leave-game cleanup via checkGameOverCondition and Game.onPlayerLost).
+     * Not priority-gated. Rules Core alone owns legality; provider transport must
+     * never fabricate this action.
+     */
+    public void concede(final Player concedingPlayer) {
+        if (concedingPlayer == null || !concedingPlayer.isInGame() || game.isGameOver()) {
+            throw new IllegalStateException("FORGE_CONCESSION_NOT_LEGAL");
+        }
+        concedingPlayer.concede();
+        checkGameOverCondition();
     }
 
     public void checkGameOverCondition() {

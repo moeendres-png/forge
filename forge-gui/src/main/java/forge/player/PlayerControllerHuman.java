@@ -3699,8 +3699,8 @@ public class PlayerControllerHuman extends PlayerController implements IGameCont
     @Override
     public void concede() {
         if (player != null) {
-            player.concede();
-            getGame().getAction().checkGameOverCondition();
+            // Engine-native authoritative concession (CR 104.3a at any time, 800.4 cleanup).
+            super.concede();
             if (getGame().isGameOver()) {
                 // Remote-client controllers on the server have no FControlGameEventHandler,
                 // so their input queues won't be released by the normal event path.
