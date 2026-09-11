@@ -6,6 +6,45 @@
  ## Source lock
  - Forge repo worktree: /home/moeen/code/ws-a1d-h4f-forge-protocol2-bridge
  - Branch: architecture/ws-a1d-h4f-forge-protocol2-bridge-20260911
+ - (Remediation 02 heads recorded under "Validated substantive head" below.)
+
+ ## CURRENT TRUTH (Remediation 02 — authoritative; earlier sections are historical)
+
+ - Action sources: engine-owned `Player.getAllCards()` (every Forge-tracked zone of
+   the acting player, incl. Sideboard/Ante/Merged/variants/tokens) UNION
+   `Player.getCardsActivatableInExternalZones(true)` (may-play grants incl.
+   opponents' zones and stack cards), deduped by identity; legality solely via
+   native `getAllPossibleAbilities(player, true)` + `canPlay(true)`. AvailableActions
+   never consulted. (SUPERSEDES the Phase-2 six-zone list below.)
+ - Execution surface: zero-mana only (`{0}` and the engine land no-cost sentinel).
+   Nonzero mana costs force MANA_PAYMENT_CHOICE; choice mana outputs force
+   MANA_OUTPUT_CHOICE; fixed-output taps remain. No pool auto-payment exists anywhere
+   in bridge code. (SUPERSEDES the Phase-2 "floating pool" paragraph below.)
+ - Identity/binding: actor_id, legal_action_id, action_type and integer revision are
+   mandatory on every discretionary submit (pass/mulligan included); missing fields
+   reject MALFORMED_REQUEST before native execution. No defaults (no default keep,
+   no preset seat, no seat 0).
+ - Starting authority: Forge dice/rules selects the chooser; a STARTING_PLAYER frame
+   with the complete turn-order set, opaque IDs and retained native Player bindings
+   externalizes the choice. Creation rejects starting_player_seat and starting_life;
+   canonical 40 life comes from RegisteredPlayer.forCommander. (SUPERSEDES the
+   Phase-2 preset-seat paragraph below.)
+ - Observation: principal-scoped game state AND legal actions AND bridge/next-decision
+   metadata (actor-only revision/pending/state-hash; others get null/-1/withheld).
+   Required reads throw BridgeProjectionException -> PROJECTION_FAILED; mana pool,
+   commander damage and commander casts are required reads (no {} on failure).
+   Visibility is the native pair canBeShownTo + canFaceDownBeShownTo with a
+   true-name path (alternate/paper state) for authorized face-down views.
+ - Principals: immutable registry (native Player -> pN) bound at attach() from
+   Forge's registered roster; no display-name fallback; projection iterates the
+   registry so lost players keep id/seat with has_lost.
+ - Capabilities: legal_actions_supported=false, action_submission_supported=false
+   (unchanged); notes describe the zero-mana bounded subset only.
+ - Known conservative gaps (REMAINING BLOCKER, safe direction): opponent look-grants
+   (mayPlayerLook) and revealed cards are still redacted in zone projection
+   (under-disclosure, never over-disclosure); London tuck, combat, triggers, modes,
+   targets, X, concede, replay, RNG, partners, non-4P remain unsupported.
+ - H4B_FORGE_RECOMMENDATION = PARTIAL. RULES_BEHAVIOR_CREDIT_CHANGE = 0.
  - AUDIT_BASE_SHA: a37a865a53280dd8ad6fad3384d69611e8c5a42f (verified `git rev-parse HEAD`)
  - AUDIT_BASE_TREE: 4471ff068dd23127fc5878bdffa0c0e6de8e6c28 (verified)
  - Lab authority: origin/main = 950d6fd6f7ec2b7f1835d2ed744e2c8d146d4e39 (verified via
@@ -176,7 +215,27 @@
  - H4B_FORGE_RECOMMENDATION = PARTIAL. RULES_BEHAVIOR_CREDIT_CHANGE = 0.
    PRODUCTION_PROVIDER = NOT SELECTED. ARCHITECTURE_FREEZE = NOT CLAIMED.
 
+ ## Remote review 02 — R8-R11 disposition (DIRECTLY_VERIFIED unless noted)
+
+ - R8 action-source completeness: Flashback-virtual gap closed by union policy
+   (getAllCards + grant index); Think Twice runtime proof (UNSUPPORTED
+   MANA_PAYMENT_CHOICE, native-legal, surfaced via ZoneType.Flashback, never
+   filtered). Sideboard/Ante/Merged/variant zones swept; companion runtime proof
+   outstanding (CODE_DERIVED, no fixture). Zone matrix recorded in
+   ExternalPlayerController.enumerateCandidates javadoc.
+ - R9 principal metadata: game/bridge/next-decision outputs scoped (withheld/null/
+   -1 for non-actors); complete-response regression incl. next-actor redaction.
+ - R10 projection: mana/damage/casts are required reads with independent fault
+   seams; each proven -> PROJECTION_FAILED; broad fault test retained.
+ - R11 stable identity: immutable registry at attach(); real concede-driven loss
+   proves p4 keeps id/seat, roster stays 4 with has_lost, no name fallback.
+ - R12 state truth: this CURRENT TRUTH section is authoritative; older design
+   paragraphs retained as labelled history (see SUPERSEDED markers above).
+ - R1-R7 regressions all retained green (see validation section).
+
  ## Validated substantive head
- - Remediation substantive: 98e538ed336ddd254a4e6055280b4c814bf647ec
-   (this file updated separately; see HEAD for the state-only checkpoint)
+ - Remediation 02 substantive: a4509c368d39734d30184aba182060f54ab308bf
+   (this file updated separately)
+ - Remediation 02 substantive: <SUBSTANTIVE_SHA> (this file updated separately)
+ - Remediation 01 substantive: 98e538ed336ddd254a4e6055280b4c814bf647ec
  - Prior: 6e91c3403a9 (tests), 48d6e50fd33 (published + state)
