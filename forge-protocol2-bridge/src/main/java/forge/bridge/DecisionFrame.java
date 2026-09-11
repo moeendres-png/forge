@@ -1,5 +1,6 @@
 package forge.bridge;
 
+import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 
 import java.util.ArrayList;
@@ -20,7 +21,8 @@ import java.util.UUID;
 public final class DecisionFrame {
     public enum Kind {
         PRIORITY,
-        MULLIGAN
+        MULLIGAN,
+        STARTING_PLAYER
     }
 
     public enum Status {
@@ -35,17 +37,19 @@ public final class DecisionFrame {
         public final String label;
         public final String sourceCardName;
         public final SpellAbility nativeBinding;
+        public final Player nativePlayer;
         public final boolean isPass;
         public final boolean isKeep;
         private boolean consumed;
 
         Option(String actionType, String label, String sourceCardName,
-                SpellAbility nativeBinding, boolean isPass, boolean isKeep) {
+                SpellAbility nativeBinding, Player nativePlayer, boolean isPass, boolean isKeep) {
             this.optionId = "opt-" + UUID.randomUUID();
             this.actionType = actionType;
             this.label = label;
             this.sourceCardName = sourceCardName;
             this.nativeBinding = nativeBinding;
+            this.nativePlayer = nativePlayer;
             this.isPass = isPass;
             this.isKeep = isKeep;
             this.consumed = false;
@@ -95,20 +99,24 @@ public final class DecisionFrame {
     }
 
     public static Option passOption() {
-        return new Option("pass_priority", "Pass priority", null, null, true, false);
+        return new Option("pass_priority", "Pass priority", null, null, null, true, false);
     }
 
     public static Option keepOption() {
-        return new Option("mulligan", "Keep hand", null, null, false, true);
+        return new Option("mulligan", "Keep hand", null, null, null, false, true);
     }
 
     public static Option shipOption() {
-        return new Option("mulligan", "Mulligan (take another hand)", null, null, false, false);
+        return new Option("mulligan", "Mulligan (take another hand)", null, null, null, false, false);
     }
 
     public static Option spellOption(String actionType, String label, String sourceCardName,
             SpellAbility nativeBinding) {
-        return new Option(actionType, label, sourceCardName, nativeBinding, false, false);
+        return new Option(actionType, label, sourceCardName, nativeBinding, null, false, false);
+    }
+
+    public static Option startingPlayerOption(String playerId, String label, Player nativePlayer) {
+        return new Option("structural_decision", label, playerId, null, nativePlayer, false, false);
     }
 
     public Option find(String optionId) {

@@ -40,6 +40,14 @@ public final class BridgeTestSupport {
         if (engineReady) {
             return;
         }
+        // In-JVM tests need a bound engine identity for the usability gate. This is a
+        // shape-valid test binding only (all zeros); the exact-SHA binding is proven by
+        // the separate-process test whose environment carries the real Forge SHA.
+        // An operator-provided value (system property or environment) is never clobbered.
+        if (System.getProperty("forge.engine.sha") == null
+                && System.getenv("FORGE_ENGINE_SHA") == null) {
+            System.setProperty("forge.engine.sha", "0000000000000000000000000000000000000000");
+        }
         final long start = System.nanoTime();
         HeadlessBridgeGui.install();
         FModel.initialize(null, null);
@@ -111,7 +119,7 @@ public final class BridgeTestSupport {
     }
 
     public static JsonObject createGame(BridgeEngine engine, String requestId, String gameId,
-            List<String> handles, Integer startingSeat) {
+            List<String> handles) {
         final StringBuilder decks = new StringBuilder();
         for (int i = 0; i < handles.size(); i++) {
             if (i > 0) {
@@ -119,12 +127,9 @@ public final class BridgeTestSupport {
             }
             decks.append('"').append(handles.get(i)).append('"');
         }
-        String payload = "{\"request\":{\"game_id\":\"" + gameId + "\",\"format\":\"commander\","
-                + "\"deck_handles\":[" + decks + "],\"starting_life\":40";
-        if (startingSeat != null) {
-            payload += ",\"starting_player_seat\":" + startingSeat;
-        }
-        payload += "}}";
+        // R5: no starting_player_seat, no starting_life — Forge rules own both.
+        final String payload = "{\"request\":{\"game_id\":\"" + gameId + "\",\"format\":\"commander\","
+                + "\"deck_handles\":[" + decks + "]}}";
         final JsonObject response = rpc(engine, "{\"protocol_version\":\"2.0.0\","
                 + "\"request_id\":\"" + requestId + "\",\"message_type\":\"create_commander_game\","
                 + "\"payload\":" + payload + "}");
@@ -139,12 +144,18 @@ public final class BridgeTestSupport {
         assertOk(response);
     }
 
-    public static JsonObject legalActions(BridgeEngine engine, String gameId) {
+    public static JsonObject legalActions(BridgeEngine engine, String gameId, String actorId) {
         final JsonObject response = rpc(engine, "{\"protocol_version\":\"2.0.0\","
                 + "\"request_id\":\"la-" + System.nanoTime() + "\",\"message_type\":\"get_legal_actions\","
-                + "\"game_id\":\"" + gameId + "\"}");
+                + "\"game_id\":\"" + gameId + "\",\"payload\":{\"actor_id\":\"" + actorId + "\"}}");
         assertOk(response);
         return response.get("payload").getAsJsonObject();
+    }
+
+    public static JsonObject pollLegalActions(BridgeEngine engine, String gameId, String actorId) {
+        return rpc(engine, "{\"protocol_version\":\"2.0.0\","
+                + "\"request_id\":\"la-" + System.nanoTime() + "\",\"message_type\":\"get_legal_actions\","
+                + "\"game_id\":\"" + gameId + "\",\"payload\":{\"actor_id\":\"" + actorId + "\"}}");
     }
 
     /** Polls until a decision frame is parked or the timeout elapses. */
@@ -216,7 +227,8 @@ public final class BridgeTestSupport {
     public static BridgeSession.SubmitOutcome submitKeep(BridgeSession session, DecisionFrame frame) {
         for (DecisionFrame.Option option : frame.options) {
             if (option.isKeep) {
-                return session.submit(frame.actorPlayerId, option.optionId, option.actionType, null);
+                return session.submit(frame.actorPlayerId, option.optionId, option.actionType,
+                        frame.revision);
             }
         }
         throw new AssertionError("no keep option parked");
@@ -225,15 +237,61 @@ public final class BridgeTestSupport {
     public static BridgeSession.SubmitOutcome submitPass(BridgeSession session, DecisionFrame frame) {
         for (DecisionFrame.Option option : frame.options) {
             if (option.isPass) {
-                return session.submit(frame.actorPlayerId, option.optionId, option.actionType, null);
+                return session.submit(frame.actorPlayerId, option.optionId, option.actionType,
+                        frame.revision);
             }
         }
         throw new AssertionError("no pass option parked");
     }
 
+    public static BridgeSession.SubmitOutcome submitStartingPlayer(BridgeSession session,
+            DecisionFrame frame, String playerId) {
+        Assert.assertEquals(frame.kind, DecisionFrame.Kind.STARTING_PLAYER);
+        for (DecisionFrame.Option option : frame.options) {
+            if (playerId.equals(option.sourceCardName)) {
+                return session.submit(frame.actorPlayerId, option.optionId, option.actionType,
+                        frame.revision);
+            }
+        }
+        throw new AssertionError("no starting-player option for " + playerId);
+    }
+
+    /**
+     * Drives game start: answers the Forge-selected chooser's STARTING_PLAYER frame by
+     * selecting the given player, keeps all mulligans, and returns the first priority
+     * frame. Returns the chooser's actor id through the wall clock of frames.
+     */
+    public static DecisionFrame driveStartToPriority(BridgeSession session, String choosePlayerId,
+            long timeoutMillis) {
+        final long deadline = System.currentTimeMillis() + timeoutMillis;
+        int iterations = 0;
+        while (System.currentTimeMillis() < deadline) {
+            if (++iterations > 60) {
+                throw new AssertionError("too many start iterations");
+            }
+            final DecisionFrame frame = awaitFrame(session, Math.max(1000,
+                    deadline - System.currentTimeMillis()));
+            Assert.assertNotNull(frame, "no decision frame parked before timeout");
+            if (frame.kind == DecisionFrame.Kind.PRIORITY) {
+                return frame;
+            }
+            if (frame.kind == DecisionFrame.Kind.STARTING_PLAYER) {
+                final BridgeSession.SubmitOutcome outcome =
+                        submitStartingPlayer(session, frame, choosePlayerId);
+                Assert.assertTrue(outcome.applied,
+                        "starting-player choice failed: " + outcome.errorCode);
+                continue;
+            }
+            Assert.assertEquals(frame.kind, DecisionFrame.Kind.MULLIGAN, "unexpected frame kind");
+            final BridgeSession.SubmitOutcome outcome = submitKeep(session, frame);
+            Assert.assertTrue(outcome.applied, "keep not applied: " + outcome.errorCode);
+        }
+        throw new AssertionError("priority frame never parked");
+    }
+
     /**
      * Drives mulligans (always keep) until the first priority frame parks.
-     * Returns that frame.
+     * Only valid when no STARTING_PLAYER frame intervenes (constructed games).
      */
     public static DecisionFrame driveKeepsToPriority(BridgeSession session, long timeoutMillis) {        final long deadline = System.currentTimeMillis() + timeoutMillis;
         int iterations = 0;
@@ -282,7 +340,7 @@ public final class BridgeTestSupport {
         }
         final List<RegisteredPlayer> players = new ArrayList<>(4);
         final List<List<String>> seatCommanders = new ArrayList<>(4);
-        final BridgeSession session = new BridgeSession(gameId, 0, handleToDeck);
+        final BridgeSession session = new BridgeSession(gameId, handleToDeck);
         int seat = 0;
         for (String handle : handles) {
             final BridgeEngine.ImportedDeck deck = engine.decksForTests().get(handle);

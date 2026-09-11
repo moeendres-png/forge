@@ -25,5 +25,9 @@ public final class BridgeErrors {
     public static final String GAME_CREATION_FAILED = "game_creation_failed";
     public static final String SEED_UNSUPPORTED = "seed_unsupported";
     public static final String PLAYER_COUNT_UNSUPPORTED = "player_count_unsupported";
+    public static final String STARTING_LIFE_UNSUPPORTED = "starting_life_unsupported";
+    public static final String STARTING_PLAYER_SEAT_UNSUPPORTED = "starting_player_seat_unsupported";
+    public static final String ENGINE_IDENTITY_UNAVAILABLE = "engine_identity_unavailable";
+    public static final String PROJECTION_FAILED = "projection_failed";
     public static final String INTERNAL_ERROR = "internal_error";
 }

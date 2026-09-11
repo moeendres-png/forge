@@ -33,35 +33,57 @@ import java.util.Map;
 public final class StateProjection {
     private StateProjection() { }
 
+    /** Package-private test seam: forces every required read to fail (R4 regression). */
+    static volatile boolean failRequiredReadsForTests;
+
+    private interface ThrowingSupplier<T> {
+        T get() throws Throwable;
+    }
+
+    /**
+     * Required-field reader: any failure (or an injected test fault) aborts the whole
+     * projection with {@link BridgeProjectionException}. No plausible defaults.
+     */
+    private static <T> T require(String field, ThrowingSupplier<T> reader) {
+        if (failRequiredReadsForTests) {
+            throw new BridgeProjectionException(field, "injected test fault");
+        }
+        try {
+            return reader.get();
+        } catch (BridgeProjectionException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new BridgeProjectionException(field, t);
+        }
+    }
+
     public static JsonObject gameState(BridgeSession session, String observerPlayerId) {
         final Game game = session.getGame();
+        if (game == null) {
+            throw new BridgeProjectionException("game", "no game object");
+        }
         final JsonObject state = new JsonObject();
         state.addProperty("game_id", session.getGameId());
         state.add("seed", JsonNull.INSTANCE);
         state.add("rng_counter", JsonNull.INSTANCE);
         state.addProperty("status", statusOf(session));
-        int turn = 0;
-        String activeId = null;
-        String priorityId = null;
-        String phaseName = "beginning";
-        String step = null;
-        final Player observer = observerPlayerId == null ? null : session.playerById(observerPlayerId);
-        final PlayerView observerView = observer == null ? null : observer.getView();
-        if (game != null) {
-            final PhaseHandler phases;
-            try {
-                phases = game.getPhaseHandler();
-                turn = Math.max(0, phases.getTurn());
-                activeId = idOrNull(session, phases.getPlayerTurn());
-                priorityId = idOrNull(session, phases.getPriorityPlayer());
-                final PhaseType phase = phases.getPhase();
-                if (phase != null) {
-                    phaseName = mapPhase(phase);
-                    step = phase.name();
-                }
-            } catch (Throwable t) {
-                turn = 0;
-            }
+        final PhaseHandler phases = require("phase_handler", () -> game.getPhaseHandler());
+        final int turn = require("turn_number", () -> Math.max(0, phases.getTurn()));
+        final String activeId =
+                require("active_player", () -> idOrNull(session, phases.getPlayerTurn()));
+        final String priorityId =
+                require("priority_player", () -> idOrNull(session, phases.getPriorityPlayer()));
+        final PhaseType phase = require("phase", () -> phases.getPhase());
+        final String phaseName;
+        final String step;
+        if (phase == null) {
+            // Legitimate pre-first-turn engine state (no phase has begun yet): documented
+            // structural mapping, applied only when the read itself succeeded.
+            phaseName = "beginning";
+            step = null;
+        } else {
+            phaseName = mapPhase(phase);
+            step = phase.name();
         }
         state.addProperty("turn_number", turn);
         if (activeId == null) {
@@ -80,43 +102,21 @@ public final class StateProjection {
         } else {
             state.addProperty("step", step);
         }
+        final Player observer = observerPlayerId == null ? null : session.playerById(observerPlayerId);
+        final PlayerView observerView = observer == null ? null : observer.getView();
+        final List<Player> enginePlayers =
+                require("players", () -> new ArrayList<>(game.getPlayers()));
         final JsonArray players = new JsonArray();
-        if (game != null) {
-            for (Player player : game.getPlayers()) {
-                players.add(playerState(session, player, observer, observerView));
-            }
+        for (Player player : enginePlayers) {
+            players.add(playerState(session, player, observer, observerView));
         }
         state.add("players", players);
-        final JsonArray stack = new JsonArray();
-        if (game != null) {
-            try {
-                for (SpellAbilityStackInstance si : game.getStack()) {
-                    stack.add(stackText(si, observerView));
-                }
-            } catch (Throwable t) {
-                // Stack unreadable mid-transition; report what we have.
-            }
-        }
-        state.add("stack", stack);
-        state.add("legal_actions", legalActions(session));
-        final JsonArray winners = new JsonArray();
-        if (game != null) {
-            try {
-                if (game.isGameOver()) {
-                    final GameOutcome outcome = game.getOutcome();
-                    if (outcome == null || !outcome.isDraw()) {
-                        for (Player player : game.getPlayers()) {
-                            if (!player.hasLost()) {
-                                winners.add(session.playerIdOf(player));
-                            }
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                // Leave winners empty rather than fabricate.
-            }
-        }
-        state.add("winner_ids", winners);
+        state.add("stack", stackState(game, observerView));
+        final DecisionFrame frame = session.getCurrentFrame();
+        final boolean actorScoped = observer != null && frame != null
+                && observerPlayerId.equals(frame.actorPlayerId);
+        state.add("legal_actions", actorScoped ? legalActions(session) : new JsonArray());
+        state.add("winner_ids", winnersState(session, game));
         state.addProperty("event_sequence", (int) Math.min(Integer.MAX_VALUE, session.auditSize()));
         return state;
     }
@@ -202,38 +202,29 @@ public final class StateProjection {
         final JsonObject state = new JsonObject();
         state.addProperty("player_id", session.playerIdOf(player));
         state.addProperty("seat", Math.max(0, session.seatOf(player)));
-        int life = 40;
-        int poison = 0;
-        try {
-            life = player.getLife();
-            poison = player.getPoisonCounters();
-        } catch (Throwable t) {
-            // Pre-game defaults stand.
-        }
+        final int life = require("life:" + state.get("player_id").getAsString(), () -> player.getLife());
+        final int poison = require("poison:" + state.get("player_id").getAsString(),
+                () -> Math.max(0, player.getPoisonCounters()));
         state.addProperty("life", life);
-        state.addProperty("poison_counters", Math.max(0, poison));
+        state.addProperty("poison_counters", poison);
         state.add("commander_damage_received", commanderDamage(session, player));
         state.add("commander_cast_count", commanderCasts(session, player));
         state.add("mana_pool", manaPool(player));
         state.add("zones", zones(player, observer, observerView));
-        int landRemaining = 1;
-        try {
-            landRemaining = Math.max(0, player.getMaxLandPlays() - player.getLandsPlayedThisTurn());
-        } catch (Throwable t) {
-            landRemaining = 1;
-        }
+        final int landRemaining = require("land_plays:" + state.get("player_id").getAsString(),
+                () -> Math.max(0, player.getMaxLandPlays() - player.getLandsPlayedThisTurn()));
         state.addProperty("land_plays_remaining", landRemaining);
-        boolean lost = false;
+        final boolean lost =
+                require("has_lost:" + state.get("player_id").getAsString(), () -> player.hasLost());
+        state.addProperty("has_lost", lost);
         String lossReason = null;
         try {
-            lost = player.hasLost();
             if (lost && player.getOutcome() != null && player.getOutcome().lossState != null) {
                 lossReason = player.getOutcome().lossState.name();
             }
         } catch (Throwable t) {
-            lost = false;
+            lossReason = null;
         }
-        state.addProperty("has_lost", lost);
         if (lossReason == null) {
             state.add("loss_reason", JsonNull.INSTANCE);
         } else {
@@ -261,12 +252,8 @@ public final class StateProjection {
             final Map<String, Card> byName = new LinkedHashMap<>();
             for (ZoneType zone : new ZoneType[] { ZoneType.Command, ZoneType.Battlefield,
                     ZoneType.Graveyard, ZoneType.Exile, ZoneType.Hand, ZoneType.Library }) {
-                try {
-                    for (Card card : player.getCardsIn(zone)) {
-                        byName.putIfAbsent(card.getName(), card);
-                    }
-                } catch (Throwable ignored) {
-                    // Skip unreadable zones.
+                for (Card card : player.getCardsIn(zone)) {
+                    byName.putIfAbsent(card.getName(), card);
                 }
             }
             for (String name : names) {
@@ -274,7 +261,8 @@ public final class StateProjection {
                 casts.addProperty(name, card == null ? 0 : Math.max(0, player.getCommanderCast(card)));
             }
         } catch (Throwable t) {
-            // Leave empty rather than fabricate.
+            // Optional metadata with a Lab default: all-or-nothing empty object.
+            return new JsonObject();
         }
         return casts;
     }
@@ -298,11 +286,11 @@ public final class StateProjection {
     private static JsonObject zones(Player player, Player observer, PlayerView observerView) {
         final JsonObject zones = new JsonObject();
         zones.add("library", new JsonArray());
-        zones.add("hand", handZone(player, observer));
-        zones.add("battlefield", battlefieldZone(player, observerView));
-        zones.add("graveyard", namesZone(player, ZoneType.Graveyard));
-        zones.add("exile", exileZone(player, observerView));
-        zones.add("command", namesZone(player, ZoneType.Command));
+        zones.add("hand", require("zones.hand", () -> handZone(player, observer)));
+        zones.add("battlefield", require("zones.battlefield", () -> battlefieldZone(player, observerView)));
+        zones.add("graveyard", require("zones.graveyard", () -> namesZone(player, ZoneType.Graveyard)));
+        zones.add("exile", require("zones.exile", () -> exileZone(player, observerView)));
+        zones.add("command", require("zones.command", () -> namesZone(player, ZoneType.Command)));
         return zones;
     }
 
@@ -323,45 +311,86 @@ public final class StateProjection {
 
     private static JsonArray battlefieldZone(Player player, PlayerView observerView) {
         final JsonArray zone = new JsonArray();
-        try {
-            for (Card card : player.getCardsIn(ZoneType.Battlefield)) {
-                zone.add(shownName(card, observerView));
-            }
-        } catch (Throwable t) {
-            // Return what we have.
+        for (Card card : player.getCardsIn(ZoneType.Battlefield)) {
+            zone.add(shownName(card, observerView));
         }
         return zone;
     }
 
     private static JsonArray exileZone(Player player, PlayerView observerView) {
         final JsonArray zone = new JsonArray();
-        try {
-            for (Card card : player.getCardsIn(ZoneType.Exile)) {
-                zone.add(shownName(card, observerView));
-            }
-        } catch (Throwable t) {
-            // Return what we have.
+        for (Card card : player.getCardsIn(ZoneType.Exile)) {
+            zone.add(shownName(card, observerView));
         }
         return zone;
     }
 
+    /**
+     * R3 literal visibility: Forge's view authorization decides, using both native
+     * gates exactly as the engine defines them — {@code canBeShownTo} for the zone
+     * gate and {@code canFaceDownBeShownTo} for the face gate (battlefield cards are
+     * zone-visible to all, but face-down identity additionally requires the face
+     * gate, e.g. controller or an explicit may-look grant). Anything not shown to
+     * the observer is a redacted marker, never a name.
+     */
     private static String shownName(Card card, PlayerView observerView) {
+        final boolean faceDown;
         try {
-            if (!card.isFaceDown()) {
-                final CardView view = card.getView();
-                if (observerView == null || (view != null && view.canBeShownTo(observerView))) {
-                    return card.getName();
-                }
-                return card.isFaceDown() ? "<face-down>" : card.getName();
-            }
-            final CardView view = card.getView();
-            if (observerView != null && view != null && view.canBeShownTo(observerView)) {
-                return card.getName();
-            }
-            return "<face-down>";
+            faceDown = card.isFaceDown();
         } catch (Throwable t) {
-            return "<unreadable>";
+            throw new BridgeProjectionException("card.face_down", t);
         }
+        if (observerView == null) {
+            if (faceDown) {
+                return "<face-down>";
+            }
+            try {
+                return card.getName();
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("card.name", t);
+            }
+        }
+        final CardView view;
+        try {
+            view = card.getView();
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("card.view", t);
+        }
+        final boolean shown;
+        try {
+            shown = view != null && view.canBeShownTo(observerView)
+                    && view.canFaceDownBeShownTo(observerView);
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("card.visibility", t);
+        }
+        if (!shown) {
+            return faceDown ? "<face-down>" : "<hidden>";
+        }
+        if (!faceDown) {
+            try {
+                return card.getName();
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("card.name", t);
+            }
+        }
+        // Face-down but shown to this observer (controller or explicit may-look grant):
+        // the observer is entitled to the true identity. The engine's current-state
+        // name is blank while face-down, so use the native alternate (true) state,
+        // falling back to the immutable paper identity. Never reached for unauthorized
+        // observers (they received a marker above).
+        try {
+            final CardView.CardStateView alternate = view.getAlternateState();
+            if (alternate != null && alternate.getName() != null
+                    && !alternate.getName().isEmpty()) {
+                return alternate.getName();
+            }
+            if (card.getPaperCard() != null && card.getPaperCard().getName() != null) {
+                return card.getPaperCard().getName();
+            }
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("card.truename", t);
+        }
+        throw new BridgeProjectionException("card.truename", "no true identity available");
     }
 
     private static JsonArray namesZone(Player player, ZoneType zone) {
@@ -374,30 +403,67 @@ public final class StateProjection {
 
     private static List<String> zoneNames(Player player, ZoneType zone) {
         final List<String> names = new ArrayList<>();
-        try {
-            for (Card card : player.getCardsIn(zone)) {
+        for (Card card : player.getCardsIn(zone)) {
+            try {
                 names.add(card.getName());
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("zone." + zone.name(), t);
             }
-        } catch (Throwable t) {
-            // Return what we have.
         }
         return names;
     }
 
+    private static JsonArray stackState(Game game, PlayerView observerView) {
+        return require("stack", () -> {
+            final JsonArray stack = new JsonArray();
+            for (SpellAbilityStackInstance si : game.getStack()) {
+                stack.add(stackText(si, observerView));
+            }
+            return stack;
+        });
+    }
+
+    private static JsonArray winnersState(BridgeSession session, Game game) {
+        return require("winners", () -> {
+            final JsonArray winners = new JsonArray();
+            if (game.isGameOver()) {
+                final GameOutcome outcome = game.getOutcome();
+                if (outcome == null || !outcome.isDraw()) {
+                    for (Player player : game.getPlayers()) {
+                        if (!player.hasLost()) {
+                            winners.add(session.playerIdOf(player));
+                        }
+                    }
+                }
+            }
+            return winners;
+        });
+    }
+
     private static String stackText(SpellAbilityStackInstance si, PlayerView observerView) {
-        try {
-            final Card source = si.getSourceCard();
-            if (source != null && source.isFaceDown()) {
-                final CardView view = source.getView();
-                if (observerView == null || view == null || !view.canBeShownTo(observerView)) {
+        final Card source = si.getSourceCard();
+        if (source != null) {
+            final boolean faceDown;
+            try {
+                faceDown = source.isFaceDown();
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("stack.facedown", t);
+            }
+            if (faceDown) {
+                boolean shown = false;
+                try {
+                    final CardView view = source.getView();
+                    shown = observerView != null && view != null && view.canBeShownTo(observerView);
+                } catch (Throwable t) {
+                    throw new BridgeProjectionException("stack.visibility", t);
+                }
+                if (!shown) {
                     return "<face-down spell>";
                 }
             }
-            final String text = si.getStackDescription();
-            return text == null || text.isEmpty() ? "<spell>" : text;
-        } catch (Throwable t) {
-            return "<unreadable>";
         }
+        final String text = si.getStackDescription();
+        return text == null || text.isEmpty() ? "<spell>" : text;
     }
 
     private static String idOrNull(BridgeSession session, Player player) {

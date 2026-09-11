@@ -99,7 +99,6 @@ public final class BridgeSession {
     }
 
     private final String gameId;
-    private final int startingSeat;
     private final Map<String, String> deckHandleToDeckId;
     private final List<List<String>> seatCommanderNames = new ArrayList<>();
 
@@ -120,18 +119,13 @@ public final class BridgeSession {
     private final List<AuditEvent> audit = new ArrayList<>();
     private volatile String lastExecutionError = "";
 
-    public BridgeSession(String gameId, int startingSeat, Map<String, String> deckHandleToDeckId) {
+    public BridgeSession(String gameId, Map<String, String> deckHandleToDeckId) {
         this.gameId = gameId;
-        this.startingSeat = startingSeat;
         this.deckHandleToDeckId = Collections.unmodifiableMap(new LinkedHashMap<>(deckHandleToDeckId));
     }
 
     public String getGameId() {
         return gameId;
-    }
-
-    public int getStartingSeat() {
-        return startingSeat;
     }
 
     public synchronized void attach(Match match, Game game) {
@@ -204,18 +198,6 @@ public final class BridgeSession {
             }
         }
         return null;
-    }
-
-    public Player startingPlayerChoice() {
-        final Game g = game;
-        if (g == null) {
-            return null;
-        }
-        final List<Player> players = g.getPlayers();
-        if (players.isEmpty()) {
-            return null;
-        }
-        return players.get(Math.floorMod(startingSeat, players.size()));
     }
 
     // ---- game thread lifecycle ----
@@ -328,8 +310,7 @@ public final class BridgeSession {
             currentHandoff = handoff;
             currentHandoffRevision = revision;
         }
-        audit(kind == DecisionFrame.Kind.PRIORITY ? "priority_frame_parked" : "mulligan_frame_parked",
-                frameDetails(frame));
+        audit(frameParkedEvent(kind), frameDetails(frame));
         try {
             final FrameAnswer answer = handoff.take();
             if (answer.aborted || answer.selected == null) {
@@ -339,6 +320,19 @@ public final class BridgeSession {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new SessionAbortedException("frame " + revision + " interrupted");
+        }
+    }
+
+    private static String frameParkedEvent(DecisionFrame.Kind kind) {
+        switch (kind) {
+            case PRIORITY:
+                return "priority_frame_parked";
+            case MULLIGAN:
+                return "mulligan_frame_parked";
+            case STARTING_PLAYER:
+                return "starting_player_frame_parked";
+            default:
+                return "frame_parked";
         }
     }
 
@@ -359,7 +353,9 @@ public final class BridgeSession {
     /**
      * Validates and delivers a proposal selection. All negative controls fire here,
      * before the engine is touched: unknown game/session state, unsupported frame,
-     * wrong actor, stale revision, unknown or consumed option.
+     * missing or wrong actor, missing or stale revision, unknown or consumed option.
+     * Actor, option, action type and revision are all mandatory (defense in depth:
+     * this boundary rejects nulls even if an upstream parser failed to enforce them).
      */
     public SubmitOutcome submit(String actorId, String optionId, String actionType, Long revision) {
         final DecisionFrame frame;
@@ -369,6 +365,22 @@ public final class BridgeSession {
         // Validation and handoff under the monitor; the settle wait runs WITHOUT the
         // monitor so the game thread can park its next frame (else self-deadlock).
         synchronized (this) {
+            if (actorId == null || actorId.isEmpty()) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "actor_id is required", currentHash());
+            }
+            if (optionId == null || optionId.isEmpty()) {
+                return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
+                        "legal_action_id is required", currentHash());
+            }
+            if (actionType == null || actionType.isEmpty()) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "action_type is required", currentHash());
+            }
+            if (revision == null) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "revision is required", currentHash());
+            }
             if (status == Status.CLOSED) {
                 return SubmitOutcome.rejected(BridgeErrors.SESSION_CLOSED, "session is closed", currentHash());
             }
@@ -389,11 +401,11 @@ public final class BridgeSession {
                 return SubmitOutcome.rejected(BridgeErrors.UNSUPPORTED_DECISION,
                         "parked decision is not representable: " + frame.reason, currentHash());
             }
-            if (actorId != null && !actorId.equals(frame.actorPlayerId)) {
+            if (!actorId.equals(frame.actorPlayerId)) {
                 return SubmitOutcome.rejected(BridgeErrors.WRONG_ACTOR,
                         "option belongs to " + frame.actorPlayerId, currentHash());
             }
-            if (revision != null && revision.longValue() != frame.revision) {
+            if (revision.longValue() != frame.revision) {
                 return SubmitOutcome.rejected(BridgeErrors.STALE_REVISION,
                         "frame revision " + frame.revision + " expected, got " + revision, currentHash());
             }
@@ -402,7 +414,7 @@ public final class BridgeSession {
                 return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
                         "unknown option for revision " + frame.revision, currentHash());
             }
-            if (actionType != null && !actionType.equals(option.actionType)) {
+            if (!actionType.equals(option.actionType)) {
                 return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
                         "action type " + actionType + " does not match option", currentHash());
             }

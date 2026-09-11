@@ -36,13 +36,31 @@ public class BridgeProtocolProcessTest {
         final List<String> stdoutLines = new ArrayList<>();
 
         Child() throws Exception {
+            this(null, true);
+        }
+
+        /**
+         * @param resourceShadowDir optional directory prepended to the classpath to shadow
+         *                          packaged resources (test-only identity fixture).
+         * @param withEngineEnv whether to supply the real FORGE_ENGINE_SHA environment.
+         */
+        Child(String resourceShadowDir, boolean withEngineEnv) throws Exception {
             final String javaHome = System.getProperty("java.home");
             final String javaBin = javaHome + "/bin/java";
-            final String classpath = System.getProperty("java.class.path");
+            String classpath = System.getProperty("java.class.path");
+            if (resourceShadowDir != null) {
+                classpath = resourceShadowDir + java.io.File.pathSeparator + classpath;
+            }
             final Path repoRoot = Paths.get("").toAbsolutePath().getParent();
             final ProcessBuilder builder = new ProcessBuilder(javaBin,
                     "-Djava.awt.headless=true", "-cp", classpath, "forge.bridge.BridgeMain");
-            builder.environment().put("FORGE_ENGINE_SHA", ENGINE_SHA);
+            if (withEngineEnv) {
+                builder.environment().put("FORGE_ENGINE_SHA", ENGINE_SHA);
+            } else {
+                // Child environments inherit the parent's; remove explicitly so the
+                // fallback path is genuinely exercised.
+                builder.environment().remove("FORGE_ENGINE_SHA");
+            }
             builder.environment().put("FORGE_ASSETS_DIR",
                     repoRoot.resolve("forge-gui").toString());
             // Prove no display dependency: the bridge must run without any X server.
@@ -138,6 +156,44 @@ public class BridgeProtocolProcessTest {
     }
 
     @Test(timeOut = 900000)
+    public void testBuildPropertyIdentityFallback() throws Exception {
+        // T2: the build-filtered bridge property remains a permitted identity fallback.
+        // A shadow resource dir supplies a shape-valid fixture SHA; no env, no sysprop.
+        final String fixtureSha = "ffffffffffffffffffffffffffffffffffffffff";
+        final java.nio.file.Path shadow =
+                java.nio.file.Files.createTempDirectory("bridge-id-fixture");
+        java.nio.file.Files.writeString(shadow.resolve("bridge.properties"),
+                "bridge.artifact=forge-protocol2-bridge\nbridge.version=test\nengine.commit="
+                        + fixtureSha + "\n",
+                StandardCharsets.UTF_8);
+        final Child child = new Child(shadow.toString(), false);
+        try {
+            final JsonObject version = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"fb-version\",\"message_type\":\"get_provider_version\"}",
+                    240000);
+            assertOk(version);
+            Assert.assertEquals(version.get("payload").getAsJsonObject().get("engine_commit")
+                    .getAsString(), fixtureSha);
+            Assert.assertEquals(version.get("payload").getAsJsonObject()
+                    .get("engine_commit_source").getAsString(), "build:bridge.properties");
+            final JsonObject started = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"fb-start\",\"message_type\":\"start_engine\"}", 60000);
+            assertOk(started);
+            final JsonObject off = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"fb-off\",\"message_type\":\"shutdown_engine\"}", 30000);
+            assertOk(off);
+            child.close();
+            Assert.assertEquals(child.process.exitValue(), 0);
+        } finally {
+            try {
+                child.close();
+            } catch (Exception e) {
+                child.process.destroyForcibly();
+            }
+        }
+    }
+
+    @Test(timeOut = 900000)
     public void testSeparateProcessQualification() throws Exception {
         final Child child = new Child();
         try {
@@ -190,59 +246,84 @@ public class BridgeProtocolProcessTest {
                     + "\"game_id\":\"proc-1\"}", 60000);
             assertOk(started);
 
-            // Drive keeps until the first priority frame.
+            // Drive the real start: STARTING_PLAYER choice, then keeps, then priority.
+            // get_legal_actions requires the actor principal; poll with each candidate
+            // until a frame answers for it.
             String actor = null;
-            for (int i = 0; i < 30; i++) {
-                final JsonObject actions = child.request("{\"protocol_version\":\"2.0.0\","
-                        + "\"request_id\":\"p-poll-" + i + "\",\"message_type\":\"get_legal_actions\","
-                        + "\"game_id\":\"proc-1\"}", 60000);
-                assertOk(actions);
-                final JsonObject decision = actions.get("payload").getAsJsonObject()
-                        .getAsJsonObject("decision");
-                final String status = decision.get("status").getAsString();
-                if (status.equals("no_pending_decision")) {
-                    Thread.sleep(1000);
-                    continue;
-                }
-                if (!decision.has("kind")) {
-                    Thread.sleep(1000);
-                    continue;
-                }
-                if (decision.get("kind").getAsString().equals("MULLIGAN")) {
+            long revision = -1;
+            String chosenStarter = null;
+            final String[] seats = { "p1", "p2", "p3", "p4" };
+            for (int i = 0; i < 60 && actor == null; i++) {
+                for (String seat : seats) {
+                    final JsonObject actions = child.request("{\"protocol_version\":\"2.0.0\","
+                            + "\"request_id\":\"p-poll-" + i + "-" + seat + "\","
+                            + "\"message_type\":\"get_legal_actions\",\"game_id\":\"proc-1\","
+                            + "\"payload\":{\"actor_id\":\"" + seat + "\"}}", 60000);
+                    if (!actions.get("success").getAsBoolean()) {
+                        continue;
+                    }
+                    final JsonObject decision = actions.get("payload").getAsJsonObject()
+                            .getAsJsonObject("decision");
+                    if (!decision.has("kind")) {
+                        continue;
+                    }
+                    final String kind = decision.get("kind").getAsString();
+                    if (kind.equals("STARTING_PLAYER")) {
+                        final String chooser = decision.get("actor").getAsString();
+                        final long choiceRev = decision.get("revision").getAsLong();
+                        final JsonArray options = actions.get("payload").getAsJsonObject()
+                                .getAsJsonArray("actions");
+                        String choiceId = null;
+                        for (int k = 0; k < options.size(); k++) {
+                            final JsonObject opt = options.get(k).getAsJsonObject();
+                            if (opt.get("source_object_id").getAsString().equals("p3")) {
+                                choiceId = opt.get("action_id").getAsString();
+                            }
+                        }
+                        Assert.assertNotNull(choiceId, "p3 must be offered");
+                        System.err.println("[it] starting choice by " + chooser);
+                        final JsonObject chose = child.request("{\"protocol_version\":\"2.0.0\","
+                                + "\"request_id\":\"p-choose\",\"message_type\":\"submit_action\","
+                                + "\"game_id\":\"proc-1\",\"payload\":{\"revision\":" + choiceRev
+                                + ",\"proposal\":{\"proposal_id\":\"c1\",\"actor_id\":\"" + chooser
+                                + "\",\"legal_action_id\":\"" + choiceId + "\","
+                                + "\"action_type\":\"structural_decision\"}}}", 60000);
+                        assertOk(chose);
+                        chosenStarter = "p3";
+                        break;
+                    }
+                    if (kind.equals("MULLIGAN")) {
+                        actor = null;
+                        final String mulliganActor = decision.get("actor").getAsString();
+                        final long mulliganRev = decision.get("revision").getAsLong();
+                        System.err.println("[it] keep for " + mulliganActor);
+                        final JsonObject kept = child.request("{\"protocol_version\":\"2.0.0\","
+                                + "\"request_id\":\"p-keep-" + i + "\","
+                                + "\"message_type\":\"resolve_mulligan\",\"game_id\":\"proc-1\","
+                                + "\"payload\":{\"player_id\":\"" + mulliganActor + "\","
+                                + "\"revision\":" + mulliganRev + ",\"keep\":true,"
+                                + "\"bottom_card_ids\":[]}}", 60000);
+                        assertOk(kept);
+                        break;
+                    }
                     actor = decision.get("actor").getAsString();
-                    System.err.println("[it] keep for " + actor + " rev "
-                            + decision.get("revision").getAsLong());
-                    final JsonObject kept = child.request("{\"protocol_version\":\"2.0.0\","
-                            + "\"request_id\":\"p-keep-" + i + "\","
-                            + "\"message_type\":\"resolve_mulligan\",\"game_id\":\"proc-1\","
-                            + "\"payload\":{\"player_id\":\"" + actor + "\",\"keep\":true,"
-                            + "\"bottom_card_ids\":[]}}", 60000);
-                    assertOk(kept);
-                    continue;
+                    revision = decision.get("revision").getAsLong();
+                    System.err.println("[it] priority actor=" + actor + " rev " + revision
+                            + " status " + decision.get("status").getAsString());
                 }
-                actor = decision.get("actor").getAsString();
-                System.err.println("[it] priority actor=" + actor + " rev "
-                        + decision.get("revision").getAsLong() + " status "
-                        + decision.get("status").getAsString());
-                final JsonObject trail = child.request("{\"protocol_version\":\"2.0.0\","
-                        + "\"request_id\":\"p-trail\",\"message_type\":\"export_event_log\","
-                        + "\"game_id\":\"proc-1\"}", 60000);
-                final JsonArray events = trail.get("payload").getAsJsonObject()
-                        .getAsJsonObject("log").getAsJsonArray("events");
-                final StringBuilder seq = new StringBuilder();
-                for (int k = 0; k < events.size(); k++) {
-                    seq.append(events.get(k).getAsJsonObject().get("event_type").getAsString())
-                            .append(';');
+                if (actor == null) {
+                    Thread.sleep(500);
                 }
-                System.err.println("[it] audit trail: " + seq);
-                break;
             }
             Assert.assertNotNull(actor, "never reached a priority decision");
+            Assert.assertEquals(chosenStarter, "p3");
 
-            // Negative controls over the pipe: unknown option, wrong actor, stale revision.
+            // Negative controls over the pipe: unknown option, wrong actor, stale and
+            // missing revision, missing actor.
             final JsonObject unknown = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-neg-unknown\",\"message_type\":\"submit_action\","
-                    + "\"game_id\":\"proc-1\",\"payload\":{\"proposal\":{\"proposal_id\":\"n1\","
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"revision\":" + revision + ","
+                    + "\"proposal\":{\"proposal_id\":\"n1\","
                     + "\"actor_id\":\"" + actor + "\",\"legal_action_id\":\"opt-nope\","
                     + "\"action_type\":\"pass_priority\"}}}", 60000);
             assertErrorCode(unknown, BridgeErrors.UNKNOWN_OPTION);
@@ -250,18 +331,20 @@ public class BridgeProtocolProcessTest {
             final String otherActor = actor.equals("p1") ? "p2" : "p1";
             final JsonObject poll = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-poll-final\",\"message_type\":\"get_legal_actions\","
-                    + "\"game_id\":\"proc-1\"}", 60000);
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"actor_id\":\"" + actor + "\"}}",
+                    60000);
             assertOk(poll);
             final JsonArray offered = poll.get("payload").getAsJsonObject().getAsJsonArray("actions");
             Assert.assertTrue(offered.size() > 0, "priority frame must offer options");
             final String optionId = offered.get(0).getAsJsonObject().get("action_id").getAsString();
-            final long revision = poll.get("payload").getAsJsonObject().getAsJsonObject("decision")
-                    .get("revision").getAsLong();
-            final String preHash = poll.get("payload").getAsJsonObject().toString();
+            final long pollRevision = poll.get("payload").getAsJsonObject()
+                    .getAsJsonObject("decision").get("revision").getAsLong();
+            Assert.assertEquals(pollRevision, revision);
 
             final JsonObject wrongActor = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-neg-actor\",\"message_type\":\"submit_action\","
-                    + "\"game_id\":\"proc-1\",\"payload\":{\"proposal\":{\"proposal_id\":\"n2\","
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"revision\":" + revision + ","
+                    + "\"proposal\":{\"proposal_id\":\"n2\","
                     + "\"actor_id\":\"" + otherActor + "\",\"legal_action_id\":\"" + optionId + "\","
                     + "\"action_type\":\"pass_priority\"}}}", 60000);
             assertErrorCode(wrongActor, BridgeErrors.WRONG_ACTOR);
@@ -274,17 +357,41 @@ public class BridgeProtocolProcessTest {
                     + "\"action_type\":\"pass_priority\"}}}", 60000);
             assertErrorCode(stale, BridgeErrors.STALE_REVISION);
 
-            // Real external pass over the pipe.
+            final JsonObject noRevision = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"p-neg-norev\",\"message_type\":\"submit_action\","
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"proposal\":{\"proposal_id\":\"n4\","
+                    + "\"actor_id\":\"" + actor + "\",\"legal_action_id\":\"" + optionId + "\","
+                    + "\"action_type\":\"pass_priority\"}}}", 60000);
+            assertErrorCode(noRevision, BridgeErrors.MALFORMED_REQUEST);
+
+            final JsonObject noActor = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"p-neg-noactor\",\"message_type\":\"pass_priority\","
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"revision\":" + revision + "}}", 60000);
+            assertErrorCode(noActor, BridgeErrors.MALFORMED_REQUEST);
+
+            // Non-actor principal learns nothing.
+            final JsonObject gated = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"p-gated\",\"message_type\":\"get_legal_actions\","
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"actor_id\":\"" + otherActor + "\"}}",
+                    60000);
+            assertErrorCode(gated, BridgeErrors.WRONG_ACTOR);
+
+            // Real external pass over the pipe, with explicit revision.
             final JsonObject pass = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-pass\",\"message_type\":\"pass_priority\","
-                    + "\"game_id\":\"proc-1\",\"payload\":{\"actor_id\":\"" + actor + "\"}}", 60000);
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"actor_id\":\"" + actor + "\","
+                    + "\"revision\":" + revision + "}}", 60000);
             assertOk(pass);
-            Assert.assertNotEquals(pass.toString(), preHash);
+            final JsonObject passDecision = pass.get("payload").getAsJsonObject()
+                    .getAsJsonObject("decision");
+            Assert.assertNotEquals(passDecision.get("post_state_hash").getAsString(),
+                    passDecision.get("pre_state_hash").getAsString());
 
-            // Lab-shaped state validation.
+            // Lab-shaped state validation, observed as the acting principal.
             final JsonObject state = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-state\",\"message_type\":\"get_game_state\","
-                    + "\"game_id\":\"proc-1\"}", 60000);
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"observer_player_id\":\"" + actor
+                    + "\"}}", 60000);
             assertOk(state);
             final JsonObject gameState = state.get("payload").getAsJsonObject()
                     .getAsJsonObject("state");
@@ -299,6 +406,16 @@ public class BridgeProtocolProcessTest {
                     "land_plays_remaining", "has_lost" }) {
                 Assert.assertTrue(player0.has(key), "missing PlayerState key " + key);
             }
+            // Forge started with the externally chosen player (p3).
+            Assert.assertEquals(gameState.get("active_player_id").getAsString(), "p3");
+            // A non-acting observer receives no private action options.
+            final JsonObject outsider = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"p-outsider\",\"message_type\":\"get_game_state\","
+                    + "\"game_id\":\"proc-1\",\"payload\":{\"observer_player_id\":\""
+                    + otherActor + "\"}}", 60000);
+            assertOk(outsider);
+            Assert.assertEquals(outsider.get("payload").getAsJsonObject().getAsJsonObject("state")
+                    .getAsJsonArray("legal_actions").size(), 0);
 
             final JsonObject log = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-log\",\"message_type\":\"export_event_log\","

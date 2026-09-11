@@ -42,6 +42,24 @@ public final class BridgeEngine {
     private final Map<String, ImportedDeck> decks = new ConcurrentHashMap<>();
     private final Map<String, BridgeSession> sessions = new ConcurrentHashMap<>();
 
+    /** Thrown when no valid 40-hex engine identity is bound (hard gate F3). */
+    static final class EngineIdentityException extends RuntimeException {
+        EngineIdentityException() {
+            super("no valid 40-hex Forge engine SHA bound");
+        }
+    }
+
+    /**
+     * Production usability gate: gameplay handlers require a bound engine identity.
+     * Only identity observability (get_provider_version/get_capabilities) and engine
+     * shutdown stay served without one.
+     */
+    private static void requireUsable() {
+        if (VersionInfo.engineCommitIfValid() == null) {
+            throw new EngineIdentityException();
+        }
+    }
+
     /** One imported deck: Lab identity plus the real Forge Deck. */
     static final class ImportedDeck {
         final String handleId;
@@ -67,13 +85,18 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_MESSAGE,
                     "missing message_type/method", 0);
         }
-        if (!BridgeProtocol.PROTOCOL_VERSION.equals(request.protocolVersion)
-                && request.protocolVersion != null) {
+        if (!BridgeProtocol.PROTOCOL_VERSION.equals(request.protocolVersion)) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.PROTOCOL_VERSION_MISMATCH,
-                    "expected protocol 2.0.0, got " + request.protocolVersion, 0);
+                    "protocol_version is required and must equal 2.0.0", 0);
         }
         final String type = request.messageType;
         try {
+            final boolean identityExempt = type.equals(BridgeProtocol.GET_PROVIDER_VERSION)
+                    || type.equals(BridgeProtocol.GET_CAPABILITIES)
+                    || type.equals(BridgeProtocol.SHUTDOWN_ENGINE);
+            if (!identityExempt) {
+                requireUsable();
+            }
             switch (type) {
                 case BridgeProtocol.START_ENGINE:
                     return startEngine(request);
@@ -134,10 +157,17 @@ public final class BridgeEngine {
                     return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_MESSAGE,
                             "unknown message type: " + type, 0);
             }
+        } catch (EngineIdentityException e) {
+            return identityError(request);
         } catch (Throwable e) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.INTERNAL_ERROR,
                     e.getClass().getSimpleName() + ": " + e.getMessage(), 0);
         }
+    }
+
+    private static String identityError(BridgeProtocol.Request request) {
+        return BridgeProtocol.error(request.requestId, BridgeErrors.ENGINE_IDENTITY_UNAVAILABLE,
+                "no valid 40-hex Forge engine SHA bound", 0);
     }
 
     public boolean isShutDown() {
@@ -193,9 +223,11 @@ public final class BridgeEngine {
         caps.addProperty("engine_shutdown_supported", true);
         caps.addProperty("runtime_kind", "external_rules_engine");
         final JsonArray notes = new JsonArray();
-        notes.add("bounded proven subset only: priority pass, targetless nonmodal zero-or-pool-cost "
-                + "spell/ability execution, binary mulligan keep/ship; global legal_actions_supported "
-                + "and action_submission_supported stay false until the full decision surface qualifies");
+        notes.add("bounded proven subset only: priority pass, targetless nonmodal zero-mana "
+                + "execution (no discretionary mana payment; nonzero-mana candidates fail closed), "
+                + "fixed-output mana abilities, binary mulligan keep/ship, external starting-player "
+                + "choice; global legal_actions_supported and action_submission_supported stay false "
+                + "until the full decision surface qualifies");
         notes.add("partner commanders import but pod-level partner lifecycle is not yet qualified");
         notes.add("mulligan keep/ship is externally decided per player; London-tuck selection aborts loudly");
         notes.add("seeds are rejected: engine RNG is global and same-seed determinism is not claimed");
@@ -360,39 +392,29 @@ public final class BridgeEngine {
             }
             pod.add(deck);
         }
-        int startingSeat = 0;
         if (gameRequest.has("starting_player_seat") && !gameRequest.get("starting_player_seat").isJsonNull()) {
-            try {
-                startingSeat = gameRequest.get("starting_player_seat").getAsInt();
-            } catch (Exception e) {
-                return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
-                        "starting_player_seat must be an integer", 0);
-            }
+            return BridgeProtocol.error(request.requestId,
+                    BridgeErrors.STARTING_PLAYER_SEAT_UNSUPPORTED,
+                    "starting_player_seat injection is not supported: Forge selects the chooser "
+                            + "and the choice is externalized through a STARTING_PLAYER frame",
+                    0);
         }
-        int startingLife = 40;
         if (gameRequest.has("starting_life") && !gameRequest.get("starting_life").isJsonNull()) {
-            try {
-                startingLife = gameRequest.get("starting_life").getAsInt();
-            } catch (Exception e) {
-                return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
-                        "starting_life must be an integer", 0);
-            }
-            if (startingLife < 1) {
-                return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
-                        "starting_life must be positive", 0);
-            }
+            return BridgeProtocol.error(request.requestId, BridgeErrors.STARTING_LIFE_UNSUPPORTED,
+                    "starting_life injection is not supported: canonical Commander starting life "
+                            + "is established by the pinned Forge rules/runtime",
+                    0);
         }
         final Map<String, String> handleToDeck = new LinkedHashMap<>();
         for (int i = 0; i < handles.size(); i++) {
             handleToDeck.put(handles.get(i), pod.get(i).deckId);
         }
-        final BridgeSession session = new BridgeSession(gameId, startingSeat, handleToDeck);
+        final BridgeSession session = new BridgeSession(gameId, handleToDeck);
         final List<RegisteredPlayer> players = new ArrayList<>(4);
         final List<List<String>> seatCommanders = new ArrayList<>(4);
         for (int i = 0; i < 4; i++) {
             final ImportedDeck deck = pod.get(i);
             final RegisteredPlayer player = RegisteredPlayer.forCommander(deck.forgeDeck);
-            player.setStartingLife(startingLife);
             player.setPlayer(new BridgeLobbyPlayer("forge-p" + (i + 1), session));
             players.add(player);
             seatCommanders.add(new ArrayList<>(deck.commanderNames));
@@ -410,7 +432,7 @@ public final class BridgeEngine {
         }
         session.attach(match, game);
         sessions.put(gameId, session);
-        session.audit("game_created", creationDetails(gameId, handles, startingSeat, startingLife));
+        session.audit("game_created", creationDetails(gameId, handles));
         final JsonObject payload = new JsonObject();
         payload.addProperty("game_id", gameId);
         payload.addProperty("player_count", 4);
@@ -427,12 +449,10 @@ public final class BridgeEngine {
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 
-    private Map<String, String> creationDetails(String gameId, List<String> handles, int seat, int life) {
+    private Map<String, String> creationDetails(String gameId, List<String> handles) {
         final Map<String, String> details = new LinkedHashMap<>();
         details.put("game_id", gameId);
         details.put("deck_handles", String.join(",", handles));
-        details.put("starting_player_seat", Integer.toString(seat));
-        details.put("starting_life", Integer.toString(life));
         return details;
     }
 
@@ -480,7 +500,12 @@ public final class BridgeEngine {
                     "unknown observer: " + observer, (int) session.auditSize());
         }
         final JsonObject payload = new JsonObject();
-        payload.add("state", StateProjection.gameState(session, observer));
+        try {
+            payload.add("state", StateProjection.gameState(session, observer));
+        } catch (BridgeProjectionException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
+                    "authoritative state unreadable: " + e.getMessage(), (int) session.auditSize());
+        }
         payload.add("bridge", StateProjection.bridgeMeta(session));
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
@@ -491,20 +516,59 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_GAME,
                     "unknown game_id: " + request.gameId, 0);
         }
-        final JsonObject payload = new JsonObject();
-        payload.add("actions", StateProjection.legalActions(session));
+        // R3: legal options are principal-scoped. The caller names the principal; only
+        // the current frame's actor receives its options.
+        final String actorId = BridgeProtocol.optString(request.payload, "actor_id", null);
+        if (actorId == null || actorId.isEmpty()) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    "actor_id is required", (int) session.auditSize());
+        }
         final DecisionFrame frame = session.getCurrentFrame();
         if (frame == null) {
+            final JsonObject payload = new JsonObject();
+            payload.add("actions", new JsonArray());
             final JsonObject decision = new JsonObject();
             decision.addProperty("status", "no_pending_decision");
             payload.add("decision", decision);
-        } else {
-            payload.add("decision", StateProjection.decisionSummary(frame));
+            return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
         }
+        if (!actorId.equals(frame.actorPlayerId)) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.WRONG_ACTOR,
+                    "decision belongs to " + frame.actorPlayerId, (int) session.auditSize());
+        }
+        final JsonObject payload = new JsonObject();
+        payload.add("actions", StateProjection.legalActions(session));
+        payload.add("decision", StateProjection.decisionSummary(frame));
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 
     // ---- submission ----
+
+    private static Long requiredRevision(BridgeProtocol.Request request, JsonObject holder,
+            BridgeSession session) throws MalformedPayloadException {
+        if (holder == null || !holder.has("revision") || holder.get("revision").isJsonNull()) {
+            throw new MalformedPayloadException("revision is required");
+        }
+        try {
+            return holder.get("revision").getAsLong();
+        } catch (Exception e) {
+            throw new MalformedPayloadException("revision must be an integer");
+        }
+    }
+
+    private static final class MalformedPayloadException extends Exception {
+        MalformedPayloadException(String message) {
+            super(message);
+        }
+    }
+
+    private static String nonEmpty(JsonObject holder, String key) {
+        if (holder == null) {
+            return null;
+        }
+        final String value = BridgeProtocol.optString(holder, key, null);
+        return value == null || value.isEmpty() ? null : value;
+    }
 
     private String submitAction(BridgeProtocol.Request request) {
         final BridgeSession session = requireSession(request);
@@ -517,21 +581,20 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
                     "missing proposal object", (int) session.auditSize());
         }
-        final String actorId = BridgeProtocol.optString(proposal, "actor_id", null);
-        final String legalActionId = BridgeProtocol.optString(proposal, "legal_action_id", null);
-        final String actionType = BridgeProtocol.optString(proposal, "action_type", null);
-        if (legalActionId == null || legalActionId.isEmpty()) {
-            return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_OPTION,
-                    "proposal carries no legal_action_id", (int) session.auditSize());
+        final String actorId = nonEmpty(proposal, "actor_id");
+        final String legalActionId = nonEmpty(proposal, "legal_action_id");
+        final String actionType = nonEmpty(proposal, "action_type");
+        if (actorId == null || legalActionId == null || actionType == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    "proposal requires non-empty actor_id, legal_action_id and action_type",
+                    (int) session.auditSize());
         }
-        Long revision = null;
-        if (request.payload.has("revision") && !request.payload.get("revision").isJsonNull()) {
-            try {
-                revision = request.payload.get("revision").getAsLong();
-            } catch (Exception e) {
-                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
-                        "revision must be an integer", (int) session.auditSize());
-            }
+        final Long revision;
+        try {
+            revision = requiredRevision(request, request.payload, session);
+        } catch (MalformedPayloadException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    e.getMessage(), (int) session.auditSize());
         }
         session.setLastExecutionError("");
         final BridgeSession.SubmitOutcome outcome = session.submit(actorId, legalActionId, actionType, revision);
@@ -544,7 +607,18 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_GAME,
                     "unknown game_id: " + request.gameId, 0);
         }
-        final String actorId = BridgeProtocol.optString(request.payload, "actor_id", null);
+        final String actorId = nonEmpty(request.payload, "actor_id");
+        if (actorId == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    "actor_id is required", (int) session.auditSize());
+        }
+        final Long revision;
+        try {
+            revision = requiredRevision(request, request.payload, session);
+        } catch (MalformedPayloadException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    e.getMessage(), (int) session.auditSize());
+        }
         final DecisionFrame frame = session.getCurrentFrame();
         if (frame == null) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.NO_PENDING_DECISION,
@@ -553,6 +627,15 @@ public final class BridgeEngine {
         if (frame.kind != DecisionFrame.Kind.PRIORITY) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.UNSUPPORTED_DECISION,
                     "parked decision is not a priority decision", (int) session.auditSize());
+        }
+        if (!actorId.equals(frame.actorPlayerId)) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.WRONG_ACTOR,
+                    "decision belongs to " + frame.actorPlayerId, (int) session.auditSize());
+        }
+        if (revision.longValue() != frame.revision) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.STALE_REVISION,
+                    "frame revision " + frame.revision + " expected, got " + revision,
+                    (int) session.auditSize());
         }
         DecisionFrame.Option pass = null;
         for (DecisionFrame.Option option : frame.options) {
@@ -566,7 +649,8 @@ public final class BridgeEngine {
                     "parked priority decision offers no pass option", (int) session.auditSize());
         }
         session.setLastExecutionError("");
-        final BridgeSession.SubmitOutcome outcome = session.submit(actorId, pass.optionId, "pass_priority", null);
+        final BridgeSession.SubmitOutcome outcome =
+                session.submit(actorId, pass.optionId, "pass_priority", revision);
         return submitResponse(request, session, outcome);
     }
 
@@ -576,15 +660,28 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_GAME,
                     "unknown game_id: " + request.gameId, 0);
         }
-        final String playerId = BridgeProtocol.optString(request.payload, "player_id", null);
-        boolean keep = true;
-        if (request.payload.has("keep") && !request.payload.get("keep").isJsonNull()) {
-            try {
-                keep = request.payload.get("keep").getAsBoolean();
-            } catch (Exception e) {
-                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
-                        "keep must be a boolean", (int) session.auditSize());
-            }
+        final String playerId = nonEmpty(request.payload, "player_id");
+        if (playerId == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    "player_id is required", (int) session.auditSize());
+        }
+        final Long revision;
+        try {
+            revision = requiredRevision(request, request.payload, session);
+        } catch (MalformedPayloadException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    e.getMessage(), (int) session.auditSize());
+        }
+        final boolean keep;
+        if (!request.payload.has("keep") || request.payload.get("keep").isJsonNull()) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    "keep is required and must be an explicit boolean", (int) session.auditSize());
+        }
+        try {
+            keep = request.payload.get("keep").getAsBoolean();
+        } catch (Exception e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    "keep must be a boolean", (int) session.auditSize());
         }
         final List<String> bottom = stringList(request.payload, "bottom_card_ids");
         if (!bottom.isEmpty()) {
@@ -595,6 +692,15 @@ public final class BridgeEngine {
         if (frame == null || frame.kind != DecisionFrame.Kind.MULLIGAN) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.NO_PENDING_DECISION,
                     "no mulligan decision is parked", (int) session.auditSize());
+        }
+        if (!playerId.equals(frame.actorPlayerId)) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.WRONG_ACTOR,
+                    "decision belongs to " + frame.actorPlayerId, (int) session.auditSize());
+        }
+        if (revision.longValue() != frame.revision) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.STALE_REVISION,
+                    "frame revision " + frame.revision + " expected, got " + revision,
+                    (int) session.auditSize());
         }
         DecisionFrame.Option chosen = null;
         for (DecisionFrame.Option option : frame.options) {
@@ -608,7 +714,8 @@ public final class BridgeEngine {
                     "parked mulligan decision offers no matching option", (int) session.auditSize());
         }
         session.setLastExecutionError("");
-        final BridgeSession.SubmitOutcome outcome = session.submit(playerId, chosen.optionId, "mulligan", null);
+        final BridgeSession.SubmitOutcome outcome =
+                session.submit(playerId, chosen.optionId, "mulligan", revision);
         return submitResponse(request, session, outcome);
     }
 
@@ -620,7 +727,12 @@ public final class BridgeEngine {
                     null, (int) session.auditSize());
         }
         final JsonObject payload = new JsonObject();
-        payload.add("state", StateProjection.gameState(session, null));
+        try {
+            payload.add("state", StateProjection.gameState(session, null));
+        } catch (BridgeProjectionException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
+                    "authoritative state unreadable: " + e.getMessage(), (int) session.auditSize());
+        }
         final JsonObject decision = new JsonObject();
         decision.addProperty("executed", outcome.executionOk);
         decision.addProperty("pre_state_hash", outcome.preStateHash);

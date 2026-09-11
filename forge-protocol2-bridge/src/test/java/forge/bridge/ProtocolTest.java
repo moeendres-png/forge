@@ -3,6 +3,7 @@ package forge.bridge;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.testng.Assert;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 /**
@@ -10,6 +11,16 @@ import org.testng.annotations.Test;
  * No engine initialization required; the handshake surface is stateless.
  */
 public class ProtocolTest {
+
+    @BeforeClass
+    public void ensureIdentity() {
+        // Gameplay handlers (including start_engine) require a bound engine identity.
+        // Bind a shape-valid test value only when the operator bound nothing.
+        if (System.getProperty("forge.engine.sha") == null
+                && System.getenv("FORGE_ENGINE_SHA") == null) {
+            System.setProperty("forge.engine.sha", "0000000000000000000000000000000000000000");
+        }
+    }
 
     private static JsonObject dispatch(String json) {
         final BridgeEngine engine = new BridgeEngine();
@@ -70,6 +81,70 @@ public class ProtocolTest {
     }
 
     @Test
+    public void testMissingProtocolVersionRejected() {
+        final JsonObject response = dispatch(
+                "{\"request_id\":\"r3b\",\"message_type\":\"start_engine\"}");
+        Assert.assertFalse(response.get("success").getAsBoolean());
+        Assert.assertEquals(response.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                .get("code").getAsString(), BridgeErrors.PROTOCOL_VERSION_MISMATCH);
+    }
+
+    @Test(expectedExceptions = BridgeProtocol.MalformedRequestException.class)
+    public void testMissingRequestIdRejected() throws Exception {
+        BridgeProtocol.parse("{\"protocol_version\":\"2.0.0\",\"message_type\":\"start_engine\"}");
+    }
+
+    @Test(expectedExceptions = BridgeProtocol.MalformedRequestException.class)
+    public void testEmptyRequestIdRejected() throws Exception {
+        BridgeProtocol.parse(
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"\",\"message_type\":\"start_engine\"}");
+    }
+
+    @Test
+    public void testMatchingAliasesSucceed() throws Exception {
+        final BridgeProtocol.Request request = BridgeProtocol.parse(
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"r5\","
+                        + "\"message_type\":\"get_capabilities\",\"method\":\"get_capabilities\","
+                        + "\"payload\":{\"a\":1},\"params\":{\"a\":1}}");
+        Assert.assertEquals(request.messageType, "get_capabilities");
+        Assert.assertEquals(request.payload.get("a").getAsInt(), 1);
+    }
+
+    @Test(expectedExceptions = BridgeProtocol.MalformedRequestException.class)
+    public void testContradictoryMethodRejected() throws Exception {
+        BridgeProtocol.parse(
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"r6\","
+                        + "\"message_type\":\"get_capabilities\",\"method\":\"start_engine\"}");
+    }
+
+    @Test(expectedExceptions = BridgeProtocol.MalformedRequestException.class)
+    public void testContradictoryParamsRejected() throws Exception {
+        BridgeProtocol.parse(
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"r7\","
+                        + "\"message_type\":\"get_capabilities\","
+                        + "\"payload\":{\"a\":1},\"params\":{\"a\":2}}");
+    }
+
+    @Test
+    public void testIdentityMissingFailsClosed() {
+        final String saved = System.getProperty("forge.engine.sha");
+        System.setProperty("forge.engine.sha", "not-a-sha");
+        try {
+            final JsonObject response = dispatch("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"noid\",\"message_type\":\"start_engine\"}");
+            Assert.assertFalse(response.get("success").getAsBoolean());
+            Assert.assertEquals(response.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                    .get("code").getAsString(), BridgeErrors.ENGINE_IDENTITY_UNAVAILABLE);
+        } finally {
+            if (saved == null) {
+                System.clearProperty("forge.engine.sha");
+            } else {
+                System.setProperty("forge.engine.sha", saved);
+            }
+        }
+    }
+
+    @Test
     public void testUnknownMessageRejected() {
         final JsonObject response = dispatch(
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"r4\",\"message_type\":\"do_magic\"}");
@@ -103,15 +178,16 @@ public class ProtocolTest {
         Assert.assertEquals(payload.get("protocol_version").getAsString(), "2.0.0");
         Assert.assertEquals(payload.get("bridge_name").getAsString(), "forge-protocol2-bridge");
         Assert.assertFalse(payload.get("bridge_version").getAsString().isEmpty());
+        // Order-independent contract: the wire reports exactly what the resolver holds.
+        Assert.assertEquals(payload.get("engine_commit").getAsString(), VersionInfo.engineCommit());
+        Assert.assertEquals(
+                payload.get("engine_commit_source").getAsString(), VersionInfo.engineCommitSource());
         final String commit = payload.get("engine_commit").getAsString();
-        final String source = payload.get("engine_commit_source").getAsString();
-        final String env = System.getenv("FORGE_ENGINE_SHA");
-        if (env != null && env.matches("[0-9a-f]{40}")) {
-            Assert.assertEquals(commit, env);
-            Assert.assertEquals(source, "env:FORGE_ENGINE_SHA");
+        if ("unknown".equals(commit)) {
+            Assert.assertTrue(VersionInfo.engineCommitSource().endsWith("invalid")
+                    || "unavailable".equals(VersionInfo.engineCommitSource()));
         } else {
-            // Truthful unknown: never a hand-maintained conflicting pin.
-            Assert.assertEquals(commit, "unknown");
+            Assert.assertTrue(commit.matches("[0-9a-f]{40}"), "commit: " + commit);
         }
         Assert.assertEquals(response.get("request_id").getAsString(), "v1");
     }

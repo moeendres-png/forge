@@ -7,10 +7,14 @@ import java.util.Properties;
 /**
  * Truthful provider/engine/bridge identity (hard gate F3).
  *
- * <p>The engine commit is NEVER hand-maintained here. Resolution order:
- * {@code FORGE_ENGINE_SHA} environment variable, then the build-filtered
- * {@code bridge.properties} value (itself sourced from the same environment
- * variable at build time), then {@code "unknown"}.
+ * <p>The engine commit is NEVER hardcoded here and never hand-maintained. Resolution
+ * uses the first present operator-supplied, non-authoritative source:
+ * {@code forge.engine.sha} system property, then {@code FORGE_ENGINE_SHA} environment
+ * variable, then the build-filtered {@code bridge.properties} value (itself sourced
+ * from the same environment variable at build time). A present but malformed value
+ * fails closed instead of falling through; anything else (including absent values)
+ * resolves to {@code "unknown"} for reporting, while
+ * {@link #engineCommitIfValid()} returns null so the engine gates startup.
  */
 public final class VersionInfo {
     public static final String PROVIDER = "forge";
@@ -22,25 +26,43 @@ public final class VersionInfo {
     private VersionInfo() { }
 
     public static String engineCommit() {
-        final String env = System.getenv("FORGE_ENGINE_SHA");
-        if (env != null && env.matches("[0-9a-f]{40}")) {
-            return env;
+        final String valid = engineCommitIfValid();
+        return valid == null ? "unknown" : valid;
+    }
+
+    /**
+     * Returns the exact 40-hex engine SHA from operator-supplied sources, or null when
+     * no valid identity is available. Shape-validated only: this method never asserts
+     * which SHA is correct (that authority lives outside the bridge). A present but
+     * malformed value fails closed (null) rather than silently falling through to a
+     * weaker source.
+     */
+    public static String engineCommitIfValid() {
+        String value = System.getProperty("forge.engine.sha");
+        if (value == null) {
+            value = System.getenv("FORGE_ENGINE_SHA");
         }
-        final String built = buildProperty("engine.commit", "");
-        if (built != null && built.matches("[0-9a-f]{40}")) {
-            return built;
+        if (value == null) {
+            value = buildProperty("engine.commit", null);
         }
-        return "unknown";
+        return value != null && value.matches("[0-9a-f]{40}") ? value : null;
     }
 
     public static String engineCommitSource() {
-        final String env = System.getenv("FORGE_ENGINE_SHA");
-        if (env != null && env.matches("[0-9a-f]{40}")) {
-            return "env:FORGE_ENGINE_SHA";
+        String value = System.getProperty("forge.engine.sha");
+        if (value != null) {
+            return value.matches("[0-9a-f]{40}")
+                    ? "sysprop:forge.engine.sha" : "sysprop:forge.engine.sha:invalid";
         }
-        final String built = buildProperty("engine.commit", "");
-        if (built != null && built.matches("[0-9a-f]{40}")) {
-            return "build:bridge.properties";
+        value = System.getenv("FORGE_ENGINE_SHA");
+        if (value != null) {
+            return value.matches("[0-9a-f]{40}")
+                    ? "env:FORGE_ENGINE_SHA" : "env:FORGE_ENGINE_SHA:invalid";
+        }
+        value = buildProperty("engine.commit", null);
+        if (value != null) {
+            return value.matches("[0-9a-f]{40}")
+                    ? "build:bridge.properties" : "build:bridge.properties:invalid";
         }
         return "unavailable";
     }

@@ -32,7 +32,6 @@ import forge.game.keyword.KeywordInterface;
 import forge.game.mana.Mana;
 import forge.game.mana.ManaConversionMatrix;
 import forge.game.mana.ManaCostBeingPaid;
-import forge.game.mana.ManaPool;
 import forge.game.player.DelayedReveal;
 import forge.game.player.PlaySpellAbility;
 import forge.game.player.Player;
@@ -40,6 +39,7 @@ import forge.game.player.PlayerActionConfirmMode;
 import forge.game.player.PlayerController;
 import forge.game.player.PlayerView;
 import forge.game.replacement.ReplacementEffect;
+import forge.game.spellability.AbilityManaPart;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.OptionalCostValue;
 import forge.game.spellability.SpellAbility;
@@ -81,6 +81,13 @@ public final class ExternalPlayerController extends PlayerController {
     private final BridgeSession session;
     private SpellAbility lastReturnedAbility;
 
+    /**
+     * Systemic test seam (package-private, test-only): when set, native enumeration
+     * throws {@link BridgeNativeEnumerationException} for the matching zone. Never
+     * written by production code.
+     */
+    static volatile ZoneType enumerationFaultZoneForTests;
+
     public ExternalPlayerController(Game game, Player player, LobbyPlayer lobbyPlayer,
             BridgeSession session) {
         super(game, player, lobbyPlayer);
@@ -103,7 +110,21 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public List<SpellAbility> chooseSpellAbilityToPlay() {
-        final List<SpellAbility> candidates = enumerateCandidates();
+        final List<SpellAbility> candidates;
+        try {
+            candidates = enumerateCandidates();
+        } catch (BridgeNativeEnumerationException e) {
+            // Atomicity: never present a partial set as SUPPORTED. Zero options, explicit
+            // blocker; the session stays alive for diagnosis and clean shutdown. The park
+            // below can only exit via session abort (no option exists to submit), whose
+            // exception propagates; anything else is unreachable.
+            session.audit("enumeration_failed",
+                    BridgeSession.detail("reason", "NATIVE_ENUMERATION_FAILED zone=" + e.getZone()));
+            session.parkFrame(DecisionFrame.Kind.PRIORITY, player,
+                    DecisionFrame.Status.UNSUPPORTED, "NATIVE_ENUMERATION_FAILED",
+                    new ArrayList<DecisionFrame.Option>());
+            throw new AssertionError("unreachable: option-less frame cannot be answered");
+        }
         final Map<String, Integer> complex = new LinkedHashMap<>();
         final List<DecisionFrame.Option> options = new ArrayList<>();
         options.add(DecisionFrame.passOption());
@@ -167,7 +188,8 @@ public final class ExternalPlayerController extends PlayerController {
     /**
      * Structural representability classifier. Returns null when the candidate can be
      * offered; otherwise a stable reason code. Only engine-observable structure is
-     * inspected — never card names, never game outcomes.
+     * inspected — never card names, never game outcomes. Any uncertainty resolves to
+     * a blocker, never to an offer.
      */
     static String classifyComplex(SpellAbility sa) {
         if (sa.usesTargeting()) {
@@ -185,6 +207,10 @@ public final class ExternalPlayerController extends PlayerController {
         if (!GameActionUtil.getOptionalCostValues(sa).isEmpty()) {
             return "OPTIONAL_COST";
         }
+        final String manaBlocker = classifyMana(sa);
+        if (manaBlocker != null) {
+            return manaBlocker;
+        }
         final Cost cost = sa.getPayCosts();
         if (cost != null) {
             for (CostPart part : cost.getCostParts()) {
@@ -201,6 +227,66 @@ public final class ExternalPlayerController extends PlayerController {
                     continue;
                 }
                 return "COMPLEX_COST:" + part.getClass().getSimpleName();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * R6 mana boundary. A candidate that can require a nonzero mana payment makes the
+     * decision unrepresentable (the engine's weighted auto-payment would otherwise
+     * choose strategically without an external decision). Only provably-zero mana
+     * costs pass. A mana ability with a color/output choice is likewise blocked; only
+     * fixed-output mana abilities pass, as proven by native AbilityManaPart structure.
+     */
+    private static String classifyMana(SpellAbility sa) {
+        final Cost cost = sa.getPayCosts();
+        if (cost != null) {
+            for (CostPart part : cost.getCostParts()) {
+                if (part instanceof CostPartMana) {
+                    // Provably-zero means the engine's ZERO cost or its "no cost" sentinel
+                    // (lands): both require literally no mana payment decision. Anything else
+                    // would invoke weighted auto-payment, so it blocks the whole frame.
+                    final boolean zero;
+                    try {
+                        final forge.card.mana.ManaCost derived =
+                                ((CostPartMana) part).getManaCostFor(sa);
+                        zero = derived.isZero() || derived.isNoCost();
+                    } catch (Throwable t) {
+                        return "MANA_PAYMENT_CHOICE";
+                    }
+                    if (!zero) {
+                        return "MANA_PAYMENT_CHOICE";
+                    }
+                }
+            }
+        }
+        if (sa.isManaAbility()) {
+            SpellAbility tail = sa;
+            while (tail != null) {
+                final AbilityManaPart manaPart;
+                try {
+                    manaPart = tail.getManaPart();
+                } catch (Throwable t) {
+                    return "MANA_OUTPUT_CHOICE";
+                }
+                if (manaPart != null) {
+                    if (manaPart.isAnyMana() || manaPart.isComboMana() || manaPart.isSpecialMana()) {
+                        return "MANA_OUTPUT_CHOICE";
+                    }
+                    try {
+                        if (manaPart.getOrigProduced().contains("Chosen")) {
+                            return "MANA_OUTPUT_CHOICE";
+                        }
+                    } catch (Throwable t) {
+                        return "MANA_OUTPUT_CHOICE";
+                    }
+                }
+                try {
+                    tail = tail.getSubAbility();
+                } catch (Throwable t) {
+                    return "MANA_OUTPUT_CHOICE";
+                }
             }
         }
         return null;
@@ -229,17 +315,20 @@ public final class ExternalPlayerController extends PlayerController {
         final ZoneType[] zones = new ZoneType[] { ZoneType.Hand, ZoneType.Battlefield,
                 ZoneType.Command, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Library };
         for (ZoneType zone : zones) {
+            if (zone == enumerationFaultZoneForTests) {
+                throw new BridgeNativeEnumerationException(zone, "injected test fault", null);
+            }
             final List<Card> cards;
             try {
                 cards = new ArrayList<>(player.getCardsIn(zone));
             } catch (Throwable t) {
-                continue;
+                throw new BridgeNativeEnumerationException(zone, "zone read failed", t);
             }
             for (Card card : cards) {
                 try {
                     result.addAll(card.getAllPossibleAbilities(player, true));
                 } catch (Throwable t) {
-                    // One unreadable card must not void the whole decision.
+                    throw new BridgeNativeEnumerationException(zone, "card enumeration failed", t);
                 }
             }
         }
@@ -264,20 +353,39 @@ public final class ExternalPlayerController extends PlayerController {
                 "London-tuck card selection is not externally represented");
     }
 
-    // ---- starting player: honors the caller's creation-time seat, audited ----
+    // ---- starting player: real external frame for Forge's chosen chooser ----
 
     @Override
     public Player chooseStartingPlayer(boolean isFirstGame) {
-        final Player choice = session.startingPlayerChoice();
-        if (choice == null) {
-            throw unsupported("chooseStartingPlayer", "no preset starting seat available");
+        // Forge (dice/rules) selected this controller to choose. Offer every player Forge
+        // permits — the same complete set the human UI offers (turn order) — with the
+        // native Player binding retained bridge-side. No default, no seat, no randomness.
+        final List<Player> order;
+        try {
+            order = new ArrayList<>(getGame().getPlayersInTurnOrder());
+        } catch (Throwable t) {
+            throw unsupported("chooseStartingPlayer", "turn order unreadable");
+        }
+        if (order.isEmpty()) {
+            throw unsupported("chooseStartingPlayer", "no players offered by engine");
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(order.size());
+        for (Player candidate : order) {
+            final String candidateId = session.playerIdOf(candidate);
+            options.add(DecisionFrame.startingPlayerOption(candidateId,
+                    "Choose starting player: " + candidateId, candidate));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(DecisionFrame.Kind.STARTING_PLAYER,
+                player, DecisionFrame.Status.SUPPORTED, "", options);
+        final Player chosen = answer.selected.nativePlayer;
+        if (chosen == null) {
+            throw new IllegalStateException("starting-player option without a native binding");
         }
         final Map<String, String> details = new LinkedHashMap<>();
         details.put("chooser", actorId());
-        details.put("choice", session.playerIdOf(choice));
-        details.put("preset_seat", Integer.toString(session.getStartingSeat()));
+        details.put("choice", session.playerIdOf(chosen));
         session.audit("starting_player_chosen", details);
-        return choice;
+        return chosen;
     }
 
     @Override
@@ -290,25 +398,22 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa,
             String prompt, ManaConversionMatrix matrix, boolean effect) {
-        final ManaCostBeingPaid beingPaid = new ManaCostBeingPaid(toPay);
-        return payFromPoolOnly(beingPaid, sa);
+        // R6: zero-mana only. A nonzero payment would invoke the engine's weighted
+        // auto-payment heuristic without an external decision, so decline it and let the
+        // engine roll the play back. ZERO and the engine's "no cost" sentinel (lands)
+        // deduct nothing; the heuristic is unreachable.
+        if (toPay == null || !(toPay.isZero() || toPay.isNoCost())) {
+            return false;
+        }
+        return true;
     }
 
     @Override
     public boolean applyManaToCost(ManaCostBeingPaid toPay, SpellAbility ability, String prompt,
             ManaConversionMatrix matrix, boolean effect) {
-        return payFromPoolOnly(toPay, ability);
-    }
-
-    private boolean payFromPoolOnly(ManaCostBeingPaid toPay, SpellAbility ability) {
-        final Player payer = ability.getActivatingPlayer() != null ? ability.getActivatingPlayer() : player;
-        final ManaPool pool = payer.getManaPool();
-        final List<Mana> probe = new ArrayList<>();
-        if (!pool.payManaCostFromPool(toPay, ability, true, probe)) {
-            return false;
-        }
-        final List<Mana> spent = new ArrayList<>();
-        return pool.payManaCostFromPool(toPay, ability, false, spent);
+        // R6: only an already-paid (vacuous) balance passes. Anything outstanding would
+        // require a discretionary payment choice, so fail closed with no deduction.
+        return toPay != null && toPay.isPaid();
     }
 
     @Override

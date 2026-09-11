@@ -82,18 +82,31 @@ public final class BridgeProtocol {
         }
         final JsonObject obj = element.getAsJsonObject();
         final String requestId = optString(obj, "request_id", "");
+        if (requestId == null || requestId.isEmpty()) {
+            throw new MalformedRequestException("request_id is required and must be non-empty");
+        }
         final String protocolVersion = optString(obj, "protocol_version", null);
+        final boolean hasType = obj.has("message_type") && !obj.get("message_type").isJsonNull();
+        final boolean hasMethod = obj.has("method") && !obj.get("method").isJsonNull();
         String messageType = optString(obj, "message_type", null);
         if (messageType == null) {
             messageType = optString(obj, "method", null);
         }
+        if (hasType && hasMethod && !obj.get("message_type").equals(obj.get("method"))) {
+            throw new MalformedRequestException("message_type and method disagree");
+        }
         final String gameId = optString(obj, "game_id", null);
+        final boolean hasPayload = obj.has("payload") && !obj.get("payload").isJsonNull();
+        final boolean hasParams = obj.has("params") && !obj.get("params").isJsonNull();
         JsonObject payload = optObject(obj, "payload");
         if (payload == null) {
             payload = optObject(obj, "params");
         }
         if (payload == null) {
             payload = new JsonObject();
+        }
+        if (hasPayload && hasParams && !obj.get("payload").equals(obj.get("params"))) {
+            throw new MalformedRequestException("payload and params disagree");
         }
         return new Request(requestId, protocolVersion, messageType, gameId, payload);
     }
