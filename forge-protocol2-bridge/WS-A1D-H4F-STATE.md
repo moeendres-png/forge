@@ -1,14 +1,16 @@
 # WS-A1D-H4F — Forge Protocol-2 Bridge Workstream State
 
  Ownership: Forge-side bridge implementation only. Lab is read-only. No manifest edits.
- No push authorized. Local commits only.
+ Historical publication through the Foundry safe-push path already occurred for the
+ heads recorded below; no NEW push is authorized in the current remediation step
+ (Coordinator adjudication required before any publication).
 
  ## Source lock
  - Forge repo worktree: /home/moeen/code/ws-a1d-h4f-forge-protocol2-bridge
  - Branch: architecture/ws-a1d-h4f-forge-protocol2-bridge-20260911
  - (Remediation 02 heads recorded under "Validated substantive head" below.)
 
- ## CURRENT TRUTH (Remediation 02 — authoritative; earlier sections are historical)
+ ## CURRENT TRUTH (Remediation 03 — authoritative; earlier sections are historical)
 
  - Action sources: engine-owned `Player.getAllCards()` (every Forge-tracked zone of
    the acting player, incl. Sideboard/Ante/Merged/variants/tokens) UNION
@@ -31,15 +33,23 @@
    Phase-2 preset-seat paragraph below.)
  - Observation: principal-scoped game state AND legal actions AND bridge/next-decision
    metadata (actor-only revision/pending/state-hash; others get null/-1/withheld).
-   Required reads throw BridgeProjectionException -> PROJECTION_FAILED; mana pool,
-   commander damage and commander casts are required reads (no {} on failure).
-   Visibility is the native pair canBeShownTo + canFaceDownBeShownTo with a
-   true-name path (alternate/paper state) for authorized face-down views.
+   Raw fail_reason is never externalized; last_execution_error is exposed only to
+   its bound actor/frame (SESSION_FAILED is generic "session failed"). Required reads
+   throw BridgeProjectionException -> PROJECTION_FAILED; mana pool, commander damage
+   and commander casts are required reads (no {} on failure). Visibility is the
+   native pair canBeShownTo + canFaceDownBeShownTo with a true-name path
+   (alternate/paper state) for authorized face-down views — including face-down
+   spells on the Stack (both gates required; else `<face-down spell>`).
+ - Commander casts: native `Player.getCommanders()` identity resolved through
+   `Game.getCardState`, counted via `Player.getCommanderCast` (correct while the
+   Commander spell is on the Stack; no zone-name scan, no bridge tax rules).
  - Principals: immutable registry (native Player -> pN) bound at attach() from
    Forge's registered roster; no display-name fallback; projection iterates the
    registry so lost players keep id/seat with has_lost.
  - Capabilities: legal_actions_supported=false, action_submission_supported=false
-   (unchanged); notes describe the zero-mana bounded subset only.
+   (unchanged); event_log_supported=false (R14: external export disabled for
+   principal privacy; internal audit retained, never serialized externally); notes
+   describe the zero-mana bounded subset only.
  - Known conservative gaps (REMAINING BLOCKER, safe direction): opponent look-grants
    (mayPlayerLook) and revealed cards are still redacted in zone projection
    (under-disclosure, never over-disclosure); London tuck, combat, triggers, modes,
@@ -233,9 +243,32 @@
    paragraphs retained as labelled history (see SUPERSEDED markers above).
  - R1-R7 regressions all retained green (see validation section).
 
- ## Validated substantive head
- - Remediation 02 substantive: a4509c368d39734d30184aba182060f54ab308bf
+ ## Remote review 03 — R13/R14/R15 disposition (DIRECTLY_VERIFIED unless noted)
+
+ - R13 face-down Stack: stackText requires BOTH native gates (Stack is zone-visible
+   to all; the face gate restricts identity to controller/may-look). Engine-object
+   fixture with the card's real morph-down ability (isCastFaceDown, name-free stack
+   description): opponent/public see only `<face-down spell>`; controller and
+   may-look grantee see the Forge-authorized representation. (Incidental finding
+   recorded: MagicStack.add turns non-face-down-cast spells face-up per CR rules —
+   the fixture therefore uses the native face-down-cast ability.)
+ - R14 event log: external export removed; canonical + alias fail closed with
+   EVENT_LOG_UNSUPPORTED; capability false with honest notes; internal audit
+   retained and asserted non-empty; responses proven free of option IDs/labels.
+ - R14B diagnostics: fail_reason never externalized (status is the public signal);
+   last_execution_error bound to actor+revision and exposed only there;
+   SESSION_FAILED message is generic "session failed". Sentinel: tuck-failure
+   detail retained internally, absent from all external surfaces.
+ - R15 commander casts: native Player.getCommanders() + Game.getCardState +
+   Player.getCommanderCast (no zone-name scan, no tax rules). Real Rograkh game:
+   offered from command zone, submitted, count==1 while on Stack, stable at 1
+   after resolution to battlefield.
+ - R12: placeholder removed; governance wording corrected (published vs new push);
+   this CURRENT TRUTH section authoritative; history preserved with SUPERSEDED marks.
+
+  ## Validated substantive head
+ - Remediation 03 substantive: fe7c2dba7aff19a507a907e814e1a3d1c02d1980
    (this file updated separately)
- - Remediation 02 substantive: <SUBSTANTIVE_SHA> (this file updated separately)
+ - Remediation 02 substantive: a4509c368d39734d30184aba182060f54ab308bf
  - Remediation 01 substantive: 98e538ed336ddd254a4e6055280b4c814bf647ec
  - Prior: 6e91c3403a9 (tests), 48d6e50fd33 (published + state)
