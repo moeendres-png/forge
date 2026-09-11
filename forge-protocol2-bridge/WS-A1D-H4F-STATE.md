@@ -85,15 +85,98 @@
  - [x] BridgeEngine dispatch (20 messages + 4 compat aliases) / sessions / projection / audit
  - [x] Fixture decks (45 scripts manually verified; simple-only + Swords negative)
  - [x] Tests: 12 protocol unit + 8 engine + 1 separate-process = 21 green, full reactor green
- - [x] Evidence + handoff (this file + Coordinator report)
+ - [x] Published 48d6e50fd339 (REMOTE_REVIEW_01 then returned FAIL_REMEDIATION_REQUIRED)
+ - [x] Remediation 01 (R1-R7, commit 98e538ed33): see below; 38/38 green, reactor green
+
+ ## Remote review 01 — FAIL_REMEDIATION_REQUIRED (remediated, publication-gated)
+
+ Coordinator found publication valid and architecture viable; PR blocked on R1-R7.
+ H4B Forge remains PARTIAL. No H4B PASS written. Previous 21/21 kept as historical
+ evidence only for unaffected surfaces; changed surfaces re-qualified below.
+
+ - R1 enumeration atomicity: any zone/card native-enumeration failure now throws
+   BridgeNativeEnumerationException and parks an UNSUPPORTED frame with reason
+   NATIVE_ENUMERATION_FAILED and zero options (no catch-and-continue, no partial set).
+   Seam: package-private static fault flag, production-unreachable.
+ - R2 mandatory binding: session submit rejects null/empty actor, option, action type
+   and null revision (MALFORMED_REQUEST) before all other checks; submit_action,
+   pass_priority and resolve_mulligan require explicit actor/revision (and keep);
+   the `keep=true` default is removed.
+ - R3 principal scoping: gameState includes legal_actions only for the frame actor;
+   get_legal_actions requires actor_id and rejects non-actors with WRONG_ACTOR;
+   shownName obeys canBeShownTo AND canFaceDownBeShownTo literally, with a true-name
+   path (native alternate state, then paper identity) for authorized face-down views.
+ - R4 no fabricated defaults: required reads go through require() and throw
+   BridgeProjectionException (pre-first-turn null phase keeps a documented structural
+   "beginning" mapping; optional dicts with Lab defaults stay all-or-nothing {});
+   get_game_state and submit responses convert failure to PROJECTION_FAILED.
+ - R5 starting authority: create rejects starting_player_seat
+   (STARTING_PLAYER_SEAT_UNSUPPORTED) and starting_life (STARTING_LIFE_UNSUPPORTED,
+   even 40); RegisteredPlayer.forCommander establishes canonical 40 life (read back
+   from state, T9); chooseStartingPlayer parks a STARTING_PLAYER frame for Forge's
+   dice/rules-selected chooser with the complete turn-order player set, opaque IDs,
+   retained native Player bindings, actor+revision submission, no default.
+ - R6 zero-mana-only execution: nonzero CostPartMana (via getManaCostFor().isZero(),
+   with the engine "no cost" sentinel accepted) forces MANA_PAYMENT_CHOICE for the
+   whole frame; choice mana outputs (Any/Combo/Special/Chosen via native
+   AbilityManaPart structure) force MANA_OUTPUT_CHOICE; fixed-output taps remain
+   (Plains tap proven: pool W==1, no controller choice); payManaCost declines
+   nonzero and vacuously accepts ZERO/no-cost; applyManaToCost passes only paid
+   balances. No bridge call path to payManaCostFromPool/CostPayment.getMana remains.
+ - R7 fail-closed protocol/identity: protocol_version required and 2.0.0, request_id
+   non-empty, contradictory canonical/compat aliases rejected at parse;
+   start_engine and all gameplay handlers require a valid 40-hex identity
+   (sysprop forge.engine.sha, then FORGE_ENGINE_SHA env, then build property;
+   present-but-malformed fails closed) with ENGINE_IDENTITY_UNAVAILABLE otherwise.
+   Only get_provider_version/get_capabilities (observability) and shutdown_engine
+   stay ungated. No SHA is hardcoded in Java.
+ - Capabilities unchanged-false: legal_actions_supported and
+   action_submission_supported remain false; notes now say zero-mana-only.
+
+ ## Source-derived conclusions (CODE_DERIVED until runtime-exercised)
+
+ - PhaseHandler.isSkippingPhase skips DRAW only on turn 1 with exactly 2 players:
+   4-player games (incl. all fixtures) always draw turn 1.
+ - ManaEffect.resolve calls specifyManaCombo/chooseColor only for combo/any/special
+   mana; fixed output resolves with no controller choice (notifyOfValue only).
+ - CostPayment.getMana returns the single best-weighted pool option automatically and
+   only calls chooseManaFromPool on ties (the removed R6 defect).
+ - AbilityManaPart.isAnyMana/isComboMana/isSpecialMana + "Chosen" output exactly mark
+   choice-bearing mana (verified against ManaEffect branches).
+ - CardView.canBeShownTo is the zone gate (battlefield visible to all) while
+   canFaceDownBeShownTo is the face gate (controller/may-look/mindslave, else only
+   Battlefield/Stack/Sideboard-to-controller); the GUI combines both
+   (AbstractGuiGame alternate-state rule). Engine Card.getName() is blank while
+   face-down; the true name lives in the alternate state/paper identity.
+ - ManaCost ZERO/isZero()/isNoCost(): `{0}` isZero()==true; land "no cost" sentinel
+   isNoCost()==true (both payment-free); nonzero costs are neither.
+ - GameAction.startGame order: determineFirstTurnPlayer (dice + chooser) runs before
+   MulliganService, so STARTING_PLAYER always precedes mulligan frames.
+
+ ## Remediation validation (DIRECTLY_VERIFIED, this workstream)
+
+ - `mvn -pl forge-protocol2-bridge -am test`: BUILD SUCCESS.
+ - ProtocolTest 19/19 (T1 envelope incl. alias conflicts; T2 identity incl. missing
+   identity fail-closed and build-property fallback via shadow resource).
+ - BridgeEngineTest 17/17 (T3 enumeration fault; T4 Memnite retained; T5 Grizzly
+   MANA_PAYMENT_CHOICE + Plains tap; T6 actor/revision negatives per kind incl.
+   STARTING_PLAYER; T7 no-defaults incl. missing keep; T8 external p3 choice then
+   Forge starts with p3; T9 seat/life rejection + life==40 read; T10 adversary incl.
+   option-ID/label absence + null observer; T11 face-down/may-look gates; T12
+   forced projection failure; T13 callback throws).
+ - BridgeProtocolProcessTest 2/2 (T14 full pipe with starting choice, keeps,
+   revision-bound pass, negatives, principal scoping, shutdown; DISPLAY unset,
+   headless, exact FORGE_ENGINE_SHA=a37a865a...).
+ - Total: 38/38 bridge + forge-game 3/3. Changed-surface evidence re-qualified;
+   unaffected surfaces (import validation, lifecycle shape, targeting fail-closed,
+   rollback execution) preserved and still green.
+ - Remaining unsupported (unchanged): targets, modes, X, combat, trigger ordering,
+   tuck, concede, replay, RNG control, general mulligan, scenario injection,
+   partners, non-4P pods, nonzero-mana execution, choice mana outputs.
+ - H4B_FORGE_RECOMMENDATION = PARTIAL. RULES_BEHAVIOR_CREDIT_CHANGE = 0.
+   PRODUCTION_PROVIDER = NOT SELECTED. ARCHITECTURE_FREEZE = NOT CLAIMED.
 
  ## Validated substantive head
- - 969f2d59da1 (decision boundary) + tests commit; see `git log` for hashes.
- - Full reactor `mvn -pl forge-protocol2-bridge -am test`: BUILD SUCCESS
-   (forge-game 3/3, bridge 21/21), no Xvfb, child proven with DISPLAY unset +
-   -Djava.awt.headless=true.
-
- ## Exact next action
- - Coordinator remote review; if warranted, authorization for publication and
-   Lab-side H4B runtime integration (Lab adapter needs bounded-subset handling since
-   global legal_actions_supported/action_submission_supported stay false).
+ - Remediation substantive: 98e538ed336ddd254a4e6055280b4c814bf647ec
+   (this file updated separately; see HEAD for the state-only checkpoint)
+ - Prior: 6e91c3403a9 (tests), 48d6e50fd33 (published + state)
