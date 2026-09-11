@@ -101,7 +101,6 @@ public final class BridgeSession {
 
     private final String gameId;
     private final Map<String, String> deckHandleToDeckId;
-    private final List<List<String>> seatCommanderNames = new ArrayList<>();
     /**
      * R11 immutable principal registry: native Player -&gt; seat, bound once from
      * Forge's registered roster (all participants regardless of outcome) after real
@@ -128,6 +127,13 @@ public final class BridgeSession {
 
     private final List<AuditEvent> audit = new ArrayList<>();
     private volatile String lastExecutionError = "";
+    /**
+     * R14B binding: which parked frame's execution produced the current error text.
+     * An execution error is only ever exposed in that same frame's context to its
+     * actor; anywhere else (including other actors' polls) it stays internal.
+     */
+    private volatile long errorFrameRevision = -1;
+    private volatile String errorFrameActor;
 
     public BridgeSession(String gameId, Map<String, String> deckHandleToDeckId) {
         this.gameId = gameId;
@@ -151,18 +157,6 @@ public final class BridgeSession {
         }
     }
 
-    public synchronized void setSeatCommanderNames(List<List<String>> names) {
-        seatCommanderNames.clear();
-        seatCommanderNames.addAll(names);
-    }
-
-    public synchronized List<String> commanderNames(int seat) {
-        if (seat < 0 || seat >= seatCommanderNames.size()) {
-            return Collections.emptyList();
-        }
-        return new ArrayList<>(seatCommanderNames.get(seat));
-    }
-
     public Game getGame() {
         return game;
     }
@@ -179,8 +173,37 @@ public final class BridgeSession {
         return lastExecutionError;
     }
 
+    /**
+     * Records an execution diagnostic, bound to the currently parked frame (the only
+     * execution that can be in flight). Called from the game thread during real
+     * pipeline execution; never carries anything the current frame didn't produce.
+     */
     public void setLastExecutionError(String message) {
         this.lastExecutionError = message == null ? "" : message;
+        final DecisionFrame frame = currentFrame;
+        if (frame == null) {
+            this.errorFrameRevision = -1;
+            this.errorFrameActor = null;
+        } else {
+            this.errorFrameRevision = frame.revision;
+            this.errorFrameActor = frame.actorPlayerId;
+        }
+    }
+
+    /** Clears execution diagnostics for a fresh decision. Called on submit. */
+    private void clearExecutionError() {
+        this.lastExecutionError = "";
+        this.errorFrameRevision = -1;
+        this.errorFrameActor = null;
+    }
+
+    /**
+     * Whether the recorded execution diagnostic belongs to the given actor's frame.
+     * Only then may protocol output carry it.
+     */
+    public boolean isExecutionErrorBoundTo(String actorId, long revision) {
+        return !lastExecutionError.isEmpty() && actorId != null
+                && actorId.equals(errorFrameActor) && revision == errorFrameRevision;
     }
 
     // ---- player identity (immutable registry) ----
@@ -408,8 +431,10 @@ public final class BridgeSession {
                 return SubmitOutcome.rejected(BridgeErrors.SESSION_CLOSED, "session is closed", currentHash());
             }
             if (status == Status.FAILED) {
+                // R14B: generic external signal only; the detailed reason stays in the
+                // internal audit, stderr and test-visible session state.
                 return SubmitOutcome.rejected(BridgeErrors.SESSION_FAILED,
-                        "session failed: " + failReason, currentHash());
+                        "session failed", currentHash());
             }
             if (status == Status.OVER || (game != null && game.isGameOver())) {
                 return SubmitOutcome.rejected(BridgeErrors.GAME_OVER, "game is over", currentHash());
@@ -447,25 +472,27 @@ public final class BridgeSession {
             }
             preHash = StateHash.ofGame(game, this);
             audit("decision_submitted", submitDetails(frame, option, actorId));
+            clearExecutionError();
             handoff.offer(FrameAnswer.select(option));
         }
-        return waitForSettle(frame.revision, preHash);
+        return waitForSettle(frame.revision, preHash, actorId);
     }
 
-    private SubmitOutcome waitForSettle(long answeredRevision, String preHash) {
+    private SubmitOutcome waitForSettle(long answeredRevision, String preHash, String actorId) {
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
         while (System.nanoTime() < deadline) {
             final DecisionFrame frame = currentFrame;
             if (frame != null && frame.revision != answeredRevision) {
                 final String postHash = StateHash.ofGame(game, this);
-                final boolean executionOk = lastExecutionError.isEmpty();
+                final boolean executionOk = !isExecutionErrorBoundTo(actorId, answeredRevision);
                 audit("decision_settled", settleDetails(answeredRevision, frame.revision, preHash, postHash));
                 return SubmitOutcome.applied(preHash, postHash, executionOk);
             }
             if (isTerminal() || (game != null && game.isGameOver())) {
                 final String postHash = StateHash.ofGame(game, this);
                 audit("decision_terminal", settleDetails(answeredRevision, -1, preHash, postHash));
-                return SubmitOutcome.applied(preHash, postHash, lastExecutionError.isEmpty());
+                return SubmitOutcome.applied(preHash, postHash,
+                        !isExecutionErrorBoundTo(actorId, answeredRevision));
             }
             final Status s = status;
             if (s == Status.FAILED) {

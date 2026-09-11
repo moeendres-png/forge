@@ -2,7 +2,6 @@ package forge.bridge;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import forge.StaticData;
 import forge.card.CardDb;
@@ -10,7 +9,6 @@ import forge.deck.CardPool;
 import forge.deck.Deck;
 import forge.deck.DeckSection;
 import forge.game.Game;
-import forge.game.GameLogEntry;
 import forge.game.GameRules;
 import forge.game.GameType;
 import forge.game.Match;
@@ -136,7 +134,11 @@ public final class BridgeEngine {
                     return BridgeProtocol.unsupported(request.requestId, BridgeErrors.UNKNOWN_MESSAGE,
                             "concede is not supported by this bridge version", 0);
                 case BridgeProtocol.EXPORT_EVENT_LOG:
-                    return exportEventLog(request);
+                    return BridgeProtocol.unsupported(request.requestId,
+                            BridgeErrors.EVENT_LOG_UNSUPPORTED,
+                            "export_event_log is not supported: external event export is disabled "
+                                    + "for principal privacy; audit remains internal only",
+                            0);
                 case BridgeProtocol.EXPORT_REPLAY:
                     return BridgeProtocol.unsupported(request.requestId, BridgeErrors.UNKNOWN_MESSAGE,
                             "export_replay is not supported: deterministic replay is not claimed", 0);
@@ -152,7 +154,11 @@ public final class BridgeEngine {
                 case "shutdown":
                     return shutdownGame(request);
                 case "get_event_log":
-                    return exportEventLog(request);
+                    return BridgeProtocol.unsupported(request.requestId,
+                            BridgeErrors.EVENT_LOG_UNSUPPORTED,
+                            "get_event_log is not supported: external event export is disabled "
+                                    + "for principal privacy; audit remains internal only",
+                            0);
                 default:
                     return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_MESSAGE,
                             "unknown message type: " + type, 0);
@@ -205,7 +211,7 @@ public final class BridgeEngine {
         caps.addProperty("deck_import_supported", true);
         caps.addProperty("legal_actions_supported", false);
         caps.addProperty("action_submission_supported", false);
-        caps.addProperty("event_log_supported", true);
+        caps.addProperty("event_log_supported", false);
         caps.addProperty("replay_supported", false);
         caps.addProperty("stack_visible", true);
         caps.addProperty("priority_visible", true);
@@ -231,6 +237,8 @@ public final class BridgeEngine {
         notes.add("partner commanders import but pod-level partner lifecycle is not yet qualified");
         notes.add("mulligan keep/ship is externally decided per player; London-tuck selection aborts loudly");
         notes.add("seeds are rejected: engine RNG is global and same-seed determinism is not claimed");
+        notes.add("external event export is disabled for principal privacy; the bridge "
+                + "audit trail remains internal engineering evidence only");
         notes.add("replay is not offered: deterministic replay is not claimed");
         caps.add("notes", notes);
         final JsonObject payload = new JsonObject();
@@ -411,15 +419,12 @@ public final class BridgeEngine {
         }
         final BridgeSession session = new BridgeSession(gameId, handleToDeck);
         final List<RegisteredPlayer> players = new ArrayList<>(4);
-        final List<List<String>> seatCommanders = new ArrayList<>(4);
         for (int i = 0; i < 4; i++) {
             final ImportedDeck deck = pod.get(i);
             final RegisteredPlayer player = RegisteredPlayer.forCommander(deck.forgeDeck);
             player.setPlayer(new BridgeLobbyPlayer("forge-p" + (i + 1), session));
             players.add(player);
-            seatCommanders.add(new ArrayList<>(deck.commanderNames));
         }
-        session.setSeatCommanderNames(seatCommanders);
         final GameRules rules = new GameRules(GameType.Commander);
         rules.setAppliedVariants(EnumSet.of(GameType.Commander));
         final Match match = new Match(rules, players, "WS-A1D-H4F");
@@ -596,7 +601,6 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
                     e.getMessage(), (int) session.auditSize());
         }
-        session.setLastExecutionError("");
         final BridgeSession.SubmitOutcome outcome = session.submit(actorId, legalActionId, actionType, revision);
         return submitResponse(request, session, outcome, actorId);
     }
@@ -648,7 +652,6 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.UNSUPPORTED_DECISION,
                     "parked priority decision offers no pass option", (int) session.auditSize());
         }
-        session.setLastExecutionError("");
         final BridgeSession.SubmitOutcome outcome =
                 session.submit(actorId, pass.optionId, "pass_priority", revision);
         return submitResponse(request, session, outcome, actorId);
@@ -713,7 +716,6 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.UNSUPPORTED_DECISION,
                     "parked mulligan decision offers no matching option", (int) session.auditSize());
         }
-        session.setLastExecutionError("");
         final BridgeSession.SubmitOutcome outcome =
                 session.submit(playerId, chosen.optionId, "mulligan", revision);
         return submitResponse(request, session, outcome, playerId);
@@ -737,6 +739,9 @@ public final class BridgeEngine {
         decision.addProperty("executed", outcome.executionOk);
         decision.addProperty("pre_state_hash", outcome.preStateHash);
         decision.addProperty("post_state_hash", outcome.postStateHash);
+        // R14B: executionOk==false implies (by single-flight rendezvous plus revision
+        // binding in waitForSettle) a fresh diagnostic from this submitter's own
+        // execution, so carrying it here is actor-correct. Anything else stays internal.
         if (!outcome.executionOk && !session.getLastExecutionError().isEmpty()) {
             decision.addProperty("execution_note", session.getLastExecutionError());
         }
@@ -760,78 +765,12 @@ public final class BridgeEngine {
     }
 
     // ---- audit ----
-
-    private String exportEventLog(BridgeProtocol.Request request) {
-        final BridgeSession session = requireSession(request);
-        if (session == null) {
-            return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_GAME,
-                    "unknown game_id: " + request.gameId, 0);
-        }
-        final JsonArray events = new JsonArray();
-        final List<String> rawLines = new ArrayList<>();
-        int sequence = 0;
-        final Game game = session.getGame();
-        if (game != null) {
-            try {
-                final List<GameLogEntry> entries = game.getGameLog().getLogEntries(null);
-                final List<GameLogEntry> chronological = new ArrayList<>(entries);
-                Collections.reverse(chronological);
-                for (GameLogEntry entry : chronological) {
-                    final JsonObject event = new JsonObject();
-                    event.addProperty("event_id", session.getGameId() + ":engine:" + sequence);
-                    event.addProperty("game_id", session.getGameId());
-                    event.addProperty("sequence", sequence);
-                    event.addProperty("event_type", "forge_log:" + entry.type().name().toLowerCase());
-                    event.add("actor_id", JsonNull.INSTANCE);
-                    final JsonObject payload = new JsonObject();
-                    payload.addProperty("message", entry.message());
-                    payload.add("source_card", JsonNull.INSTANCE);
-                    event.add("payload", payload);
-                    event.add("pre_state_hash", JsonNull.INSTANCE);
-                    event.add("post_state_hash", JsonNull.INSTANCE);
-                    event.add("occurred_at", JsonNull.INSTANCE);
-                    events.add(event);
-                    rawLines.add(sequence + " forge_log:" + entry.type().name().toLowerCase()
-                            + " " + entry.message());
-                    sequence++;
-                }
-            } catch (Throwable t) {
-                // Engine log unreadable; bridge audit still exported.
-            }
-        }
-        for (BridgeSession.AuditEvent audit : session.auditSnapshot()) {
-            final JsonObject event = new JsonObject();
-            event.addProperty("event_id", session.getGameId() + ":bridge:" + sequence);
-            event.addProperty("game_id", session.getGameId());
-            event.addProperty("sequence", sequence);
-            event.addProperty("event_type", "bridge:" + audit.type);
-            event.add("actor_id", JsonNull.INSTANCE);
-            final JsonObject payload = new JsonObject();
-            for (Map.Entry<String, String> detail : audit.details.entrySet()) {
-                payload.addProperty(detail.getKey(), detail.getValue());
-            }
-            event.add("payload", payload);
-            event.add("pre_state_hash", JsonNull.INSTANCE);
-            event.add("post_state_hash", JsonNull.INSTANCE);
-            event.add("occurred_at", JsonNull.INSTANCE);
-            events.add(event);
-            rawLines.add(sequence + " bridge:" + audit.type + " " + payload);
-            sequence++;
-        }
-        final JsonArray rawArray = new JsonArray();
-        for (String line : rawLines) {
-            rawArray.add(line);
-        }
-        final JsonObject log = new JsonObject();
-        log.addProperty("backend", "forge");
-        log.addProperty("session_id", session.getGameId());
-        log.add("events", events);
-        log.add("raw_lines", rawArray);
-        log.addProperty("log_sha256", StateHash.sha256(String.join("\n", rawLines)));
-        final JsonObject payload = new JsonObject();
-        payload.add("log", log);
-        return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
-    }
+    //
+    // R14: the internal BridgeSession audit trail is retained for internal tests,
+    // engineering evidence and stderr/file diagnostics, but NOTHING from it is
+    // serialized to the external Protocol-2 interface. The former export builder
+    // was removed so no GameLog message, audit detail, option ID, label or hash
+    // can leave through export_event_log / get_event_log (both fail closed).
 
     // ---- shutdown ----
 

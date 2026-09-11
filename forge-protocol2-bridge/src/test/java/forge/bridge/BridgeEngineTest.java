@@ -161,15 +161,24 @@ public class BridgeEngineTest {
         Assert.assertNotEquals(next.revision, priority.revision);
         // Consumed option IDs die with their frame.
         final BridgeSession.SubmitOutcome replay = session.submit(priority.actorPlayerId,
-                first.optionId, null, null);
+                first.optionId, "pass_priority", priority.revision);
         Assert.assertFalse(replay.applied);
-        // Event/audit binding exists.
+        // R14: external event export fails closed; the internal audit trail remains.
         final JsonObject log = BridgeTestSupport.rpc(engine, "{\"protocol_version\":\"2.0.0\","
                 + "\"request_id\":\"log1\",\"message_type\":\"export_event_log\",\"game_id\":\"life-ok\"}");
-        BridgeTestSupport.assertOk(log);
-        final JsonObject logObj = log.get("payload").getAsJsonObject().getAsJsonObject("log");
-        Assert.assertTrue(logObj.get("events").getAsJsonArray().size() > 0);
-        Assert.assertTrue(logObj.get("log_sha256").getAsString().matches("[0-9a-f]{64}"));
+        Assert.assertFalse(log.get("success").getAsBoolean());
+        Assert.assertEquals(log.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                .get("code").getAsString(), BridgeErrors.EVENT_LOG_UNSUPPORTED);
+        Assert.assertFalse(log.toString().contains(first.optionId),
+                "option IDs must not leave through the event endpoint");
+        final JsonObject aliasLog = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"log2\","
+                        + "\"message_type\":\"get_event_log\",\"game_id\":\"life-ok\"}");
+        Assert.assertFalse(aliasLog.get("success").getAsBoolean());
+        Assert.assertEquals(aliasLog.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                .get("code").getAsString(), BridgeErrors.EVENT_LOG_UNSUPPORTED);
+        Assert.assertTrue(session.auditSnapshot().size() > 0,
+                "internal audit must be retained for qualification evidence");
         session.shutdown(5000);
         Assert.assertTrue(session.isTerminal());
         // Repeated lifecycle on the same engine: no cross-session corruption.
@@ -927,6 +936,234 @@ public class BridgeEngineTest {
         final JsonObject p4State = playerState(asP1, "p4");
         Assert.assertTrue(p4State.get("has_lost").getAsBoolean());
         session.shutdown(5000);
+    }
+
+    @Test(timeOut = 60000)
+    public void testFaceDownStackRedaction() {
+        // Bounded engine-object fixture (honestly classified): the card's REAL native
+        // face-down-cast Spell (isCastFaceDown, built by the engine's morph keyword
+        // handling with a name-free stack description), a real moveToStack zone
+        // transition and a real SpellAbilityStackInstance on the real stack. No natural
+        // face-down cast through the controller is attempted (out of scope).
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("stackface-ok");
+        final BridgeSession session = constructed.session;
+        final forge.game.player.Player p1 = constructed.game.getPlayers().get(0);
+        final forge.game.player.Player p2 = constructed.game.getPlayers().get(1);
+        final Card morph = BridgeTestSupport.addCard(constructed.game, 0, "Scornful Egotist",
+                ZoneType.Hand);
+        forge.game.spellability.SpellAbility faceDownCast = null;
+        for (forge.game.spellability.SpellAbility ability : morph.getSpellAbilities()) {
+            if (ability.isCastFaceDown()) {
+                faceDownCast = ability;
+            }
+        }
+        Assert.assertNotNull(faceDownCast, "native face-down-cast ability must exist");
+        faceDownCast.setActivatingPlayer(p1);
+        Assert.assertTrue(morph.turnFaceDown(true));
+        Assert.assertTrue(morph.isFaceDown());
+        constructed.game.getAction().moveToStack(morph, faceDownCast);
+        constructed.game.getStack().add(faceDownCast);
+        Assert.assertTrue(morph.isInZone(ZoneType.Stack));
+        Assert.assertTrue(morph.isFaceDown(), "face-down cast must stay face-down on stack");
+        Assert.assertEquals(constructed.game.getStack().size(), 1);
+        // Native facts: Stack is zone-visible to all; the face gate blocks the opponent.
+        Assert.assertTrue(morph.getView().canBeShownTo(p2.getView()));
+        Assert.assertFalse(morph.getView().canFaceDownBeShownTo(p2.getView()));
+        Assert.assertTrue(morph.getView().canFaceDownBeShownTo(p1.getView()));
+        final String privateDescription =
+                constructed.game.getStack().peekAbility().getStackDescription();
+        // Unauthorized opponent: redacted marker, no name, no private description.
+        final JsonObject asP2 = StateProjection.gameState(session, "p2");
+        final String flatP2 = asP2.toString();
+        Assert.assertTrue(flatP2.contains("<face-down spell>"), flatP2);
+        Assert.assertFalse(flatP2.contains("Scornful Egotist"), flatP2);
+        if (privateDescription != null && !privateDescription.isEmpty()) {
+            Assert.assertFalse(flatP2.contains(privateDescription), flatP2);
+        }
+        // Public/null observer equally redacted.
+        final JsonObject asPublic = StateProjection.gameState(session, null);
+        Assert.assertTrue(asPublic.toString().contains("<face-down spell>"));
+        Assert.assertFalse(asPublic.toString().contains("Scornful Egotist"));
+        // Authorized controller receives the Forge-authorized representation.
+        final JsonObject asP1 = StateProjection.gameState(session, "p1");
+        final String stackP1 = asP1.getAsJsonArray("stack").toString();
+        Assert.assertFalse(stackP1.contains("<face-down spell>"), stackP1);
+        // Explicit may-look grant is honored through the same gates.
+        morph.addMayLookTemp(p2);
+        final JsonObject asP2Look = StateProjection.gameState(session, "p2");
+        Assert.assertFalse(asP2Look.getAsJsonArray("stack").toString().contains("<face-down spell>"));
+        morph.removeMayLookTemp(p2);
+        constructed.session.shutdown(1000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testCommanderCastCountOnStack() {
+        // Real Commander lifecycle with a zero-mana commander: every mainboard card is
+        // zero-cost or land, so every main-phase frame stays SUPPORTED deterministically.
+        final BridgeEngine engine = new BridgeEngine();
+        BridgeTestSupport.startEngine(engine);
+        final List<String> handles = new java.util.ArrayList<>(4);
+        for (int i = 1; i <= 4; i++) {
+            handles.add(BridgeTestSupport.importDeck(engine, "rog-import-" + i,
+                    BridgeTestSupport.deckResource("deck-rograkh" + i + ".json")));
+        }
+        BridgeTestSupport.createGame(engine, "rog-create", "rog-ok", handles);
+        BridgeTestSupport.startGame(engine, "rog-ok");
+        final BridgeSession session = engine.sessionsForTests().get("rog-ok");
+        final DecisionFrame starting = BridgeTestSupport.awaitFrame(session, 60000);
+        Assert.assertNotNull(starting);
+        Assert.assertEquals(starting.kind, DecisionFrame.Kind.STARTING_PLAYER);
+        final BridgeSession.SubmitOutcome chose =
+                BridgeTestSupport.submitStartingPlayer(session, starting, "p1");
+        Assert.assertTrue(chose.applied, "starting choice failed: " + chose.errorCode);
+        final DecisionFrame main = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 30);
+        Assert.assertNotNull(main, "never reached p1 main phase");
+        Assert.assertEquals(main.status, DecisionFrame.Status.SUPPORTED);
+        // The bridge offers the real native Commander cast from the command zone.
+        DecisionFrame.Option cast = null;
+        for (DecisionFrame.Option option : main.options) {
+            if ("cast_spell".equals(option.actionType)
+                    && "Rograkh, Son of Rohgahh".equals(option.sourceCardName)) {
+                cast = option;
+            }
+        }
+        Assert.assertNotNull(cast, "Rograkh cast must be offered");
+        final BridgeSession.SubmitOutcome outcome =
+                session.submit("p1", cast.optionId, "cast_spell", main.revision);
+        Assert.assertTrue(outcome.applied, "cast failed: " + outcome.errorCode);
+        Assert.assertTrue(outcome.executionOk, "engine declined: " + session.getLastExecutionError());
+        Assert.assertEquals(session.getGame().getStack().size(), 1);
+        Assert.assertEquals(session.getGame().getStack().peekAbility().getHostCard().getName(),
+                "Rograkh, Son of Rohgahh");
+        // While the Commander spell is on the Stack, the native count is 1, not a
+        // zone-scan fallback of 0.
+        final JsonObject asP1 = StateProjection.gameState(session, "p1");
+        final JsonObject p1State = playerState(asP1, "p1");
+        Assert.assertEquals(p1State.getAsJsonObject("commander_cast_count")
+                .get("Rograkh, Son of Rohgahh").getAsInt(), 1);
+        // Resolve and prove identity/count stability across the zone transition.
+        boolean resolved = false;
+        long seenRevision = main.revision;
+        for (int i = 0; i < 16 && !resolved; i++) {
+            for (Card card : session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Battlefield)) {
+                if (card.getName().equals("Rograkh, Son of Rohgahh")) {
+                    resolved = true;
+                }
+            }
+            if (resolved) {
+                break;
+            }
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.revision == seenRevision) {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                continue;
+            }
+            seenRevision = parked.revision;
+            if (parked.status != DecisionFrame.Status.SUPPORTED) {
+                break;
+            }
+            final BridgeSession.SubmitOutcome pass = BridgeTestSupport.submitPass(session, parked);
+            Assert.assertTrue(pass.applied);
+        }
+        Assert.assertTrue(resolved, "Rograkh never reached the battlefield");
+        final JsonObject afterResolve = StateProjection.gameState(session, "p1");
+        Assert.assertEquals(playerState(afterResolve, "p1").getAsJsonObject("commander_cast_count")
+                .get("Rograkh, Son of Rohgahh").getAsInt(), 1);
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testFailureDiagnosticsScoped() {
+        // Ship a mulligan so London tuck fails the session with a distinctive reason.
+        final BridgeEngine engine = new BridgeEngine();
+        BridgeTestSupport.startEngine(engine);
+        final List<String> handles = BridgeTestSupport.importPod(engine);
+        BridgeTestSupport.createGame(engine, "c-diag", "diag-ok", handles);
+        BridgeTestSupport.startGame(engine, "diag-ok");
+        final BridgeSession session = engine.sessionsForTests().get("diag-ok");
+        final DecisionFrame starting = BridgeTestSupport.awaitFrame(session, 60000);
+        Assert.assertNotNull(starting);
+        BridgeTestSupport.submitStartingPlayer(session, starting, "p1");
+        final DecisionFrame mulligan = BridgeTestSupport.awaitFrame(session, 60000);
+        Assert.assertNotNull(mulligan);
+        Assert.assertEquals(mulligan.kind, DecisionFrame.Kind.MULLIGAN);
+        DecisionFrame.Option ship = null;
+        for (DecisionFrame.Option option : mulligan.options) {
+            if (!option.isKeep) {
+                ship = option;
+            }
+        }
+        Assert.assertNotNull(ship);
+        final BridgeSession.SubmitOutcome outcome = session.submit(mulligan.actorPlayerId,
+                ship.optionId, "mulligan", mulligan.revision);
+        Assert.assertTrue(outcome.applied);
+        session.awaitTerminal(30000);
+        Assert.assertEquals(session.getStatus(), BridgeSession.Status.FAILED);
+        // Internal state retains the diagnostic sentinel...
+        final String sentinel = "tuckCardsViaMulligan";
+        Assert.assertTrue(session.getFailReason().contains(sentinel), session.getFailReason());
+        boolean auditHasSentinel = false;
+        for (BridgeSession.AuditEvent event : session.auditSnapshot()) {
+            if (event.details.toString().contains(sentinel)) {
+                auditHasSentinel = true;
+            }
+        }
+        Assert.assertTrue(auditHasSentinel, "internal audit must retain the diagnostic");
+        // ...but no external protocol surface carries it.
+        final JsonObject asP2 = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"dg1\","
+                        + "\"message_type\":\"get_game_state\",\"game_id\":\"diag-ok\","
+                        + "\"payload\":{\"observer_player_id\":\"p2\"}}");
+        BridgeTestSupport.assertOk(asP2);
+        Assert.assertFalse(asP2.toString().contains(sentinel), asP2.toString());
+        Assert.assertFalse(asP2.get("payload").getAsJsonObject().getAsJsonObject("bridge")
+                .has("fail_reason"), "raw fail_reason must not be exposed");
+        final JsonObject asPublic = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"dg2\","
+                        + "\"message_type\":\"get_game_state\",\"game_id\":\"diag-ok\"}");
+        BridgeTestSupport.assertOk(asPublic);
+        Assert.assertFalse(asPublic.toString().contains(sentinel));
+        final JsonObject failed = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"dg3\","
+                        + "\"message_type\":\"submit_action\",\"game_id\":\"diag-ok\",\"payload\":{"
+                        + "\"revision\":1,\"proposal\":{\"proposal_id\":\"x\",\"actor_id\":\"p1\","
+                        + "\"legal_action_id\":\"opt-x\",\"action_type\":\"pass_priority\"}}}");
+        Assert.assertFalse(failed.get("success").getAsBoolean());
+        Assert.assertEquals(failed.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                .get("code").getAsString(), BridgeErrors.SESSION_FAILED);
+        Assert.assertEquals(failed.get("errors").getAsJsonArray().get(0).getAsJsonObject()
+                .get("message").getAsString(), "session failed");
+        Assert.assertFalse(failed.toString().contains(sentinel));
+        // Bound execution-error scoping: a sentinel set during a live parked frame is
+        // visible to that frame's actor only.
+        final BridgeTestSupport.ConstructedGame live =
+                BridgeTestSupport.buildConstructedGame("diag-live");
+        BridgeTestSupport.addCard(live.game, 0, "Plains", ZoneType.Hand);
+        for (int seat = 0; seat < 4; seat++) {
+            for (int i = 0; i < 5; i++) {
+                BridgeTestSupport.addCard(live.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(live);
+        final DecisionFrame parked = BridgeTestSupport.drivePassesToMainPhase(
+                live.session, "p1", 12);
+        Assert.assertNotNull(parked);
+        live.session.setLastExecutionError("SENTINEL-PRIVATE-9Z");
+        final JsonObject boundActor = StateProjection.bridgeMeta(live.session, "p1");
+        Assert.assertEquals(boundActor.get("last_execution_error").getAsString(),
+                "SENTINEL-PRIVATE-9Z");
+        final JsonObject boundOther = StateProjection.bridgeMeta(live.session, "p2");
+        Assert.assertFalse(boundOther.has("last_execution_error"));
+        final JsonObject boundPublic = StateProjection.bridgeMeta(live.session, null);
+        Assert.assertFalse(boundPublic.has("last_execution_error"));
+        live.session.shutdown(5000);
+        session.shutdown(2000);
     }
 
     private static JsonObject playerState(JsonObject state, String playerId) {

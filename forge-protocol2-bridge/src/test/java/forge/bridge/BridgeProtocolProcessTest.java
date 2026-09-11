@@ -417,12 +417,17 @@ public class BridgeProtocolProcessTest {
             Assert.assertEquals(outsider.get("payload").getAsJsonObject().getAsJsonObject("state")
                     .getAsJsonArray("legal_actions").size(), 0);
 
+            // R14: external event export fails closed (canonical + alias); the audit
+            // trail stays internal and nothing private leaves through this endpoint.
             final JsonObject log = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-log\",\"message_type\":\"export_event_log\","
                     + "\"game_id\":\"proc-1\"}", 60000);
-            assertOk(log);
-            Assert.assertTrue(log.get("payload").getAsJsonObject().getAsJsonObject("log")
-                    .getAsJsonArray("events").size() > 0);
+            assertErrorCode(log, BridgeErrors.EVENT_LOG_UNSUPPORTED);
+            Assert.assertFalse(log.toString().contains("opt-"));
+            final JsonObject aliasLog = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"p-log-alias\",\"message_type\":\"get_event_log\","
+                    + "\"game_id\":\"proc-1\"}", 60000);
+            assertErrorCode(aliasLog, BridgeErrors.EVENT_LOG_UNSUPPORTED);
 
             final JsonObject down = child.request("{\"protocol_version\":\"2.0.0\","
                     + "\"request_id\":\"p-down\",\"message_type\":\"shutdown_game\","

@@ -202,13 +202,14 @@ public class ProtocolTest {
         Assert.assertTrue(caps.get("commander_supported").getAsBoolean());
         Assert.assertTrue(caps.get("multiplayer_supported").getAsBoolean());
         Assert.assertTrue(caps.get("deck_import_supported").getAsBoolean());
-        Assert.assertTrue(caps.get("event_log_supported").getAsBoolean());
         Assert.assertTrue(caps.get("headless_supported").getAsBoolean());
         // Global action flags stay false: only a bounded subset is proven.
         Assert.assertFalse(caps.get("legal_actions_supported").getAsBoolean());
         Assert.assertFalse(caps.get("action_submission_supported").getAsBoolean());
         Assert.assertFalse(caps.get("seed_supported").getAsBoolean());
         Assert.assertFalse(caps.get("replay_supported").getAsBoolean());
+        // R14: external event export disabled for principal privacy (audit internal).
+        Assert.assertFalse(caps.get("event_log_supported").getAsBoolean());
         Assert.assertFalse(caps.get("target_selection_supported").getAsBoolean());
         Assert.assertFalse(caps.get("mode_selection_supported").getAsBoolean());
         Assert.assertFalse(caps.get("trigger_order_supported").getAsBoolean());

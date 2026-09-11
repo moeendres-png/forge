@@ -16,7 +16,6 @@ import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.ZoneType;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -127,11 +126,12 @@ public final class StateProjection {
     }
 
     /**
-     * R9 principal-scoped bridge metadata. Frame-bound fields (revision, pending
+     * R9/R14B principal-scoped bridge metadata. Frame-bound fields (revision, pending
      * decision incl. kind/status/actor/count/reason, state hash) are exposed ONLY to
-     * the frame's actor; anyone else receives null/-1. Session diagnostics that name
-     * only public roster structure (fail reasons name callbacks and seat ids, never
-     * card data) remain visible.
+     * the frame's actor; anyone else receives null/-1. Raw internal failure strings
+     * (fail_reason, last_execution_error) are NEVER exposed here: non-actors get
+     * nothing, and the actor gets its execution diagnostic only when bound to its
+     * current frame. Terminal status ("failed"/"aborted") is itself the public signal.
      */
     public static JsonObject bridgeMeta(BridgeSession session, String observerPlayerId) {
         final JsonObject meta = new JsonObject();
@@ -156,10 +156,7 @@ public final class StateProjection {
             // The digest covers private zones; only the actor may hold it.
             meta.add("state_hash", JsonNull.INSTANCE);
         }
-        if (!session.getFailReason().isEmpty()) {
-            meta.addProperty("fail_reason", session.getFailReason());
-        }
-        if (!session.getLastExecutionError().isEmpty()) {
+        if (actorScoped && session.isExecutionErrorBoundTo(observerPlayerId, frame.revision)) {
             meta.addProperty("last_execution_error", session.getLastExecutionError());
         }
         return meta;
@@ -276,26 +273,34 @@ public final class StateProjection {
     }
 
     /**
-     * R10: commander cast counts feed the advertised tax visibility; the read is
-     * required and all-or-nothing. Never a plausible {} on exception.
+     * R15: commander cast counts from Forge's native Commander identity. Iterates the
+     * player's authoritative Commander Card collection (zone-independent: commanders
+     * on the Stack, battlefield or anywhere else are the same persistent identity),
+     * resolves the live card via {@code Game.getCardState} (Forge re-objects cards
+     * across zone changes), and reads {@code Player.getCommanderCast} directly. No
+     * zone-name scanning, no bridge tax rules. A legitimate Forge zero stays zero;
+     * read failure throws.
      */
     private static JsonObject commanderCasts(BridgeSession session, Player player) {
         return require("commander_casts", () -> {
             if (failCommanderCastsForTests) {
                 throw new BridgeProjectionException("commander_casts", "injected test fault");
             }
-            final JsonObject casts = new JsonObject();
-            final List<String> names = session.commanderNames(session.seatOf(player));
-            final Map<String, Card> byName = new LinkedHashMap<>();
-            for (ZoneType zone : new ZoneType[] { ZoneType.Command, ZoneType.Battlefield,
-                    ZoneType.Graveyard, ZoneType.Exile, ZoneType.Hand, ZoneType.Library }) {
-                for (Card card : player.getCardsIn(zone)) {
-                    byName.putIfAbsent(card.getName(), card);
-                }
+            final Game game = session.getGame();
+            if (game == null) {
+                throw new BridgeProjectionException("commander_casts", "no game");
             }
-            for (String name : names) {
-                final Card card = byName.get(name);
-                casts.addProperty(name, card == null ? 0 : Math.max(0, player.getCommanderCast(card)));
+            final JsonObject casts = new JsonObject();
+            for (Card commander : player.getCommanders()) {
+                final Card live = game.getCardState(commander, commander);
+                final Card target = live == null ? commander : live;
+                final String name;
+                try {
+                    name = target.getName();
+                } catch (Throwable t) {
+                    throw new BridgeProjectionException("commander_casts.name", t);
+                }
+                casts.addProperty(name, Math.max(0, player.getCommanderCast(target)));
             }
             return casts;
         });
@@ -479,6 +484,14 @@ public final class StateProjection {
         });
     }
 
+    /**
+     * R13: stack sources obey BOTH native gates. ZoneType.Stack is zone-visible to
+     * everyone, so the face gate decides face-down identity: only the controller or
+     * an explicit may-look authority sees it. Anything else (including null/public
+     * observers) receives only the redacted marker — the hidden name and the
+     * source-specific description are never read for them. Gate-read failures throw
+     * rather than defaulting to visible.
+     */
     private static String stackText(SpellAbilityStackInstance si, PlayerView observerView) {
         final Card source = si.getSourceCard();
         if (source != null) {
@@ -492,7 +505,9 @@ public final class StateProjection {
                 boolean shown = false;
                 try {
                     final CardView view = source.getView();
-                    shown = observerView != null && view != null && view.canBeShownTo(observerView);
+                    shown = observerView != null && view != null
+                            && view.canBeShownTo(observerView)
+                            && view.canFaceDownBeShownTo(observerView);
                 } catch (Throwable t) {
                     throw new BridgeProjectionException("stack.visibility", t);
                 }

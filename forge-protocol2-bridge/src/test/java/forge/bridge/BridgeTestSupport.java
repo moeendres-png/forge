@@ -339,19 +339,15 @@ public final class BridgeTestSupport {
             handleToDeck.put(handle, engine.decksForTests().get(handle).deckId);
         }
         final List<RegisteredPlayer> players = new ArrayList<>(4);
-        final List<List<String>> seatCommanders = new ArrayList<>(4);
         final BridgeSession session = new BridgeSession(gameId, handleToDeck);
         int seat = 0;
         for (String handle : handles) {
             final BridgeEngine.ImportedDeck deck = engine.decksForTests().get(handle);
             final RegisteredPlayer player = RegisteredPlayer.forCommander(deck.forgeDeck);
-            player.setStartingLife(40);
             player.setPlayer(new BridgeLobbyPlayer("forge-p" + (seat + 1), session));
             players.add(player);
-            seatCommanders.add(new ArrayList<>(deck.commanderNames));
             seat++;
         }
-        session.setSeatCommanderNames(seatCommanders);
         final GameRules rules = new GameRules(GameType.Commander);
         rules.setAppliedVariants(EnumSet.of(GameType.Commander));
         final Match match = new Match(rules, players, "H4F-constructed");
