@@ -1,0 +1,68 @@
+schema_version: '2.0'
+repository: moeendres-png/forge
+worktree: /home/moeen/code/ws63-forge-a04-full-cast-remediation
+branch: ws63/forge-a04-full-cast-remediation-20260911
+audit_base_sha: a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+audit_base_tree: 2c18327f79e330f2ed167067166ffd42d61b0849
+state_written_against_head: 3a6cbcbe952130a93aa6c6b1e8b7c955685dd7a8
+validated_head: 3347084d222266fb55fc9490e42ae80663589b09
+objective: 'WS63 Forge A04 natural full-cast remediation: reproduce and systemically
+  repair the remaining full casting/payment/resolution X-lineage defect identified
+  by WS62, so ETB replacement evaluation obeys current CR 107.3m without provider
+  synthesis or globally preserving permanent X.'
+in_scope:
+- Forge native casting/payment/resolution path for X permanent spells
+- spell-to-permanent lineage required by ETB X replacement/trigger semantics
+- GameAction/changeZone and directly implicated casting/cost surfaces
+- natural full-cast actual-card and generic regression tests
+- impact regression for WS59 A04/C01/G04 engine surfaces
+- bounded WS63 evidence
+out_of_scope:
+- CPL/provider edits
+- provider X synthesis
+- provider replacement ordering
+- RQ-C3 behavior credit
+- WS64 successor CPL requalification
+- Full107
+- Architecture Freeze
+- Production Provider selection
+dependencies:
+- WS59 production successor a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+- WS62 terminal 63930f13e8308c8a1d17fff5fd5a82c62ef5519d
+- WS62 A04 full-cast NOT_READY packet
+- Official CR 2026-08-07 rule 107.3m
+hard_gates:
+- baseline reproduces via natural Forge casting/payment path
+- credited acceptance test must not call moveToStack/moveToPlay directly
+- credited acceptance test must not call setXManaCostPaid directly
+- chosen X must come from native casting decision and payment path
+- ETB replacement/trigger uses resolving spell X under CR 107.3m
+- permanent does not globally retain X as a rules value after entry
+- no card-name production hacks
+- no manual counter or replacement outcome injection
+- no duplicate/double application regression
+- A04 direct-path regression remains green
+- C01/G04 production semantics remain conformant
+- unsupported paths fail closed
+forbidden_shortcuts:
+- card-name special case
+- manual counter injection
+- manual replacement-result injection
+- direct moveToStack/moveToPlay as credited full-cast proof
+- direct setXManaCostPaid as credited full-cast proof
+- provider workaround
+- first/random/default option
+- GUI default
+- internal AI fallback
+- silent skip
+ownership: WS63-FORGE-A04-FULL-CAST-REMEDIATION
+status: BLOCKED
+exact_next_action: 'BLOCKED (fail-closed): the specified WS62 journal shape (empty
+  Moved replacement list, 0 replacement frames) is not reproducible through any Forge-native
+  pipeline in this repository (9 green natural-cast proofs, 94/94 terminal validation
+  on 3347084d222266fb55fc9490e42ae80663589b09); no Forge-side defect found. Dead WS59
+  equals-gate removed, 107.3k->107.3m corrected (behavior-neutral). Next: Coordinator
+  dispositions provider-side investigation of the vertical provider ACT-to-cast path
+  (frames 953-962); WS64 CPL requalification still required after this engine change.'
+technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
+current_reasoning_tier: high
