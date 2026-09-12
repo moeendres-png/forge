@@ -56,7 +56,6 @@ import forge.game.zone.ZoneType;
 import forge.item.PaperCard;
 import forge.util.*;
 import forge.util.collect.FCollection;
-import forge.util.collect.FCollectionView;
 
 import io.sentry.Breadcrumb;
 import io.sentry.Sentry;
@@ -1967,7 +1966,11 @@ public class GameAction {
         // award loses as SBE
         GameEndReason reason = null;
         List<Player> losers = null;
-        FCollectionView<Player> allPlayers = game.getPlayers();
+        // CR 104.3a: traverse a snapshot of the in-game players. The scans below
+        // run arbitrary game code (loss checks, replacement handlers), and the
+        // removals via Game.onPlayerLost structurally modify the live player
+        // list; aliasing the live list here breaks iteration on re-entrant loss.
+        List<Player> allPlayers = Lists.newArrayList(game.getPlayers());
 
         // Has anyone won by spelleffect?
         for (Player p : allPlayers) {
