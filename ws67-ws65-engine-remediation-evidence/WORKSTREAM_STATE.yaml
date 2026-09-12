@@ -1,0 +1,51 @@
+schema_version: '2.0'
+repository: moeendres-png/forge
+worktree: /home/moeen/code/ws67-forge-ws65-engine-remediation
+branch: ws67/forge-ws65-engine-remediation-20260912
+audit_base_sha: a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+audit_base_tree: 2c18327f79e330f2ed167067166ffd42d61b0849
+state_written_against_head: 22e7f17befee8fcce0684fa6d006f29afdb5c280
+validated_head: 22e7f17befee8fcce0684fa6d006f29afdb5c280
+objective: Engine-direct reproduce, classify, and systemically remediate the WS65
+  Ghalta reduced-cost cast, Fire Covenant non-mana-X, and Clone-under-Humility packets
+  on the accepted Forge pin.
+in_scope:
+- engine-direct reproductions
+- systemic Forge fixes only when engine defect is directly demonstrated
+- actual-card tests plus generic regression controls
+- cost/payment semantics
+- ETB copy replacement under continuous effects
+out_of_scope:
+- CPL provider edits
+- payCombatCost provider transport
+- concession emitter
+- First-Wave credit
+- Full107
+- Architecture Freeze
+- Production Provider selection
+dependencies:
+- accepted Forge pin a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+- WS65 terminal 7796619e69b0434cd232de8335ff5cab3c5d08e5
+hard_gates:
+- engine-direct reproduction before production fix
+- no card-name hacks
+- provider-vs-engine causality must be explicit
+- all systemic fixes require regression tests
+- new head is successor candidate only, never auto-accepted
+ownership: WS67-FORGE-WS65-ENGINE-REMEDIATION
+status: COMPLETE
+exact_next_action: Coordinator accept 22e7f17 as FORGE_SUCCESSOR_CANDIDATE; provider-side
+  repair plus requalification for Ghalta-entry and Covenant-X transports and H01
+  re-execution.
+technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
+current_reasoning_tier: high
+causality:
+  ghalta: PROVIDER_TRANSPORT_DEFECT (engine-direct PASS; no Forge patch)
+  covenant_x: OTHER provider-side billing (engine-direct PASS; no Forge patch)
+  clone_humility: ENGINE_DEFECT repaired systemically in ReplacementHandler (PASS)
+evidence:
+  ws67_tests: 8 run, 0 fail
+  full_module: 392 run, 0 fail, 0 errors, 6 environmental skips
+  forge_game: 3 run, 0 fail
+  checkstyle_validation: PASS (forge-game, forge-gui-desktop)
+terminal: WS67_ENGINE_REMEDIATION=PASS
