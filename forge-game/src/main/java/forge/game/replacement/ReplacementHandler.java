@@ -66,10 +66,38 @@ public class ReplacementHandler {
         game = gameState;
     }
 
+    /**
+     * Replacement-effect candidacy for one iterated card during {@link #getReplacementList}.
+     *
+     * <p>For a permanent entering the battlefield, its own entry-modifying replacements (CR 614.12)
+     * are assessed at the pre-entry point: copy effects apply in layer 1 while ability-removal
+     * applies in layer 6 (CR 613), so battlefield ability-removal must not suppress their candidacy
+     * even though the future-state pass ({@code checkStaticAbilities} over {@code preList}) strips
+     * them from the LKI view. The pre-pass snapshot is unioned back here; every existing
+     * mode/zones/requirements/canReplace/layer filter still applies downstream. For all other
+     * cards and events the snapshot is empty and this is exactly {@code c.getReplacementEffects()}.
+     */
+    private static Iterable<ReplacementEffect> getEntryCandidateReplacements(final Card c, final Card crd,
+            final CardCollection preList, final List<ReplacementEffect> enteringOwnReplacements) {
+        if (enteringOwnReplacements.isEmpty() || preList.get(crd) == crd) {
+            return c.getReplacementEffects();
+        }
+        final List<ReplacementEffect> union = Lists.newArrayList(c.getReplacementEffects());
+        for (final ReplacementEffect re : enteringOwnReplacements) {
+            if (!union.contains(re)) {
+                union.add(re);
+            }
+        }
+        return union;
+    }
+
     public List<ReplacementEffect> getReplacementList(final ReplacementType event, final Map<AbilityKey, Object> runParams, final ReplacementLayer layer) {
         final CardCollection preList = new CardCollection();
         Card affectedLKI = null;
         Card affectedCard = null;
+        // Own replacement effects of a permanent entering the battlefield, snapshotted before the
+        // future-state continuous-effect pass below. Only populated for Moved-to-Battlefield events.
+        final List<ReplacementEffect> enteringOwnReplacements = Lists.newArrayList();
 
         if (ReplacementType.Moved.equals(event) && ZoneType.Battlefield.equals(runParams.get(AbilityKey.Destination))) {
             // if it was caused by an replacement effect, use the already calculated RE list
@@ -91,6 +119,13 @@ public class ReplacementHandler {
             Map<Optional<Player>, Multiset<CounterType>> etbCounters = (Map<Optional<Player>, Multiset<CounterType>>) runParams.get(AbilityKey.CounterMap);
             affectedLKI.putEtbCounters(etbCounters);
             preList.add(affectedLKI);
+            // CR 613 interaction order (copy effects apply in layer 1, ability-removal in layer 6)
+            // with CR 614.12 (entry-modifying replacements are assessed at the pre-entry point):
+            // battlefield ability-removal (e.g. a "lose all abilities" effect) must not suppress
+            // assessment of the entering permanent's own ETB replacements. Snapshot them here so
+            // they stay candidates below even if the future-state pass strips them from the LKI.
+            // All existing mode/zones/requirements/canReplace/layer filters still apply.
+            enteringOwnReplacements.addAll(affectedLKI.getReplacementEffects());
             game.getAction().checkStaticAbilities(false, Sets.newHashSet(), preList);
 
             runParams.put(AbilityKey.Affected, affectedLKI);
@@ -131,7 +166,7 @@ public class ReplacementHandler {
                 }
             }
 
-            for (final ReplacementEffect replacementEffect : c.getReplacementEffects()) {
+            for (final ReplacementEffect replacementEffect : getEntryCandidateReplacements(c, crd, preList, enteringOwnReplacements)) {
                 if (!replacementEffect.hasRun() && !hasRun.contains(replacementEffect)
                         && (layer == null || replacementEffect.getLayer() == layer)
                         && replacementEffect.modeCheck(event, runParams)
@@ -152,6 +187,9 @@ public class ReplacementHandler {
             // need to set the Host Card there so it is not connected to LKI anymore?
             // need to be done after canReplace check
             for (final ReplacementEffect re : affectedLKI.getReplacementEffects()) {
+                re.setHostCard(affectedCard);
+            }
+            for (final ReplacementEffect re : enteringOwnReplacements) {
                 re.setHostCard(affectedCard);
             }
             // need to copy stored keywords from lki into real object to prevent the replacement effect from making new ones
