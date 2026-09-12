@@ -408,7 +408,12 @@ public class PhaseHandler implements java.io.Serializable, IHasForgeLog {
                     game.getEndOfTurn().registerUntilEndCommand(playerTurn);
                     game.getEndOfCombat().registerUntilEndCommand(playerTurn);
 
-                    for (Player player : game.getPlayers()) {
+                    // CR 104.3a: a player may concede at any time, including
+                    // synchronously inside this callback. Traverse a snapshot so the
+                    // structural removal performed by Game.onPlayerLost cannot break
+                    // (ConcurrentModificationException) or truncate (skipped players)
+                    // this sweep. Leave-game cleanup itself stays fully native.
+                    for (Player player : Lists.newArrayList(game.getPlayers())) {
                         player.getController().autoPassCancel(); // autopass won't wrap to next turn
                     }
 
