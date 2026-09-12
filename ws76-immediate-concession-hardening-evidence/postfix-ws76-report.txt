@@ -1,0 +1,81 @@
+-------------------------------------------------------------------------------
+Test set: forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest
+-------------------------------------------------------------------------------
+Tests run: 5, Failures: 4, Errors: 0, Skipped: 0, Time elapsed: 8.846 s <<< FAILURE! -- in forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest
+forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testNoFurtherDecisionsAndCoherentTurnAfterSweepConcede4P -- Time elapsed: 0.131 s <<< FAILURE!
+java.util.ConcurrentModificationException
+	at java.base/java.util.ArrayList$Itr.checkForComodification(ArrayList.java:1095)
+	at java.base/java.util.ArrayList$Itr.next(ArrayList.java:1049)
+	at forge.game.phase.PhaseHandler.onPhaseBegin(PhaseHandler.java:411)
+	at forge.game.phase.PhaseHandler.endTurnByEffect(PhaseHandler.java:1242)
+	at forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.driveCleanupSweep(Ws76ImmediateConcessionTest.java:120)
+	at forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testNoFurtherDecisionsAndCoherentTurnAfterSweepConcede4P(Ws76ImmediateConcessionTest.java:239)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.testng.internal.invokers.MethodInvocationHelper.invokeMethod(MethodInvocationHelper.java:141)
+	at org.testng.internal.invokers.InvokeMethodRunnable.runOne(InvokeMethodRunnable.java:47)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:76)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:11)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+
+forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testSyncConcedeDuringCleanupSweep2P -- Time elapsed: 0.009 s <<< FAILURE!
+java.lang.AssertionError: Sweep must still consult every remaining player (no skipped steps) expected [1] but found [0]
+	at org.testng.Assert.fail(Assert.java:111)
+	at org.testng.Assert.failNotEquals(Assert.java:1578)
+	at org.testng.Assert.assertEqualsImpl(Assert.java:150)
+	at org.testng.Assert.assertEquals(Assert.java:132)
+	at org.testng.Assert.assertEquals(Assert.java:1419)
+	at org.testng.Assert.assertEquals(Assert.java:1383)
+	at forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testSyncConcedeDuringCleanupSweep2P(Ws76ImmediateConcessionTest.java:160)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.testng.internal.invokers.MethodInvocationHelper.invokeMethod(MethodInvocationHelper.java:141)
+	at org.testng.internal.invokers.InvokeMethodRunnable.runOne(InvokeMethodRunnable.java:47)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:76)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:11)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+
+forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testSyncConcedeDuringCleanupSweep4P -- Time elapsed: 0.211 s <<< FAILURE!
+java.util.ConcurrentModificationException
+	at java.base/java.util.ArrayList$Itr.checkForComodification(ArrayList.java:1095)
+	at java.base/java.util.ArrayList$Itr.next(ArrayList.java:1049)
+	at forge.game.phase.PhaseHandler.onPhaseBegin(PhaseHandler.java:411)
+	at forge.game.phase.PhaseHandler.endTurnByEffect(PhaseHandler.java:1242)
+	at forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.driveCleanupSweep(Ws76ImmediateConcessionTest.java:120)
+	at forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testSyncConcedeDuringCleanupSweep4P(Ws76ImmediateConcessionTest.java:186)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.testng.internal.invokers.MethodInvocationHelper.invokeMethod(MethodInvocationHelper.java:141)
+	at org.testng.internal.invokers.InvokeMethodRunnable.runOne(InvokeMethodRunnable.java:47)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:76)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:11)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+
+forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testSyncConcedeDuringCleanupSweep5P -- Time elapsed: 0.003 s <<< FAILURE!
+java.util.ConcurrentModificationException
+	at java.base/java.util.ArrayList$Itr.checkForComodification(ArrayList.java:1095)
+	at java.base/java.util.ArrayList$Itr.next(ArrayList.java:1049)
+	at forge.game.phase.PhaseHandler.onPhaseBegin(PhaseHandler.java:411)
+	at forge.game.phase.PhaseHandler.endTurnByEffect(PhaseHandler.java:1242)
+	at forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.driveCleanupSweep(Ws76ImmediateConcessionTest.java:120)
+	at forge.gamesimulationtests.ws76.Ws76ImmediateConcessionTest.testSyncConcedeDuringCleanupSweep5P(Ws76ImmediateConcessionTest.java:219)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.testng.internal.invokers.MethodInvocationHelper.invokeMethod(MethodInvocationHelper.java:141)
+	at org.testng.internal.invokers.InvokeMethodRunnable.runOne(InvokeMethodRunnable.java:47)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:76)
+	at org.testng.internal.invokers.InvokeMethodRunnable.call(InvokeMethodRunnable.java:11)
+	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:317)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
+	at java.base/java.lang.Thread.run(Thread.java:1583)
+

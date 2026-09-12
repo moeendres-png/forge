@@ -1,0 +1,51 @@
+schema_version: '2.0'
+repository: moeendres-png/forge
+worktree: /home/moeen/code/ws76-forge-immediate-concession-hardening
+branch: ws76/forge-immediate-concession-hardening-20260912
+audit_base_sha: 22e7f17befee8fcce0684fa6d006f29afdb5c280
+audit_base_tree: f667cb959aaa28d11d85708a3c9b5ddb3e94dd24
+state_written_against_head: 2a49cef3c4078577d3b47cc0d3139c9f93a2bc7f
+validated_head: 2a49cef3c4078577d3b47cc0d3139c9f93a2bc7f
+validated_head_tree: a42dae88d89697026dc82ed3cff4376503deeb7a
+accepted_forge_pin: a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+successor_accepted: false
+objective: Reproduce and systemically harden Forge immediate concession so a player
+  can leave the game synchronously at any legal time without live-player-list iteration
+  failure or deferral to a later priority window.
+in_scope:
+- engine-direct concession reproduction
+- cleanup/live-list iteration safety
+- immediate Player.concede semantics
+- multiplayer leave-game cleanup
+- systemic engine regression tests
+out_of_scope:
+- CPL/provider edits
+- deferred concession workaround
+- RQ-C3 behavior credit
+- Full107 behavior
+- accepted Forge pin change
+- Architecture Freeze
+verdicts:
+  WS76_ENGINE_CONCESSION_HARDENING: PASS
+  PRE_FIX_REPRO: PASS
+  ROOT_CAUSE: ENGINE_DEFECT
+  IMMEDIATE_CONCESSION: PASS
+  LIVE_ITERATION_SAFETY: PASS
+  MULTIPLAYER_LEAVE_CLEANUP: PASS
+evidence:
+- prefix-failure-report.txt/xml (pre-fix: CME + sweep-skip, 4 failures)
+- postfix-ws76-report.txt (post-fix 5/5)
+- cleanhead-18of18-report.xml (18/18 from validated head)
+- full reactor 397 run / 0 fail / 6 skipped (pre-existing skips)
+- checkstyle 0 violations
+regressions:
+  Ws76ImmediateConcessionTest: 5/5
+  Ws59G04ConcessionTest: 4/4
+  Ws67EngineRemediationTest: 8/8 (assertions unmodified)
+  ReplacementHandlerTest: 1/1
+ownership: WS76-FORGE-IMMEDIATE-CONCESSION-HARDENING
+status: COMPLETE_PENDING_PUSH
+exact_next_action: Push branch via safe protocol (lineage gates + dry-run +
+  no-force push) after terminal validation; Coordinator adjudicates WS76.
+technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
+current_reasoning_tier: high

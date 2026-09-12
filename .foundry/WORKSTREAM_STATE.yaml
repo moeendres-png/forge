@@ -1,54 +1,46 @@
 schema_version: '2.0'
 repository: moeendres-png/forge
-worktree: /home/moeen/code/ws59-forge-rqc3-engine-remediation
-branch: ws59/forge-rqc3-engine-remediation-20260911
-audit_base_sha: 66caae16015bd403bc0a52fa6689afb5508f74d0
-audit_base_tree: 40fc8f29ce4de31a964972461db2b48b4221e07f
-state_written_against_head: 66caae16015bd403bc0a52fa6689afb5508f74d0
-validated_head: null
-objective: 'WS59 Forge RQ-C3 engine remediation: systemically repair the exact A04
-  replacement/application defect, C01 stack-spell target-candidacy and alternate-cost
-  continuation defect, and G04 missing engine-native concession action seam on one
-  Forge successor lineage.'
+worktree: /home/moeen/code/ws76-forge-immediate-concession-hardening
+branch: ws76/forge-immediate-concession-hardening-20260912
+audit_base_sha: 22e7f17befee8fcce0684fa6d006f29afdb5c280
+audit_base_tree: f667cb959aaa28d11d85708a3c9b5ddb3e94dd24
+state_written_against_head: 2a49cef3c4078577d3b47cc0d3139c9f93a2bc7f
+validated_head: 2a49cef3c4078577d3b47cc0d3139c9f93a2bc7f
+objective: 'WS76 Forge immediate-concession engine hardening: reproduce the synchronous
+  concession failure engine-direct on the WS67 successor candidate and land the smallest
+  systemic engine repair for immediate leave-game semantics without collection-iteration
+  failure. No provider workaround, no deferral, no card-name logic.'
 in_scope:
-- Forge Rules Core / controller seams required by A04
-- Forge Rules Core / targeting-cost continuation required by C01
-- Forge engine-native authoritative concession action required by G04
-- Forge-side focused regression/runtime tests
-- bounded remediation evidence and source-lock records
+- Forge engine live player-list sweep safety (PhaseHandler CLEANUP autoPassCancel)
+- GameAction.checkGameOverCondition live-list alias hardening
+- Engine-direct WS76 regression tests (2P/4P/5P + coherence + 800.4 controls)
+- WS67/WS59 targeted requalification + full-reactor regression + checkstyle
 out_of_scope:
 - CPL provider workaround
-- fabricated provider legal actions
-- RQ-C3 First-Wave behavior credit
-- unrelated card-specific hacks
+- deferred concession workaround
+- RQ-C3 behavior credit
+- accepted Forge pin change
 - Architecture Freeze
 - Production Provider selection
 dependencies:
-- WS55R terminal e39c7de053573625e51006b917bef43468161752
-- Coordinator AG-1/AG-2/AG-3 adjudication
+- WS67 successor candidate 22e7f17befee8fcce0684fa6d006f29afdb5c280
+- WS68 sweep-reentrancy defect packet (remediated here at engine level)
 hard_gates:
 - Rules Core remains sole Legal Action authority
 - no card-name special-case remediation
-- unsupported reachable paths fail closed
-- A04 exact fixture reproduces before fix and passes after systemic fix
-- C01 exact fixture reaches authoritative target/cost continuation without provider
-  reconstruction
-- G04 concession is engine-native and available according to CR 104.3a semantics
-- multiplayer leave-game cleanup remains engine-owned
-- fresh relevant Forge tests pass
+- concession takes effect synchronously (no priority-window deferral)
+- multiplayer leave-game cleanup remains engine-owned (CR 800.4)
+- WS67 assertions unmodified and green
+- accepted Forge pin remains a9a95db (no repin claimed)
 forbidden_shortcuts:
-- first option
-- random option
-- default yes/no
-- GUI default
-- internal engine AI fallback
 - provider pseudo-option
 - manual outcome injection
 - direct effect-resolution bypass
-- card-name hacks
-ownership: WS59-FORGE-RQC3-ENGINE-REMEDIATION
-status: ACTIVE
-exact_next_action: Run WS59 targeted tests (A04/C01/G04) then relevant suites; inspect
-  diff; commit; terminal validation on clean HEAD.
+- catching/ignoring ConcurrentModificationException
+- weakening tests or assertions to obtain green results
+ownership: WS76-FORGE-IMMEDIATE-CONCESSION-HARDENING
+status: COMPLETE_PENDING_PUSH
+exact_next_action: Push branch via safe protocol (lineage gates + dry-run + no-force
+  push) after terminal validation; Coordinator adjudicates WS76.
 technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
 current_reasoning_tier: high
