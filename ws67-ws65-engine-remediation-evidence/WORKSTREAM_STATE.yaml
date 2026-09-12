@@ -44,8 +44,8 @@ causality:
   covenant_x: OTHER provider-side billing (engine-direct PASS; no Forge patch)
   clone_humility: ENGINE_DEFECT repaired systemically in ReplacementHandler (PASS)
 evidence:
-  ws67_tests: 8 run, 0 fail
-  full_module: 392 run, 0 fail, 0 errors, 6 environmental skips
-  forge_game: 3 run, 0 fail
-  checkstyle_validation: PASS (forge-game, forge-gui-desktop)
+- 'ws67_tests: 8 run, 0 fail'
+- 'full_module: 392 run, 0 fail, 0 errors, 6 environmental skips'
+- 'forge_game: 3 run, 0 fail'
+- 'checkstyle_validation: PASS (forge-game, forge-gui-desktop)'
 terminal: WS67_ENGINE_REMEDIATION=PASS
