@@ -10,8 +10,15 @@
  - Branch: architecture/ws-a1d-h4f-forge-protocol2-bridge-20260911
  - (Remediation 02 heads recorded under "Validated substantive head" below.)
 
- ## CURRENT TRUTH (Remediation 04 — authoritative; earlier sections are historical)
+ ## CURRENT TRUTH (Remediation 05 / R18-R19 — authoritative; earlier sections are historical)
 
+ - Headless GUI: all 8 choice-bearing calls (showOptionDialog, showInputDialog,
+   showFileDialog, getSaveFile, order, getChoices, chooseCard, showBoxedProduct)
+   throw principal-safe UnsupportedOperationException; infrastructure, presentation
+   and default-haptics calls (incl. inherited getCardArt delegation,
+   useControllerForHaptics=false, vibrate no-ops) make no MTG choices; any
+   unexpected choice-bearing GUI reachability throws into FAILED/INTERNAL handling.
+   The bounded separate-process runtime never invokes those throws.
  - Action sources: engine-owned `Player.getAllCards()` (every Forge-tracked zone of
    the acting player, incl. Sideboard/Ante/Merged/variants/tokens) UNION
    `Player.getCardsActivatableInExternalZones(true)` (may-play grants incl.

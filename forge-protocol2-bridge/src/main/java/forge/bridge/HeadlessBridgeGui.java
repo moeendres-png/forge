@@ -25,8 +25,8 @@ import org.jupnp.UpnpServiceConfiguration;
 /**
  * No-display {@link IGuiBase} for the bridge process.
  *
- * <p>R18 method classification (return-valued methods only; void methods are
- * display-only no-ops and cannot answer decisions):
+ * <p>R18 method classification (all return-valued methods, including inherited
+ * interface defaults, which are deliberately NOT overridden):
  * <ul>
  *   <li>A — pure infrastructure/capability/presentation query. Deterministic values
  *   with no possibility of answering an MTG/user decision: isRunningOnDesktop,
@@ -37,9 +37,15 @@ import org.jupnp.UpnpServiceConfiguration;
  *   createLayeredImage, createAudioClip, createAudioMusic, getNewGuiGame,
  *   hostMatch, getUpnpPlatformService) mean the subsystem is absent: any use fails
  *   loudly (NullPointerException into the qualified FAILED path), never silently.
+ *   The inherited one-argument {@code getCardArt(PaperCard)} delegates to the
+ *   already classified two-argument image lookup. {@code useControllerForHaptics()}
+ *   (inherited default false) is a static infrastructure capability fact.
  *   {@code download} reports failure (false = nothing fetched); the executor
- *   runnables (invokeInEdtNow/Later/AndWait, runBackgroundTask) execute inline with
- *   no content of their own. browseToUrl already throws.</li>
+ *   runnables (invokeInEdtNow/Later/AndWait, runBackgroundTask) execute supplied
+ *   infrastructure work inline with no content of their own; the diagnostic
+ *   showBugReportDialog writes to stderr. browseToUrl already throws. The inherited
+ *   default vibration methods ({@code vibrate}, {@code vibrateController}) are
+ *   presentation/haptics no-ops and cannot select game outcomes.</li>
  *   <li>B — interactive/user/choice-bearing affordance. MUST throw via
  *   {@link #unsupportedInteraction}: showOptionDialog, showInputDialog,
  *   showFileDialog, getSaveFile, order, getChoices, chooseCard, showBoxedProduct.
@@ -47,6 +53,10 @@ import org.jupnp.UpnpServiceConfiguration;
  *   <li>C — none. Every return-valued method is classified A or B above with a
  *   source-based justification; there are no uncertain methods.</li>
  * </ul>
+ * <p>Precisely: no void IGuiBase method returns a user/MTG decision (void methods
+ * return nothing at all); executor methods execute supplied infrastructure work;
+ * download reports failure via callback; presentation/haptics methods do not select
+ * game outcomes.
  * <p>The engine path used by the bridge ({@code Match.createGame}/
  * {@code Match.startGame} with {@link ExternalPlayerController}) never touches the
  * B methods; they exist only so {@code FModel.initialize} and card loading can run
