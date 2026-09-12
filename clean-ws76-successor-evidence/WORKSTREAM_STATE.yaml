@@ -1,0 +1,56 @@
+schema_version: '2.0'
+repository: moeendres-png/forge
+worktree: /tmp/ws62-forge-src-a9a95db
+branch: ws77/forge-clean-ws76-successor-20260912
+audit_base_sha: a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+state_written_against_head: aa5c00aa32dfd40e213f223f8fd400c43daabb24
+validated_head: aa5c00aa32dfd40e213f223f8fd400c43daabb24
+objective: 'Clean Forge WS76 successor directly on accepted pin a9a95db: preserve correct
+  CR 614.12 Clone/Humility behavior (no WS67 ReplacementHandler inheritance), port only
+  the WS76 systemic immediate-concession snapshot hardening (GameAction +
+  PhaseHandler), and qualify with the corrected H01 contrast family plus the WS76
+  immediate-concession battery on fresh clean-base runtime.'
+in_scope:
+- GameAction.checkGameOverCondition snapshot traversal (CR 104.3a)
+- PhaseHandler CLEANUP autoPassCancel snapshot traversal (CR 104.3a)
+- Corrected H01 Clone/Humility contrast family (HUMILITY_FIRST / CLONE_FIRST / NO_HUMILITY)
+- WS76 immediate-concession battery (2P/4P/5P sweep-context + priority control + post-leave coherence)
+- Relevant Forge reactor regression + checkstyle quality gate
+out_of_scope:
+- WS67 ReplacementHandler port (binding: NOT eligible for promotion)
+- Phantasmal Image Humility-first retention (omitted; same CR 614.12 principle would apply)
+- Accepted-pin repin, Full107 claims, Architecture Freeze, Production Provider selection
+- Direct git push (safe_push only, not authorized in this session)
+dependencies:
+- Accepted Forge qualification pin a9a95db6662c2d28814390a9c0c2f986e39aa8b4
+- WS76 fix commit 2a49cef3c4078577d3b47cc0d3139c9f93a2bc7f (reference only for production diff)
+- Coordinator adjudication: H01-as-previously-specified is RULES-INCORRECT
+hard_gates:
+- G1 clean branch ancestry directly from a9a95db
+- G2 WS67 ReplacementHandler delta absent
+- G3 H01 Humility-first no-copy behavior
+- G4 H01 Clone-first contrast
+- G5 H01 no-Humility control
+- G6 immediate concession 2P
+- G7 immediate concession 4P
+- G8 immediate concession 5P
+- G9 native leave-game coherence
+- G10 relevant regression suite
+- G11 no card-name production hacks
+- G12 no provider deferral or semantic fallback
+forbidden_shortcuts:
+- WS67 ReplacementHandler port
+- card-name special cases
+- provider-side concession deferral
+- fabricated copy choices
+- weakened assertions
+- first-option/default/random fallback
+- Full107 or Architecture Freeze claims
+- accepted-pin repin
+- direct git push
+ownership: CLEAN-WS76-SUCCESSOR-H01-REMEDIATION
+status: COMPLETE_UNPUSHED
+exact_next_action: Coordinator adjudication of successor aa5c00aa32dfd40e213f223f8fd400c43daabb24;
+  authorized persistence via canonical Foundry safe_push only (no direct push performed).
+technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
+current_reasoning_tier: high
