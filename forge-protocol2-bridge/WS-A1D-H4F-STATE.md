@@ -314,31 +314,33 @@
 
  ## Remote review 04 — R14B/R16/R17/R12 disposition (DIRECTLY_VERIFIED unless noted)
 
- - R14B settlement: waitForSettle snapshots status per iteration; FAILED rejects
-   SESSION_FAILED with exactly "session failed"; CLOSED rejects SESSION_CLOSED
-   with exactly "session is closed"; only OVER/genuine game-over settles applied.
-   Ship-driven FAILED proven rejected through the protocol handler with internal
-   diagnostics retained and generic externals. No timing dependence.
- - R16 ordering: actor then revision precede frame-status exposure; wrong actor on
-   a private UNSUPPORTED frame gets WRONG_ACTOR with no reason/count/revision/name;
-   stale correct-actor gets STALE_REVISION without the current blocker; correct
-   actor+revision gets its truthful UNSUPPORTED_DECISION. Proven on Swords fixture.
- - R17 sanitization: dispatch/lifecycle/BridgeMain catches emit stable generic
-   strings; Throwables go to stderr via logInternal; PROJECTION_FAILED carries the
-   fixed schema field only. Caller-supplied echoes and bridge-generated
-   deterministic messages retained. Sentinel tests for dispatch, cause channel and
-   log channel.
- - Execution-note binding: bound at production time to live frame actor+revision;
-   submit clears the boundary; owner observes its note while parked; clean submits
-   carry no note; post-advance polls by any principal omit it. (Genuine-decline
-   integration is unreachable in the bounded surface by classifier design; the
-   note path is defense-in-depth with mechanism-level proof.)
- - R12: original authority 950d6fd6 vs current main c1a760af recorded correctly;
-   external failure policy stated exactly; no placeholder remains.
+ (Consolidated: R14B settlement/note-binding, R16 ordering, R17 sanitization and
+ R12 Lab/failure-policy truth are stated authoritatively in CURRENT TRUTH above;
+ historical detail retained in prior review sections and commit history. No
+ information removed: failure strings are exactly "session failed" /
+ "session is closed" / "internal bridge error" / "authoritative state unreadable:
+ \<field\>" / lifecycle stable generics; ordering is actor-then-revision-then-status.)
+
+ ## Remote review 05 — R18/R19 disposition (DIRECTLY_VERIFIED unless noted)
+
+ - R18: HeadlessBridgeGui audited method-by-method (classification recorded in the
+   class javadoc). All 8 choice-bearing affordances (showOptionDialog,
+   showInputDialog, showFileDialog, getSaveFile, order, getChoices, chooseCard,
+   showBoxedProduct) throw UnsupportedOperationException("bridge-gui:\<op\>") with
+   no game data; direct regression per method plus a no-game-data assertion.
+   Infrastructure queries keep deterministic values with source justification;
+   absent subsystems stay null (loud on use). No C (uncertain) methods remain.
+ - R19: ExternalPlayerController starting-player comment now states Forge-selected
+   chooser + STARTING_PLAYER frame (no preset seat); BridgeCostDecisionMaker
+   comments now state zero/no-cost-only with no pool auto-payment; behavior
+   unchanged (verified by the unchanged bounded runtime).
+ - REMOTE_REVIEW_05: R14B/R16/R17 PASS (prior evidence retained); R18 GUI-default
+   remediation required -> remediated and proven below.
 
  ## Validated substantive head
- - Remediation 04 substantive: 86f890dd87438d0cc05193dc8f87ad71f06c860d
+ - Remediation 05 substantive: 61e5151f6ce4fde0faaa171baac41d50f5f17cb1
    (this file updated separately)
+ - Remediation 04 substantive: 86f890dd87438d0cc05193dc8f87ad71f06c860d
  - Remediation 03 substantive: fe7c2dba7aff19a507a907e814e1a3d1c02d1980
  - Remediation 02 substantive: a4509c368d39734d30184aba182060f54ab308bf
  - Remediation 01 substantive: 98e538ed336ddd254a4e6055280b4c814bf647ec
