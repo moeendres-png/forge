@@ -39,8 +39,8 @@ forbidden_shortcuts:
 - catching/ignoring ConcurrentModificationException
 - weakening tests or assertions to obtain green results
 ownership: WS76-FORGE-IMMEDIATE-CONCESSION-HARDENING
-status: COMPLETE_PENDING_PUSH
-exact_next_action: Push branch via safe protocol (lineage gates + dry-run + no-force
-  push) after terminal validation; Coordinator adjudicates WS76.
+status: COMPLETE
+exact_next_action: Publish via canonical safe_push (dry-run then actual); Coordinator
+  adjudicates WS76.
 technical_decision_authority: AUTONOMOUS_WITHIN_CONTRACT
 current_reasoning_tier: high
