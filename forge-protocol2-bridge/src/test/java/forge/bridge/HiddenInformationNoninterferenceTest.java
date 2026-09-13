@@ -36,10 +36,13 @@ public class HiddenInformationNoninterferenceTest {
     }
 
     private static DecisionFrame parkTestFrame(BridgeSession session, String actorId, long revision) {
+        // WS87: park-time fingerprint is the real fail-closed value, not a dummy string.
+        final InternalAuditFingerprint.Fingerprint pre =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
         final DecisionFrame frame = new DecisionFrame(revision, DecisionFrame.Kind.PRIORITY,
                 DecisionFrame.Status.SUPPORTED, "", actorId,
                 session.seatOf(session.playerById(actorId)),
-                Collections.singletonList(DecisionFrame.passOption()), "test-pre");
+                Collections.singletonList(DecisionFrame.passOption()), pre);
         try {
             final java.lang.reflect.Field field =
                     BridgeSession.class.getDeclaredField("currentFrame");
@@ -291,7 +294,9 @@ public class HiddenInformationNoninterferenceTest {
         BridgeTestSupport.addCard(cg.game, 0, "Island", ZoneType.Library);
         parkTestFrame(session, "p1", 7);
 
-        final String before = InternalAuditFingerprint.ofGame(cg.game, session);
+        final InternalAuditFingerprint.Fingerprint before =
+                InternalAuditFingerprint.ofGame(cg.game, session);
+        Assert.assertTrue(before.valid, "baseline fingerprint must be valid: " + before);
         final String obsBefore = hashOf(metaOf(session, "p1"));
         final String projBefore = projectionOf(session, "p1");
         final forge.game.player.Player p1 = cg.game.getPlayers().get(0);
@@ -300,8 +305,10 @@ public class HiddenInformationNoninterferenceTest {
         Assert.assertEquals(lib.size(), 5);
         // Real semantic reorder: move the top card to the bottom.
         p1.getZone(ZoneType.Library).reorder(lib.get(0), lib.size() - 1);
-        final String after = InternalAuditFingerprint.ofGame(cg.game, session);
-        Assert.assertNotEquals(after, before,
+        final InternalAuditFingerprint.Fingerprint after =
+                InternalAuditFingerprint.ofGame(cg.game, session);
+        Assert.assertTrue(after.valid, "post-reorder fingerprint must be valid: " + after);
+        Assert.assertNotEquals(after.digest, before.digest,
                 "internal audit must detect library reordering (order is semantic)");
         // The hidden order change is invisible to the principal: same observation.
         Assert.assertEquals(projectionOf(session, "p1"), projBefore);
@@ -321,8 +328,10 @@ public class HiddenInformationNoninterferenceTest {
 
         final String projBefore = projectionOf(session, "p1");
         final String obsBefore = hashOf(metaOf(session, "p1"));
-        final String auditBefore = InternalAuditFingerprint.ofGame(cg.game, session);
+        final InternalAuditFingerprint.Fingerprint auditBefore =
+                InternalAuditFingerprint.ofGame(cg.game, session);
         Assert.assertNotNull(obsBefore);
+        Assert.assertTrue(auditBefore.valid, "baseline fingerprint must be valid: " + auditBefore);
 
         // Advance the privileged engine clock with no visible change.
         cg.game.getNextTimestamp();
@@ -331,7 +340,10 @@ public class HiddenInformationNoninterferenceTest {
         Assert.assertEquals(projectionOf(session, "p1"), projBefore);
         Assert.assertEquals(hashOf(metaOf(session, "p1")), obsBefore,
                 "engine timestamp must not influence the observation digest");
-        Assert.assertNotEquals(InternalAuditFingerprint.ofGame(cg.game, session), auditBefore,
+        final InternalAuditFingerprint.Fingerprint auditAfter =
+                InternalAuditFingerprint.ofGame(cg.game, session);
+        Assert.assertTrue(auditAfter.valid, "post-tick fingerprint must be valid: " + auditAfter);
+        Assert.assertNotEquals(auditAfter.digest, auditBefore.digest,
                 "internal audit is timestamp-sensitive (same-process only)");
         session.shutdown(1000);
     }
@@ -453,8 +465,9 @@ public class HiddenInformationNoninterferenceTest {
         final String projBefore = projectionOf(session, actor);
         final String obsBefore = hashOf(metaOf(session, actor));
         Assert.assertTrue(ObservationDigest.isHexDigest(obsBefore));
-        final String auditBefore =
+        final InternalAuditFingerprint.Fingerprint auditBefore =
                 InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(auditBefore.valid, "baseline fingerprint must be valid: " + auditBefore);
 
         // Negative controls: wrong actor, unknown option, stale revision.
         final DecisionFrame.Option pass = BridgeTestSupport.findOption(frame, "pass_priority");
@@ -469,10 +482,15 @@ public class HiddenInformationNoninterferenceTest {
         Assert.assertFalse(session.submit(actor, pass.optionId, "cast_spell",
                 frame.revision).applied);
         // Rejected submissions mutate nothing: observation and audit identical.
+        // WS87: validity-gated — invalid fingerprints can never prove no-mutation.
         Assert.assertEquals(projectionOf(session, actor), projBefore);
         Assert.assertEquals(hashOf(metaOf(session, actor)), obsBefore);
-        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session),
-                auditBefore);
+        final InternalAuditFingerprint.Fingerprint auditAfterRejects =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(auditAfterRejects.valid, "post-reject fingerprint must be valid");
+        Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(
+                auditAfterRejects, auditBefore),
+                "rejected submissions must not mutate state");
 
         // Real submission: pre digest binds the actor's envelope; post advances it.
         final BridgeSession.SubmitOutcome outcome = session.submit(actor, pass.optionId,
@@ -483,7 +501,9 @@ public class HiddenInformationNoninterferenceTest {
         Assert.assertTrue(ObservationDigest.isHexDigest(outcome.postObservationDigest));
         Assert.assertEquals(outcome.preObservationDigest, obsBefore);
         Assert.assertNotEquals(outcome.postObservationDigest, outcome.preObservationDigest);
-        Assert.assertNotEquals(outcome.postStateHash, outcome.preStateHash);
+        Assert.assertTrue(outcome.preStateHash.valid, "pre must be valid: " + outcome.preStateHash);
+        Assert.assertTrue(outcome.postStateHash.valid, "post must be valid: " + outcome.postStateHash);
+        Assert.assertNotEquals(outcome.postStateHash.digest, outcome.preStateHash.digest);
         session.shutdown(5000);
     }
 

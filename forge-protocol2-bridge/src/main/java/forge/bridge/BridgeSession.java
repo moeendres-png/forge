@@ -57,9 +57,12 @@ public final class BridgeSession {
         public final boolean applied;
         public final String errorCode;
         public final String errorMessage;
-        /** Internal audit fingerprints (same-process only, never serialized). */
-        public final String preStateHash;
-        public final String postStateHash;
+        /**
+         * WS87 internal audit fingerprints (same-process only, never serialized).
+         * Invalid means UNKNOWN/UNAVAILABLE for mutation proof, never PASS.
+         */
+        public final InternalAuditFingerprint.Fingerprint preStateHash;
+        public final InternalAuditFingerprint.Fingerprint postStateHash;
         /**
          * WS82 principal-visible observation digests for the submitter
          * (derived from the submitter's sanitized observation; null unless
@@ -70,7 +73,8 @@ public final class BridgeSession {
         public final boolean executionOk;
 
         private SubmitOutcome(boolean applied, String errorCode, String errorMessage,
-                String preStateHash, String postStateHash,
+                InternalAuditFingerprint.Fingerprint preStateHash,
+                InternalAuditFingerprint.Fingerprint postStateHash,
                 String preObservationDigest, String postObservationDigest, boolean executionOk) {
             this.applied = applied;
             this.errorCode = errorCode;
@@ -82,13 +86,15 @@ public final class BridgeSession {
             this.executionOk = executionOk;
         }
 
-        public static SubmitOutcome applied(String pre, String post,
+        public static SubmitOutcome applied(InternalAuditFingerprint.Fingerprint pre,
+                InternalAuditFingerprint.Fingerprint post,
                 String preObservationDigest, String postObservationDigest, boolean executionOk) {
             return new SubmitOutcome(true, null, null, pre, post,
                     preObservationDigest, postObservationDigest, executionOk);
         }
 
-        public static SubmitOutcome rejected(String code, String message, String pre) {
+        public static SubmitOutcome rejected(String code, String message,
+                InternalAuditFingerprint.Fingerprint pre) {
             return new SubmitOutcome(false, code, message, pre, pre, null, null, false);
         }
     }
@@ -360,7 +366,9 @@ public final class BridgeSession {
         final long revision = frameSeq.incrementAndGet();
         final String actorId = playerIdOf(actor);
         final int seat = seatOf(actor);
-        final String preHash = InternalAuditFingerprint.ofGame(game, this);
+        // WS87: fail-closed fingerprint — invalid means UNKNOWN, never blocks parking.
+        final InternalAuditFingerprint.Fingerprint preHash =
+                InternalAuditFingerprint.ofGame(game, this);
         final DecisionFrame frame = new DecisionFrame(revision, kind, frameStatus, reason,
                 actorId, seat, options, preHash);
         final BlockingQueue<FrameAnswer> handoff = new ArrayBlockingQueue<>(1);
@@ -422,7 +430,7 @@ public final class BridgeSession {
         final DecisionFrame frame;
         final BlockingQueue<FrameAnswer> handoff;
         final DecisionFrame.Option option;
-        final String preHash;
+        final InternalAuditFingerprint.Fingerprint preHash;
         final String preObservationDigest;
         // Validation and handoff under the monitor; the settle wait runs WITHOUT the
         // monitor so the game thread can park its next frame (else self-deadlock).
@@ -513,13 +521,15 @@ public final class BridgeSession {
      * SESSION_CLOSED. Only OVER / genuine game-over settle as applied-terminal, and
      * only when neither FAILED nor CLOSED won the race. No timing dependence.
      */
-    private SubmitOutcome waitForSettle(long answeredRevision, String preHash,
+    private SubmitOutcome waitForSettle(long answeredRevision,
+            InternalAuditFingerprint.Fingerprint preHash,
             String preObservationDigest, String actorId) {
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
         while (System.nanoTime() < deadline) {
             final DecisionFrame frame = currentFrame;
             if (frame != null && frame.revision != answeredRevision) {
-                final String postHash = InternalAuditFingerprint.ofGame(game, this);
+                final InternalAuditFingerprint.Fingerprint postHash =
+                        InternalAuditFingerprint.ofGame(game, this);
                 final boolean executionOk = !isExecutionErrorBoundTo(actorId, answeredRevision);
                 audit("decision_settled", settleDetails(answeredRevision, frame.revision, preHash, postHash));
                 return SubmitOutcome.applied(preHash, postHash,
@@ -537,7 +547,8 @@ public final class BridgeSession {
                         "session is closed", preHash);
             }
             if (observed == Status.OVER || (game != null && game.isGameOver())) {
-                final String postHash = InternalAuditFingerprint.ofGame(game, this);
+                final InternalAuditFingerprint.Fingerprint postHash =
+                        InternalAuditFingerprint.ofGame(game, this);
                 audit("decision_terminal", settleDetails(answeredRevision, -1, preHash, postHash));
                 return SubmitOutcome.applied(preHash, postHash,
                         preObservationDigest, postObservationOrNull(actorId),
@@ -567,11 +578,17 @@ public final class BridgeSession {
         }
     }
 
-    private String currentHash() {
+    /**
+     * WS87: best-effort internal fingerprint for rejected submissions. ofGame
+     * never throws (invalid Fingerprint on any required-read failure), so this
+     * never masks the original rejection code with a fingerprint failure.
+     */
+    private InternalAuditFingerprint.Fingerprint currentHash() {
         try {
             return InternalAuditFingerprint.ofGame(game, this);
         } catch (Throwable e) {
-            return "internal-unavailable";
+            return InternalAuditFingerprint.Fingerprint.invalid(
+                    "currentHash-unavailable:" + e.getClass().getSimpleName());
         }
     }
 
@@ -602,7 +619,12 @@ public final class BridgeSession {
         details.put("status", frame.status.name());
         details.put("actor", frame.actorPlayerId);
         details.put("options", Integer.toString(frame.options.size()));
-        details.put("pre_hash", frame.preStateHash);
+        // WS87: invalid fingerprints render as non-hex UNAVAILABLE, never valid identity.
+        details.put("pre_hash", frame.preStateHash == null
+                ? "UNAVAILABLE:missing" : frame.preStateHash.toAuditString());
+        if (frame.preStateHash != null && !frame.preStateHash.valid) {
+            details.put("pre_hash_failure", frame.preStateHash.failure);
+        }
         if (!frame.reason.isEmpty()) {
             details.put("reason", frame.reason);
         }
@@ -619,12 +641,20 @@ public final class BridgeSession {
         return details;
     }
 
-    private Map<String, String> settleDetails(long answered, long next, String pre, String post) {
+    private Map<String, String> settleDetails(long answered, long next,
+            InternalAuditFingerprint.Fingerprint pre, InternalAuditFingerprint.Fingerprint post) {
         final Map<String, String> details = new LinkedHashMap<>();
         details.put("answered_revision", Long.toString(answered));
         details.put("next_revision", Long.toString(next));
-        details.put("pre_hash", pre);
-        details.put("post_hash", post);
+        // WS87: invalid fingerprints render as non-hex UNAVAILABLE, never valid identity.
+        details.put("pre_hash", pre == null ? "UNAVAILABLE:missing" : pre.toAuditString());
+        details.put("post_hash", post == null ? "UNAVAILABLE:missing" : post.toAuditString());
+        if (pre != null && !pre.valid) {
+            details.put("pre_hash_failure", pre.failure);
+        }
+        if (post != null && !post.valid) {
+            details.put("post_hash_failure", post.failure);
+        }
         return details;
     }
 }

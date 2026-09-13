@@ -126,7 +126,9 @@ public class BridgeEngineTest {
         Assert.assertNotNull(BridgeTestSupport.findOption(priority, "pass_priority"),
                 "every priority frame must offer pass");
         // Negative controls BEFORE any submission mutates state.
-        final String preHash = priority.preStateHash;
+        // WS87: validity-gated no-mutation evidence (invalid => UNKNOWN, never PASS).
+        final InternalAuditFingerprint.Fingerprint preHash = priority.preStateHash;
+        Assert.assertTrue(preHash.valid, "park-time fingerprint must be valid: " + preHash);
         DecisionFrame.Option first = BridgeTestSupport.findOption(priority, "pass_priority");
         Assert.assertNotNull(first);
         final BridgeSession.SubmitOutcome missingActor = session.submit(null,
@@ -150,12 +152,17 @@ public class BridgeEngineTest {
                 first.optionId, "pass_priority", priority.revision - 1);
         Assert.assertFalse(stale.applied);
         Assert.assertEquals(stale.errorCode, BridgeErrors.STALE_REVISION);
-        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), preHash,
+        final InternalAuditFingerprint.Fingerprint afterRejects =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(afterRejects.valid, "post-reject fingerprint must be valid: " + afterRejects);
+        Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(afterRejects, preHash),
                 "rejected submissions must not mutate state");
         // Real external pass advances the game.
         final BridgeSession.SubmitOutcome pass = BridgeTestSupport.submitPass(session, priority);
         Assert.assertTrue(pass.applied, "pass failed: " + pass.errorCode + " " + pass.errorMessage);
-        Assert.assertNotEquals(pass.postStateHash, pass.preStateHash);
+        Assert.assertTrue(pass.preStateHash.valid, "pre must be valid: " + pass.preStateHash);
+        Assert.assertTrue(pass.postStateHash.valid, "post must be valid: " + pass.postStateHash);
+        Assert.assertNotEquals(pass.postStateHash.digest, pass.preStateHash.digest);
         final DecisionFrame next = session.getCurrentFrame();
         Assert.assertNotNull(next);
         Assert.assertNotEquals(next.revision, priority.revision);
@@ -278,7 +285,8 @@ public class BridgeEngineTest {
             }
         }
         Assert.assertNotNull(p3option, "p3 must be offered by semantic identity");
-        final String preHash = starting.preStateHash;
+        final InternalAuditFingerprint.Fingerprint preHash = starting.preStateHash;
+        Assert.assertTrue(preHash.valid, "park-time fingerprint must be valid: " + preHash);
         final String wrongActor = starting.actorPlayerId.equals("p1") ? "p2" : "p1";
         final BridgeSession.SubmitOutcome wrong = session.submit(wrongActor, p3option.optionId,
                 "structural_decision", starting.revision);
@@ -292,7 +300,11 @@ public class BridgeEngineTest {
                 p3option.optionId, "structural_decision", null);
         Assert.assertFalse(missingRevision.applied);
         Assert.assertEquals(missingRevision.errorCode, BridgeErrors.MALFORMED_REQUEST);
-        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), preHash);
+        final InternalAuditFingerprint.Fingerprint afterRejectsStart =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(afterRejectsStart.valid, "post-reject fingerprint must be valid");
+        Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(
+                afterRejectsStart, preHash));
         // Explicit selection of p3 (not the first option): Forge must start with p3.
         final BridgeSession.SubmitOutcome outcome = session.submit(starting.actorPlayerId,
                 p3option.optionId, "structural_decision", starting.revision);
@@ -387,7 +399,9 @@ public class BridgeEngineTest {
         Assert.assertTrue(frame.reason.contains("TARGETING"), "reason: " + frame.reason);
         Assert.assertTrue(frame.options.isEmpty());
         Assert.assertEquals(frame.actorPlayerId, "p1");
-        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
+        final InternalAuditFingerprint.Fingerprint hash =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(hash.valid, "baseline fingerprint must be valid: " + hash);
         // R16: wrong actor learns nothing about the private frame.
         final BridgeSession.SubmitOutcome wrongActor = session.submit("p2", "opt-anything",
                 "pass_priority", frame.revision);
@@ -409,7 +423,11 @@ public class BridgeEngineTest {
         Assert.assertFalse(attempt.applied);
         Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
         Assert.assertTrue(attempt.errorMessage.contains("TARGETING"));
-        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash,
+        final InternalAuditFingerprint.Fingerprint afterTargetingRejects =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(afterTargetingRejects.valid, "post-reject fingerprint must be valid");
+        Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(
+                afterTargetingRejects, hash),
                 "rejected submissions must not mutate state");
         session.shutdown(5000);
     }
@@ -490,12 +508,18 @@ public class BridgeEngineTest {
             Assert.assertTrue(frame.reason.contains("NATIVE_ENUMERATION_FAILED"),
                     "reason: " + frame.reason);
             Assert.assertTrue(frame.options.isEmpty());
-            final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
+            final InternalAuditFingerprint.Fingerprint hash =
+                    InternalAuditFingerprint.ofGame(session.getGame(), session);
+            Assert.assertTrue(hash.valid, "baseline fingerprint must be valid: " + hash);
             final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
                     "pass_priority", frame.revision);
             Assert.assertFalse(attempt.applied);
             Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
-            Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash);
+            final InternalAuditFingerprint.Fingerprint afterEnumReject =
+                    InternalAuditFingerprint.ofGame(session.getGame(), session);
+            Assert.assertTrue(afterEnumReject.valid, "post-reject fingerprint must be valid");
+            Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(
+                    afterEnumReject, hash));
         } finally {
             ExternalPlayerController.enumerationFaultForTests = false;
             session.shutdown(5000);
@@ -563,12 +587,18 @@ public class BridgeEngineTest {
         Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
         Assert.assertTrue(frame.reason.contains("MANA_PAYMENT_CHOICE"), "reason: " + frame.reason);
         Assert.assertTrue(frame.options.isEmpty());
-        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
+        final InternalAuditFingerprint.Fingerprint hash =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(hash.valid, "baseline fingerprint must be valid: " + hash);
         final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
                 "cast_spell", frame.revision);
         Assert.assertFalse(attempt.applied);
         Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
-        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash);
+        final InternalAuditFingerprint.Fingerprint afterManaReject =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(afterManaReject.valid, "post-reject fingerprint must be valid");
+        Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(
+                afterManaReject, hash));
         session.shutdown(5000);
     }
 
@@ -610,7 +640,9 @@ public class BridgeEngineTest {
         BridgeTestSupport.startGame(engine, "fields-ok");
         final BridgeSession session = engine.sessionsForTests().get("fields-ok");
         final DecisionFrame priority = BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
-        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
+        final InternalAuditFingerprint.Fingerprint hash =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(hash.valid, "baseline fingerprint must be valid: " + hash);
         // submit_action missing fields.
         final JsonObject noActor = BridgeTestSupport.rpc(engine,
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"f1\","
@@ -656,7 +688,11 @@ public class BridgeEngineTest {
         BridgeTestSupport.assertOk(legal);
         Assert.assertTrue(legal.get("payload").getAsJsonObject()
                 .getAsJsonArray("actions").size() > 0);
-        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash,
+        final InternalAuditFingerprint.Fingerprint afterFieldRejects =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(afterFieldRejects.valid, "post-reject fingerprint must be valid");
+        Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(
+                afterFieldRejects, hash),
                 "rejected submissions must not mutate state");
         session.shutdown(5000);
     }
@@ -676,14 +712,20 @@ public class BridgeEngineTest {
         final DecisionFrame mulligan = BridgeTestSupport.awaitFrame(session, 60000);
         Assert.assertNotNull(mulligan);
         Assert.assertEquals(mulligan.kind, DecisionFrame.Kind.MULLIGAN);
-        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
+        final InternalAuditFingerprint.Fingerprint hash =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(hash.valid, "baseline fingerprint must be valid: " + hash);
         final JsonObject missing = BridgeTestSupport.rpc(engine,
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"mk1\","
                         + "\"message_type\":\"resolve_mulligan\",\"game_id\":\"nokeep-ok\","
                         + "\"payload\":{\"player_id\":\"" + mulligan.actorPlayerId + "\","
                         + "\"revision\":" + mulligan.revision + ",\"bottom_card_ids\":[]}}");
         BridgeTestSupport.assertError(missing, BridgeErrors.MALFORMED_REQUEST);
-        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash);
+        final InternalAuditFingerprint.Fingerprint afterMulliganReject =
+                InternalAuditFingerprint.ofGame(session.getGame(), session);
+        Assert.assertTrue(afterMulliganReject.valid, "post-reject fingerprint must be valid");
+        Assert.assertTrue(InternalAuditFingerprint.Fingerprint.sameValidIdentity(
+                afterMulliganReject, hash));
         session.shutdown(5000);
     }
 

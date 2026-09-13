@@ -75,14 +75,17 @@ public final class DecisionFrame {
     public final String actorPlayerId;
     public final int actorSeat;
     public final List<Option> options;
-    /** Internal audit fingerprint at park time (same-process only, never serialized). */
-    public final String preStateHash;
+    /**
+     * Internal audit fingerprint at park time (same-process only, never serialized).
+     * WS87: typed validity — invalid means UNKNOWN, never identity evidence.
+     */
+    public final InternalAuditFingerprint.Fingerprint preStateHash;
     public final long createdAtNanos;
 
     private final Map<String, Option> byId;
 
     DecisionFrame(long revision, Kind kind, Status status, String reason, String actorPlayerId,
-            int actorSeat, List<Option> options, String preStateHash) {
+            int actorSeat, List<Option> options, InternalAuditFingerprint.Fingerprint preStateHash) {
         this.revision = revision;
         this.kind = kind;
         this.status = status;
