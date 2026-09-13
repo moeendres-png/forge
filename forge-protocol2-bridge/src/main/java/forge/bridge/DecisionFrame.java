@@ -75,6 +75,7 @@ public final class DecisionFrame {
     public final String actorPlayerId;
     public final int actorSeat;
     public final List<Option> options;
+    /** Internal audit fingerprint at park time (same-process only, never serialized). */
     public final String preStateHash;
     public final long createdAtNanos;
 

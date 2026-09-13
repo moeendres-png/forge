@@ -348,7 +348,9 @@ public final class BridgeEngine {
             final List<String> sortedMain = new ArrayList<>(mainboard);
             Collections.sort(sortedMain);
             canonical.addAll(sortedMain);
-            deckHash = StateHash.sha256(String.join("\n", canonical));
+            // Deck-content identity (own deck list domain, not game hidden state).
+            // Throws (fail closed) rather than emitting a placeholder on SHA failure.
+            deckHash = ObservationDigest.sha256Hex(String.join("\n", canonical));
         }
         final String handleId = "deck-" + UUID.randomUUID();
         decks.put(handleId, new ImportedDeck(handleId, deckId, forgeDeck.getName(), deckHash,
@@ -531,14 +533,17 @@ public final class BridgeEngine {
         }
         final JsonObject payload = new JsonObject();
         try {
-            payload.add("state", StateProjection.gameState(session, observer));
+            // Single sanitized projection shared by state and bridge metadata, so
+            // the actor digest provably covers the exact bytes also emitted.
+            final JsonObject state = StateProjection.gameState(session, observer);
+            payload.add("state", state);
+            payload.add("bridge", StateProjection.bridgeMeta(session, observer, state));
         } catch (BridgeProjectionException e) {
             // R17: only the fixed schema field identifier leaves; the Throwable cause
             // stays internal (audit/stderr/test-visible exception object).
             return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
                     "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
         }
-        payload.add("bridge", StateProjection.bridgeMeta(session, observer));
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 
@@ -762,10 +767,18 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
                     "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
         }
+        // WS82: pre/post are the submitter's principal-visible observation digests
+        // (never privileged state). Missing or malformed digests fail closed: no
+        // fabricated hash is ever emitted.
+        if (!ObservationDigest.isHexDigest(outcome.preObservationDigest)
+                || !ObservationDigest.isHexDigest(outcome.postObservationDigest)) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
+                    "authoritative observation digest unavailable", (int) session.auditSize());
+        }
         final JsonObject decision = new JsonObject();
         decision.addProperty("executed", outcome.executionOk);
-        decision.addProperty("pre_state_hash", outcome.preStateHash);
-        decision.addProperty("post_state_hash", outcome.postStateHash);
+        decision.addProperty("pre_state_hash", outcome.preObservationDigest);
+        decision.addProperty("post_state_hash", outcome.postObservationDigest);
         // R14B: executionOk==false implies (by single-flight rendezvous plus revision
         // binding in waitForSettle) a fresh diagnostic from this submitter's own
         // execution, so carrying it here is actor-correct. Anything else stays internal.
@@ -787,7 +800,12 @@ public final class BridgeEngine {
         }
         final Game game = session.getGame();
         payload.addProperty("game_over", game != null && game.isGameOver());
-        payload.add("bridge", StateProjection.bridgeMeta(session, submitterId));
+        try {
+            payload.add("bridge", StateProjection.bridgeMeta(session, submitterId));
+        } catch (BridgeProjectionException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
+                    "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
+        }
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 

@@ -150,7 +150,7 @@ public class BridgeEngineTest {
                 first.optionId, "pass_priority", priority.revision - 1);
         Assert.assertFalse(stale.applied);
         Assert.assertEquals(stale.errorCode, BridgeErrors.STALE_REVISION);
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), preHash,
+        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), preHash,
                 "rejected submissions must not mutate state");
         // Real external pass advances the game.
         final BridgeSession.SubmitOutcome pass = BridgeTestSupport.submitPass(session, priority);
@@ -292,7 +292,7 @@ public class BridgeEngineTest {
                 p3option.optionId, "structural_decision", null);
         Assert.assertFalse(missingRevision.applied);
         Assert.assertEquals(missingRevision.errorCode, BridgeErrors.MALFORMED_REQUEST);
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), preHash);
+        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), preHash);
         // Explicit selection of p3 (not the first option): Forge must start with p3.
         final BridgeSession.SubmitOutcome outcome = session.submit(starting.actorPlayerId,
                 p3option.optionId, "structural_decision", starting.revision);
@@ -387,7 +387,7 @@ public class BridgeEngineTest {
         Assert.assertTrue(frame.reason.contains("TARGETING"), "reason: " + frame.reason);
         Assert.assertTrue(frame.options.isEmpty());
         Assert.assertEquals(frame.actorPlayerId, "p1");
-        final String hash = StateHash.ofGame(session.getGame(), session);
+        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
         // R16: wrong actor learns nothing about the private frame.
         final BridgeSession.SubmitOutcome wrongActor = session.submit("p2", "opt-anything",
                 "pass_priority", frame.revision);
@@ -409,7 +409,7 @@ public class BridgeEngineTest {
         Assert.assertFalse(attempt.applied);
         Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
         Assert.assertTrue(attempt.errorMessage.contains("TARGETING"));
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash,
+        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash,
                 "rejected submissions must not mutate state");
         session.shutdown(5000);
     }
@@ -490,12 +490,12 @@ public class BridgeEngineTest {
             Assert.assertTrue(frame.reason.contains("NATIVE_ENUMERATION_FAILED"),
                     "reason: " + frame.reason);
             Assert.assertTrue(frame.options.isEmpty());
-            final String hash = StateHash.ofGame(session.getGame(), session);
+            final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
             final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
                     "pass_priority", frame.revision);
             Assert.assertFalse(attempt.applied);
             Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
-            Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash);
+            Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash);
         } finally {
             ExternalPlayerController.enumerationFaultForTests = false;
             session.shutdown(5000);
@@ -563,12 +563,12 @@ public class BridgeEngineTest {
         Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
         Assert.assertTrue(frame.reason.contains("MANA_PAYMENT_CHOICE"), "reason: " + frame.reason);
         Assert.assertTrue(frame.options.isEmpty());
-        final String hash = StateHash.ofGame(session.getGame(), session);
+        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
         final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
                 "cast_spell", frame.revision);
         Assert.assertFalse(attempt.applied);
         Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash);
+        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash);
         session.shutdown(5000);
     }
 
@@ -610,7 +610,7 @@ public class BridgeEngineTest {
         BridgeTestSupport.startGame(engine, "fields-ok");
         final BridgeSession session = engine.sessionsForTests().get("fields-ok");
         final DecisionFrame priority = BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
-        final String hash = StateHash.ofGame(session.getGame(), session);
+        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
         // submit_action missing fields.
         final JsonObject noActor = BridgeTestSupport.rpc(engine,
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"f1\","
@@ -656,7 +656,7 @@ public class BridgeEngineTest {
         BridgeTestSupport.assertOk(legal);
         Assert.assertTrue(legal.get("payload").getAsJsonObject()
                 .getAsJsonArray("actions").size() > 0);
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash,
+        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash,
                 "rejected submissions must not mutate state");
         session.shutdown(5000);
     }
@@ -676,14 +676,14 @@ public class BridgeEngineTest {
         final DecisionFrame mulligan = BridgeTestSupport.awaitFrame(session, 60000);
         Assert.assertNotNull(mulligan);
         Assert.assertEquals(mulligan.kind, DecisionFrame.Kind.MULLIGAN);
-        final String hash = StateHash.ofGame(session.getGame(), session);
+        final String hash = InternalAuditFingerprint.ofGame(session.getGame(), session);
         final JsonObject missing = BridgeTestSupport.rpc(engine,
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"mk1\","
                         + "\"message_type\":\"resolve_mulligan\",\"game_id\":\"nokeep-ok\","
                         + "\"payload\":{\"player_id\":\"" + mulligan.actorPlayerId + "\","
                         + "\"revision\":" + mulligan.revision + ",\"bottom_card_ids\":[]}}");
         BridgeTestSupport.assertError(missing, BridgeErrors.MALFORMED_REQUEST);
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash);
+        Assert.assertEquals(InternalAuditFingerprint.ofGame(session.getGame(), session), hash);
         session.shutdown(5000);
     }
 

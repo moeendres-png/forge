@@ -57,26 +57,39 @@ public final class BridgeSession {
         public final boolean applied;
         public final String errorCode;
         public final String errorMessage;
+        /** Internal audit fingerprints (same-process only, never serialized). */
         public final String preStateHash;
         public final String postStateHash;
+        /**
+         * WS82 principal-visible observation digests for the submitter
+         * (derived from the submitter's sanitized observation; null unless
+         * applied with successfully captured observations).
+         */
+        public final String preObservationDigest;
+        public final String postObservationDigest;
         public final boolean executionOk;
 
         private SubmitOutcome(boolean applied, String errorCode, String errorMessage,
-                String preStateHash, String postStateHash, boolean executionOk) {
+                String preStateHash, String postStateHash,
+                String preObservationDigest, String postObservationDigest, boolean executionOk) {
             this.applied = applied;
             this.errorCode = errorCode;
             this.errorMessage = errorMessage;
             this.preStateHash = preStateHash;
             this.postStateHash = postStateHash;
+            this.preObservationDigest = preObservationDigest;
+            this.postObservationDigest = postObservationDigest;
             this.executionOk = executionOk;
         }
 
-        public static SubmitOutcome applied(String pre, String post, boolean executionOk) {
-            return new SubmitOutcome(true, null, null, pre, post, executionOk);
+        public static SubmitOutcome applied(String pre, String post,
+                String preObservationDigest, String postObservationDigest, boolean executionOk) {
+            return new SubmitOutcome(true, null, null, pre, post,
+                    preObservationDigest, postObservationDigest, executionOk);
         }
 
         public static SubmitOutcome rejected(String code, String message, String pre) {
-            return new SubmitOutcome(false, code, message, pre, pre, false);
+            return new SubmitOutcome(false, code, message, pre, pre, null, null, false);
         }
     }
 
@@ -347,7 +360,7 @@ public final class BridgeSession {
         final long revision = frameSeq.incrementAndGet();
         final String actorId = playerIdOf(actor);
         final int seat = seatOf(actor);
-        final String preHash = StateHash.ofGame(game, this);
+        final String preHash = InternalAuditFingerprint.ofGame(game, this);
         final DecisionFrame frame = new DecisionFrame(revision, kind, frameStatus, reason,
                 actorId, seat, options, preHash);
         final BlockingQueue<FrameAnswer> handoff = new ArrayBlockingQueue<>(1);
@@ -410,6 +423,7 @@ public final class BridgeSession {
         final BlockingQueue<FrameAnswer> handoff;
         final DecisionFrame.Option option;
         final String preHash;
+        final String preObservationDigest;
         // Validation and handoff under the monitor; the settle wait runs WITHOUT the
         // monitor so the game thread can park its next frame (else self-deadlock).
         synchronized (this) {
@@ -468,16 +482,27 @@ public final class BridgeSession {
                 return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
                         "action type " + actionType + " does not match option", currentHash());
             }
+            // WS82: capture the submitter's principal-visible observation digest
+            // BEFORE any mutation (consume/audit/handoff). Failure rejects here
+            // with the engine untouched and the option unconsumed (fail closed,
+            // retryable, no fabricated digest). Revision/actor binding above
+            // remains the sole submission authority.
+            try {
+                preObservationDigest = StateProjection.observationDigest(this, actorId);
+            } catch (BridgeProjectionException e) {
+                return SubmitOutcome.rejected(BridgeErrors.PROJECTION_FAILED,
+                        "authoritative state unreadable: " + e.getField(), currentHash());
+            }
             if (!option.consume()) {
                 return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
                         "option was already consumed", currentHash());
             }
-            preHash = StateHash.ofGame(game, this);
+            preHash = InternalAuditFingerprint.ofGame(game, this);
             audit("decision_submitted", submitDetails(frame, option, actorId));
             clearExecutionError();
             handoff.offer(FrameAnswer.select(option));
         }
-        return waitForSettle(frame.revision, preHash, actorId);
+        return waitForSettle(frame.revision, preHash, preObservationDigest, actorId);
     }
 
     /**
@@ -488,15 +513,17 @@ public final class BridgeSession {
      * SESSION_CLOSED. Only OVER / genuine game-over settle as applied-terminal, and
      * only when neither FAILED nor CLOSED won the race. No timing dependence.
      */
-    private SubmitOutcome waitForSettle(long answeredRevision, String preHash, String actorId) {
+    private SubmitOutcome waitForSettle(long answeredRevision, String preHash,
+            String preObservationDigest, String actorId) {
         final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
         while (System.nanoTime() < deadline) {
             final DecisionFrame frame = currentFrame;
             if (frame != null && frame.revision != answeredRevision) {
-                final String postHash = StateHash.ofGame(game, this);
+                final String postHash = InternalAuditFingerprint.ofGame(game, this);
                 final boolean executionOk = !isExecutionErrorBoundTo(actorId, answeredRevision);
                 audit("decision_settled", settleDetails(answeredRevision, frame.revision, preHash, postHash));
-                return SubmitOutcome.applied(preHash, postHash, executionOk);
+                return SubmitOutcome.applied(preHash, postHash,
+                        preObservationDigest, postObservationOrNull(actorId), executionOk);
             }
             final Status observed = status;
             if (observed == Status.FAILED) {
@@ -510,9 +537,10 @@ public final class BridgeSession {
                         "session is closed", preHash);
             }
             if (observed == Status.OVER || (game != null && game.isGameOver())) {
-                final String postHash = StateHash.ofGame(game, this);
+                final String postHash = InternalAuditFingerprint.ofGame(game, this);
                 audit("decision_terminal", settleDetails(answeredRevision, -1, preHash, postHash));
                 return SubmitOutcome.applied(preHash, postHash,
+                        preObservationDigest, postObservationOrNull(actorId),
                         !isExecutionErrorBoundTo(actorId, answeredRevision));
             }
             try {
@@ -526,11 +554,24 @@ public final class BridgeSession {
                 "engine did not reach the next decision within 15s", preHash);
     }
 
+    /**
+     * WS82 post-settlement observation capture. Null on projection failure so the
+     * response layer fails closed (no fabricated digest); the applied decision
+     * itself is unaffected.
+     */
+    private String postObservationOrNull(String actorId) {
+        try {
+            return StateProjection.observationDigest(this, actorId);
+        } catch (BridgeProjectionException e) {
+            return null;
+        }
+    }
+
     private String currentHash() {
         try {
-            return StateHash.ofGame(game, this);
+            return InternalAuditFingerprint.ofGame(game, this);
         } catch (Throwable e) {
-            return "unavailable";
+            return "internal-unavailable";
         }
     }
 

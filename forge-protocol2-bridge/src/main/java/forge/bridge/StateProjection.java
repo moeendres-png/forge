@@ -147,29 +147,65 @@ public final class StateProjection {
      * (fail_reason, last_execution_error) are NEVER exposed here: non-actors get
      * nothing, and the actor gets its execution diagnostic only when bound to its
      * current frame. Terminal status ("failed"/"aborted") is itself the public signal.
+     *
+     * <p>WS82: the actor's {@code state_hash} is an {@link ObservationDigest} over
+     * this principal's exact sanitized observation (the game state below plus the
+     * decision metadata here, digest field excluded). It depends on nothing outside
+     * the principal's authorized observation: no hidden hands/libraries, no
+     * face-down true names, no engine timestamps, no object identity. Projection
+     * or digest failure throws instead of emitting a fabricated value.
      */
     public static JsonObject bridgeMeta(BridgeSession session, String observerPlayerId) {
-        final JsonObject meta = new JsonObject();
-        meta.addProperty("session_status", session.getStatus().name());
+        return bridgeMeta(session, observerPlayerId, gameState(session, observerPlayerId));
+    }
+
+    /**
+     * Bridge metadata reusing an already-projected sanitized game state for the
+     * same observer (avoids double projection; the digest then provably covers
+     * the exact bytes also emitted). The supplied state must be this observer's
+     * sanitized projection; it is never reinterpreted here.
+     */
+    public static JsonObject bridgeMeta(BridgeSession session, String observerPlayerId,
+            JsonObject gameState) {
         final DecisionFrame frame = session.getCurrentFrame();
         final boolean actorScoped = observerPlayerId != null && frame != null
                 && observerPlayerId.equals(frame.actorPlayerId);
+        final JsonObject meta = metaWithoutDigest(session, observerPlayerId, frame, actorScoped);
+        if (actorScoped) {
+            meta.addProperty("state_hash", ObservationDigest.digestOf(gameState, meta));
+        } else {
+            // Non-actors receive no digest of any kind.
+            meta.add("state_hash", JsonNull.INSTANCE);
+        }
+        return meta;
+    }
+
+    /**
+     * Principal-visible observation digest for submission evidence (pre/post).
+     * Same preimage definition as {@link #bridgeMeta}: sanitized game state plus
+     * that principal's bridge metadata (digest field excluded). Any observer may
+     * be digested, including a submitter whose decision already settled (their
+     * post view then carries no pending decision); the result still depends only
+     * on their own authorized observation. Throws on any failure; never a sentinel.
+     */
+    public static String observationDigest(BridgeSession session, String observerPlayerId) {
+        final DecisionFrame frame = session.getCurrentFrame();
+        final boolean actorScoped = observerPlayerId != null && frame != null
+                && observerPlayerId.equals(frame.actorPlayerId);
+        return ObservationDigest.digestOf(gameState(session, observerPlayerId),
+                metaWithoutDigest(session, observerPlayerId, frame, actorScoped));
+    }
+
+    private static JsonObject metaWithoutDigest(BridgeSession session, String observerPlayerId,
+            DecisionFrame frame, boolean actorScoped) {
+        final JsonObject meta = new JsonObject();
+        meta.addProperty("session_status", session.getStatus().name());
         if (actorScoped) {
             meta.addProperty("revision", frame.revision);
             meta.add("pending_decision", decisionSummary(frame));
         } else {
             meta.addProperty("revision", -1);
             meta.add("pending_decision", JsonNull.INSTANCE);
-        }
-        if (actorScoped) {
-            try {
-                meta.addProperty("state_hash", StateHash.ofGame(session.getGame(), session));
-            } catch (Throwable t) {
-                meta.addProperty("state_hash", "unavailable");
-            }
-        } else {
-            // The digest covers private zones; only the actor may hold it.
-            meta.add("state_hash", JsonNull.INSTANCE);
         }
         if (actorScoped && session.isExecutionErrorBoundTo(observerPlayerId, frame.revision)) {
             meta.addProperty("last_execution_error", session.getLastExecutionError());
