@@ -368,12 +368,13 @@ public class BridgeEngineTest {
     }
 
     @Test(timeOut = 300000)
-    public void testConstructedUnsupportedTargeting() {
+    public void testConstructedUnsupportedSacrificeCost() {
         final BridgeTestSupport.ConstructedGame constructed =
                 BridgeTestSupport.buildConstructedGame("bolt-ok");
         final BridgeSession session = constructed.session;
         BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Hand);
-        BridgeTestSupport.addCard(constructed.game, 0, "Swords to Plowshares", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Altar's Reap", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Battlefield);
         for (int seat = 0; seat < 4; seat++) {
             for (int i = 0; i < 10; i++) {
                 BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
@@ -382,9 +383,11 @@ public class BridgeEngineTest {
         BridgeTestSupport.launchConstructed(constructed);
         final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 60000);
         Assert.assertNotNull(frame);
-        // The targeted spell is legal but not representable: fail closed, never filtered.
+        // The sacrifice-cost spell is legal but not yet representable: fail closed,
+        // never filtered. (Single-target selection now parks TARGET_SELECTION;
+        // sacrifice-cost framing is the remaining gap.)
         Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
-        Assert.assertTrue(frame.reason.contains("TARGETING"), "reason: " + frame.reason);
+        Assert.assertTrue(frame.reason.contains("COMPLEX_COST"), "reason: " + frame.reason);
         Assert.assertTrue(frame.options.isEmpty());
         Assert.assertEquals(frame.actorPlayerId, "p1");
         final String hash = StateHash.ofGame(session.getGame(), session);
@@ -393,8 +396,8 @@ public class BridgeEngineTest {
                 "pass_priority", frame.revision);
         Assert.assertFalse(wrongActor.applied);
         Assert.assertEquals(wrongActor.errorCode, BridgeErrors.WRONG_ACTOR);
-        Assert.assertFalse(wrongActor.errorMessage.contains("TARGETING"));
-        Assert.assertFalse(wrongActor.errorMessage.contains("Swords to Plowshares"));
+        Assert.assertFalse(wrongActor.errorMessage.contains("COMPLEX_COST"));
+        Assert.assertFalse(wrongActor.errorMessage.contains("Altar"));
         Assert.assertFalse(wrongActor.errorMessage.contains("revision"),
                 "no revision detail for wrong actor: " + wrongActor.errorMessage);
         // R16: stale revision from the correct actor learns nothing current.
@@ -402,13 +405,13 @@ public class BridgeEngineTest {
                 "pass_priority", frame.revision - 1);
         Assert.assertFalse(stale.applied);
         Assert.assertEquals(stale.errorCode, BridgeErrors.STALE_REVISION);
-        Assert.assertFalse(stale.errorMessage.contains("TARGETING"));
+        Assert.assertFalse(stale.errorMessage.contains("COMPLEX_COST"));
         // R16: correct actor at correct revision gets its own truthful fail-closed result.
         final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
                 "pass_priority", frame.revision);
         Assert.assertFalse(attempt.applied);
         Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
-        Assert.assertTrue(attempt.errorMessage.contains("TARGETING"));
+        Assert.assertTrue(attempt.errorMessage.contains("COMPLEX_COST"));
         Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash,
                 "rejected submissions must not mutate state");
         session.shutdown(5000);

@@ -270,12 +270,13 @@ public final class ExternalPlayerController extends PlayerController {
      *
      * <p>WS202: X/announce (X_ANNOUNCE frames), modal Charm (MODE_SELECTION frames),
      * alternative costs (COST_SELECTION frames) and pre-floated pool mana payment
-     * (MANA_PAYMENT frames) are now representable. Targeting, AnnounceType,
-     * optional costs, choice mana outputs and non-forced cost parts still fail
-     * closed until their families qualify.
+     * (MANA_PAYMENT frames) are now representable. Single-target selection
+     * (TARGET_SELECTION frames) is representable; multi-target/divided still fails
+     * closed. AnnounceType, optional costs, choice mana outputs and non-forced cost
+     * parts still fail closed until their families qualify.
      */
     static String classifyComplex(SpellAbility sa) {
-        if (sa.usesTargeting()) {
+        if (sa.usesTargeting() && !isSingleTargetRepresentable(sa)) {
             return "TARGETING";
         }
         if (sa.hasParam("AnnounceType")) {
@@ -307,6 +308,25 @@ public final class ExternalPlayerController extends PlayerController {
             }
         }
         return null;
+    }
+
+    /**
+     * WS202 single-target representability: exactly one required target, no
+     * division. Mirrors the chooseTargetsFor framing boundary. Any uncertainty
+     * (bounds unreadable, divided) resolves to not-representable.
+     */
+    static boolean isSingleTargetRepresentable(SpellAbility sa) {
+        try {
+            if (sa.getMinTargets() != 1 || sa.getMaxTargets() != 1) {
+                return false;
+            }
+            if (sa.isDividedAsYouChoose() || sa.hasParam("DividedUpTo")) {
+                return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /**
@@ -934,13 +954,127 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public boolean chooseTargetsFor(SpellAbility currentAbility) {
-        throw unsupported("chooseTargetsFor", "target selection is not represented");
+        // WS202: authoritative single-target selection via the engine's own
+        // TargetRestrictions.getAllCandidates (Rules-Core legal set). Multi-target
+        // (min/max != 1/1, divided, etc.) still fails closed with an explicit reason
+        // until combination-legality framing qualifies.
+        if (currentAbility == null) {
+            throw unsupported("chooseTargetsFor", "null ability");
+        }
+        final int min;
+        final int max;
+        try {
+            min = currentAbility.getMinTargets();
+            max = currentAbility.getMaxTargets();
+        } catch (Throwable t) {
+            throw unsupported("chooseTargetsFor", "target bounds unreadable");
+        }
+        if (min != 1 || max != 1) {
+            throw unsupported("chooseTargetsFor",
+                    "multi-target selection not yet represented (min=" + min + " max=" + max + ")");
+        }
+        if (currentAbility.isDividedAsYouChoose() || currentAbility.hasParam("DividedUpTo")) {
+            throw unsupported("chooseTargetsFor", "divided damage not yet represented");
+        }
+        final List<GameEntity> candidates;
+        try {
+            candidates = currentAbility.getTargetRestrictions().getAllCandidates(currentAbility);
+        } catch (Throwable t) {
+            throw unsupported("chooseTargetsFor", "candidate enumeration failed");
+        }
+        if (candidates == null || candidates.isEmpty()) {
+            return false;
+        }
+        // Filter to individually legal via canTarget (defense in depth; getAllCandidates
+        // already applies Restrictions, but canTarget covers fizzle/protection layers).
+        final List<GameEntity> legal = new ArrayList<>();
+        for (GameEntity entity : candidates) {
+            if (entity == null) {
+                continue;
+            }
+            try {
+                if (currentAbility.canTarget(entity)) {
+                    legal.add(entity);
+                }
+            } catch (Throwable t) {
+                throw unsupported("chooseTargetsFor", "target legality check failed");
+            }
+        }
+        if (legal.isEmpty()) {
+            return false;
+        }
+        final GameEntity chosen;
+        if (legal.size() == 1) {
+            chosen = legal.get(0);
+        } else {
+            chosen = parkSingleChoice(DecisionFrame.Kind.TARGET_SELECTION, "target", legal,
+                    item -> {
+                        try {
+                            if (item instanceof Card) {
+                                return "Target [" + ((Card) item).getName() + "]";
+                            }
+                            if (item instanceof Player) {
+                                return "Target [player " + session.playerIdOf((Player) item) + "]";
+                            }
+                            return "Target [" + item.toString() + "]";
+                        } catch (Throwable t) {
+                            return "Target";
+                        }
+                    }, "GAME_ENTITY");
+        }
+        try {
+            currentAbility.getTargets().add(chosen);
+        } catch (Throwable t) {
+            throw unsupported("chooseTargetsFor", "target assignment failed");
+        }
+        // Verify the engine accepts the assignment (MustTarget etc.).
+        try {
+            if (!forge.game.staticability.StaticAbilityMustTarget.meetsMustTargetRestriction(
+                    currentAbility)) {
+                currentAbility.resetTargets();
+                return false;
+            }
+        } catch (Throwable t) {
+            // If the restriction check itself fails, fail closed without targets.
+            try {
+                currentAbility.resetTargets();
+            } catch (Throwable inner) {
+                // Ignore reset failure; report assignment failure.
+            }
+            throw unsupported("chooseTargetsFor", "must-target check failed");
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        try {
+            details.put("target", chosen instanceof Card ? ((Card) chosen).getName() : chosen
+                    .toString());
+        } catch (Throwable t) {
+            details.put("target", "?");
+        }
+        session.audit("target_chosen", details);
+        return true;
     }
 
     @Override
     public Pair<SpellAbilityStackInstance, GameObject> chooseTarget(SpellAbility sa,
             List<Pair<SpellAbilityStackInstance, GameObject>> allTargets) {
-        throw unsupported("chooseTarget", "target selection is not represented");
+        if (allTargets == null || allTargets.isEmpty()) {
+            throw unsupported("chooseTarget", "empty target set");
+        }
+        if (allTargets.size() == 1) {
+            return allTargets.get(0);
+        }
+        return parkSingleChoice(DecisionFrame.Kind.TARGET_SELECTION, "target", allTargets, item -> {
+            try {
+                final GameObject target = item.getRight();
+                if (target instanceof Card) {
+                    return "Target [" + ((Card) target).getName() + "]";
+                }
+                return "Target [" + target.toString() + "]";
+            } catch (Throwable t) {
+                return "Target";
+            }
+        }, "TARGET_PAIR");
     }
 
     @Override
