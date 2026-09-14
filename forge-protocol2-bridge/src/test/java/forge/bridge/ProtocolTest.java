@@ -205,15 +205,19 @@ public class ProtocolTest {
         // Global action flags stay false: only a bounded subset is proven.
         Assert.assertFalse(caps.get("legal_actions_supported").getAsBoolean());
         Assert.assertFalse(caps.get("action_submission_supported").getAsBoolean());
-        Assert.assertFalse(caps.get("seed_supported").getAsBoolean());
+        // WS202: explicit seed binding, single-target selection, modes,
+        // trigger ordering, scenario bootstrap and priority concession now qualify.
+        Assert.assertTrue(caps.get("seed_supported").getAsBoolean());
         Assert.assertFalse(caps.get("replay_supported").getAsBoolean());
         // R14: external event export disabled for principal privacy (audit internal).
         Assert.assertFalse(caps.get("event_log_supported").getAsBoolean());
-        Assert.assertFalse(caps.get("target_selection_supported").getAsBoolean());
-        Assert.assertFalse(caps.get("mode_selection_supported").getAsBoolean());
-        Assert.assertFalse(caps.get("trigger_order_supported").getAsBoolean());
+        Assert.assertTrue(caps.get("target_selection_supported").getAsBoolean());
+        Assert.assertTrue(caps.get("mode_selection_supported").getAsBoolean());
+        Assert.assertTrue(caps.get("trigger_order_supported").getAsBoolean());
         Assert.assertFalse(caps.get("mulligan_supported").getAsBoolean());
-        Assert.assertFalse(caps.get("concede_supported").getAsBoolean());
+        Assert.assertTrue(caps.get("concede_supported").getAsBoolean());
+        Assert.assertTrue(caps.get("scenario_injection_supported").getAsBoolean());
+        Assert.assertTrue(caps.get("starting_state_injection_supported").getAsBoolean());
         Assert.assertEquals(caps.get("runtime_kind").getAsString(), "external_rules_engine");
         Assert.assertTrue(caps.get("notes").getAsJsonArray().size() > 0);
     }
