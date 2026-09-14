@@ -559,16 +559,47 @@ public class BridgeEngineTest {
             }
         }
         Assert.assertTrue(nativeLegal, "Grizzly Bears must be natively playable here");
-        // ...but the bridge fails the whole decision closed instead of filtering or paying.
-        Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
-        Assert.assertTrue(frame.reason.contains("MANA_PAYMENT_CHOICE"), "reason: " + frame.reason);
-        Assert.assertTrue(frame.options.isEmpty());
-        final String hash = StateHash.ofGame(session.getGame(), session);
-        final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
+        // WS202: nonzero mana is now representable via pre-floated pool payment.
+        // The frame is SUPPORTED with the spell offered; with no green mana floated
+        // the native pool deduction declines and the engine rolls back with no state
+        // change (fail-closed execution, not heuristic payment).
+        Assert.assertEquals(frame.status, DecisionFrame.Status.SUPPORTED);
+        DecisionFrame.Option bears = null;
+        for (DecisionFrame.Option option : frame.options) {
+            if ("Grizzly Bears".equals(option.sourceCardName)
+                    && "cast_spell".equals(option.actionType)) {
+                bears = option;
+                break;
+            }
+        }
+        Assert.assertNotNull(bears, "Grizzly Bears must be offered");
+        final BridgeSession.SubmitOutcome attempt = session.submit("p1", bears.optionId,
                 "cast_spell", frame.revision);
-        Assert.assertFalse(attempt.applied);
-        Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash);
+        // Either the engine declines (insufficient green, rolled back, no state change
+        // beyond a fresh parked frame) or the submission settles to the next frame;
+        // in both cases no heuristic mana is fabricated and the spell stays uncast.
+        if (!attempt.applied) {
+            Assert.assertEquals(attempt.errorCode, BridgeErrors.SESSION_FAILED,
+                    "declined execution must surface session failure, got " + attempt.errorCode);
+        } else {
+            Assert.assertFalse(attempt.executionOk,
+                    "unfunded Grizzly Bears must not execute cleanly");
+        }
+        boolean stillInHand = false;
+        for (Card card : session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Hand)) {
+            if (card.getName().equals("Grizzly Bears")) {
+                stillInHand = true;
+            }
+        }
+        Assert.assertTrue(stillInHand, "unfunded spell must remain in hand");
+        // Unknown-option negative control still fails closed on the current frame.
+        final DecisionFrame current = session.getCurrentFrame();
+        if (current != null && current.status == DecisionFrame.Status.SUPPORTED) {
+            final BridgeSession.SubmitOutcome unknown = session.submit(current.actorPlayerId,
+                    "opt-anything", "cast_spell", current.revision);
+            Assert.assertFalse(unknown.applied);
+            Assert.assertEquals(unknown.errorCode, BridgeErrors.UNKNOWN_OPTION);
+        }
         session.shutdown(5000);
     }
 
@@ -705,23 +736,13 @@ public class BridgeEngineTest {
         } catch (BridgeUnsupportedDecision e) {
             thrown++;
         }
-        try {
-            controller.confirmTrigger(null);
-        } catch (BridgeUnsupportedDecision e) {
-            thrown++;
-        }
-        try {
-            controller.orderSimultaneousSa(java.util.Arrays.asList(null, null));
-        } catch (BridgeUnsupportedDecision e) {
-            thrown++;
-        }
+        // WS202: confirmTrigger, orderSimultaneousSa and chooseNumber are now
+        // authoritative framed decisions (TRIGGER_PLAY/TRIGGER_ORDER/NUMBER_CHOICE)
+        // and must NOT throw when called from the game thread with a live session.
+        // Direct test-thread calls would park forever, so they are covered by
+        // dedicated framed-decision tests, not by throw assertions here.
         try {
             controller.tuckCardsViaMulligan(null, 1);
-        } catch (BridgeUnsupportedDecision e) {
-            thrown++;
-        }
-        try {
-            controller.chooseNumber(null, "t", 0, 1);
         } catch (BridgeUnsupportedDecision e) {
             thrown++;
         }
@@ -730,7 +751,7 @@ public class BridgeEngineTest {
         } catch (BridgeUnsupportedDecision e) {
             thrown++;
         }
-        Assert.assertEquals(thrown, 7, "every unrepresented callback must throw");
+        Assert.assertEquals(thrown, 4, "every still-unrepresented callback must throw");
         Assert.assertFalse(controller.isAI());
         constructed.session.shutdown(1000);
     }
@@ -801,10 +822,17 @@ public class BridgeEngineTest {
             }
         }
         Assert.assertTrue(nativeLegal, "Think Twice must be natively playable here");
-        // Nonzero flashback cost: seen, recognized, failed closed — never filtered.
-        Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
-        Assert.assertTrue(frame.reason.contains("MANA_PAYMENT_CHOICE"), "reason: " + frame.reason);
-        Assert.assertTrue(frame.options.isEmpty());
+        // WS202: nonzero flashback cost is now representable via pre-floated pool
+        // payment: seen, recognized, offered SUPPORTED (fail-closed only on execution
+        // when unfunded, never filtered).
+        Assert.assertEquals(frame.status, DecisionFrame.Status.SUPPORTED);
+        boolean offered = false;
+        for (DecisionFrame.Option option : frame.options) {
+            if ("Think Twice".equals(option.sourceCardName)) {
+                offered = true;
+            }
+        }
+        Assert.assertTrue(offered, "Think Twice flashback must be offered");
         session.shutdown(5000);
     }
 
