@@ -26,7 +26,10 @@ import java.util.concurrent.TimeUnit;
  * (stdout parses as JSON on every line) and the real pinned engine behind the pipe.
  */
 public class BridgeProtocolProcessTest {
-    private static final String ENGINE_SHA = "a37a865a53280dd8ad6fad3384d69611e8c5a42f";
+    // WS191: engine-identity fixture bound to this candidate's Rules-Core base
+    // (aa5c00aa). The child echoes FORGE_ENGINE_SHA; asserting the candidate base
+    // proves exact-revision binding on the integrated lineage.
+    private static final String ENGINE_SHA = "aa5c00aa32dfd40e213f223f8fd400c43daabb24";
 
     private static final class Child {
         final Process process;
