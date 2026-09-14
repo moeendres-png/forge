@@ -742,7 +742,9 @@ public class WS202ExecutableSurfaceTest {
         session.shutdown(5000);
     }
 
-    @Test(timeOut = 300000)
+    // H01b is run three times: a historical single timing flake is adjudicated
+    // by repetition plus process-isolated Humility evidence, never by rewording.
+    @Test(timeOut = 300000, invocationCount = 3)
     public void testH01CloneFirstRetainsBearThroughHumility() {
         final BridgeTestSupport.ConstructedGame constructed =
                 BridgeTestSupport.buildConstructedGame("ws202-h01b");
@@ -1173,6 +1175,16 @@ public class WS202ExecutableSurfaceTest {
             }
         }
         Assert.assertEquals(forceRoutes, 2, "hard cast and pitch must both be offered");
+        final List<String> routeLabels = new ArrayList<>();
+        for (DecisionFrame.Option o : forceFrame.options) {
+            if ("cast_spell".equals(o.actionType)
+                    && "Force of Will".equals(o.sourceCardName)) {
+                routeLabels.add(o.label);
+            }
+        }
+        Assert.assertEquals(routeLabels.size(), 2);
+        Assert.assertNotEquals(routeLabels.get(0), routeLabels.get(1),
+                "cost-text labels must discriminate the two routes");
         assertNegatives(session, forceFrame);
         submit(session, forceFrame, pickOption(forceFrame,
                 o -> "cast_spell".equals(o.actionType)
@@ -1240,6 +1252,26 @@ public class WS202ExecutableSurfaceTest {
         Assert.assertNotNull(exileFrame, "pitch exile selection never parked");
         // Frog and Ponder singletons plus the engine-allowed Decline route.
         Assert.assertEquals(exileFrame.options.size(), 3, "Frog, Ponder and Decline offered");
+        // Call-path evidence: the pitched Force sits on the stack with its
+        // target stored as the Elves stack SpellAbility (the shape
+        // CounterEffect.getTargetSpells resolves through). A raw Card here
+        // would fizzle silently at resolution.
+        forge.game.spellability.SpellAbility forceOnStack = null;
+        for (forge.game.spellability.SpellAbilityStackInstance si
+                : session.getGame().getStack()) {
+            if (si != null && si.getSpellAbility() != null
+                    && si.getSpellAbility().isSpell()
+                    && si.getSpellAbility().getHostCard() != null
+                    && "Force of Will".equals(
+                            si.getSpellAbility().getHostCard().getName())) {
+                forceOnStack = si.getSpellAbility();
+            }
+        }
+        Assert.assertNotNull(forceOnStack, "pitched Force must be on the stack");
+        final forge.game.spellability.SpellAbility countered =
+                forceOnStack.getTargets().getFirstTargetedSpell();
+        Assert.assertNotNull(countered, "Force must store a stack-spell target");
+        Assert.assertEquals(countered.getHostCard().getName(), "Llanowar Elves");
         // Resolve out: the targeted Elves is countered to p2's graveyard; Force
         // reaches p1's graveyard, Frog is exiled, p1 sits at 39.
         for (int i = 0; i < 40; i++) {
@@ -1282,6 +1314,27 @@ public class WS202ExecutableSurfaceTest {
         Assert.assertTrue(frogExiled, "pitched Frog must be exiled");
         Assert.assertEquals(session.getGame().getPlayers().get(0).getLife(), 39);
         session.shutdown(5000);
+    }
+
+    // ---- Controller identity: no AI pilot anywhere on the path ----
+
+    @Test(timeOut = 120000)
+    public void testAllControllersExternalNoAi() {
+        // Every seat's controller must be the external-decision boundary: no
+        // Forge AI (and no GUI pilot) ever owns a decision in these games.
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("ws202-noai");
+        BridgeTestSupport.addCard(constructed.game, 0, "Runeclaw Bear", ZoneType.Battlefield);
+        fillLibraries(constructed, 7);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(constructed.session, "p1", 12);
+        for (Player player : constructed.game.getPlayers()) {
+            Assert.assertTrue(
+                    player.getController() instanceof ExternalPlayerController,
+                    "seat controller must be external, got "
+                            + player.getController().getClass().getName());
+        }
+        constructed.session.shutdown(5000);
     }
 
     // ---- C03-shape: Fireball X multi-target ----
@@ -1602,6 +1655,137 @@ public class WS202ExecutableSurfaceTest {
         Assert.assertTrue(bearDead, "Bear must die");
         Assert.assertTrue(elvesDead, "Elves must die");
         Assert.assertNotNull(findBattlefield(session, 1, "Carnage Tyrant"), "Tyrant must live");
+        // Call-path evidence: the simultaneous graveyard move crossed
+        // orderMoveToZoneList and took the Human-faithful no-decision path
+        // (no ORDER_CHOICE parked, input order returned).
+        boolean zoneOrderBypassed = false;
+        for (BridgeSession.AuditEvent event : session.auditSnapshot()) {
+            if ("zone_order_unneeded".equals(event.type)
+                    && "p1".equals(event.details.get("actor"))
+                    && "Graveyard".equals(event.details.get("destination"))) {
+                zoneOrderBypassed = true;
+            }
+        }
+        Assert.assertTrue(zoneOrderBypassed, "E02 must audit the zone-order no-decision path");
+        session.shutdown(5000);
+    }
+
+    // ---- ORDER_CHOICE bounds plus ordered-graveyard framing (E02 companion) ----
+
+    @Test(timeOut = 300000)
+    public void testOrderMoveToZoneListBounds() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("ws202-order-bounds");
+        final BridgeSession session = constructed.session;
+        for (int i = 0; i < 5; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Battlefield);
+        }
+        fillLibraries(constructed, 7);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        final ExternalPlayerController controller =
+                (ExternalPlayerController) constructed.game.getPlayers().get(0).getController();
+        final List<Card> five = new ArrayList<>(constructed.game.getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield));
+        Assert.assertEquals(five.size(), 5);
+        final forge.game.card.CardCollection fiveView = new forge.game.card.CardCollection(five);
+        // Unordered graveyard, five cards: Human-faithful no-decision path,
+        // input view returned untouched.
+        final forge.game.card.CardCollectionView bypassed =
+                controller.orderMoveToZoneList(fiveView, ZoneType.Graveyard, null);
+        Assert.assertSame(bypassed, fiveView);
+        boolean bypassAudited = false;
+        for (BridgeSession.AuditEvent event : session.auditSnapshot()) {
+            if ("zone_order_unneeded".equals(event.type)) {
+                bypassAudited = true;
+            }
+        }
+        Assert.assertTrue(bypassAudited, "no-decision path must be audited");
+        // Library destination with five cards: genuine order decision, too many
+        // permutations to offer completely -> fail closed, nothing parked.
+        try {
+            controller.orderMoveToZoneList(fiveView, ZoneType.Library, null);
+            throw new AssertionError("five-card library ordering must fail closed");
+        } catch (BridgeUnsupportedDecision expected) {
+            Assert.assertTrue(expected.getMessage().contains("orderMoveToZoneList"));
+        }
+        // Singleton: no discretion, input returned.
+        final forge.game.card.CardCollection one =
+                new forge.game.card.CardCollection(five.subList(0, 1));
+        Assert.assertSame(controller.orderMoveToZoneList(one, ZoneType.Library, null), one);
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testOrderedGraveyardFramesChoice() {
+        // E02 board plus an opponent Bone Dancer (NeedsOrderedGraveyard):
+        // p1's simultaneous graveyard move becomes a genuine order decision.
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("ws202-ordered-grave");
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 1, "Carnage Tyrant", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Bone Dancer", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Runeclaw Bear", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Llanowar Elves", ZoneType.Battlefield);
+        fillLibraries(constructed, 7);
+        BridgeTestSupport.launchConstructed(constructed);
+        final DecisionFrame attackFrame = driveTo(session, "p2",
+                DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS, "DECLARE_ATTACKERS", 150);
+        // Tyrant-only: Bone Dancer stays back (its combined options also name
+        // the Tyrant, so exclude them explicitly).
+        submit(session, attackFrame, pickOption(attackFrame,
+                o -> o.label != null && o.label.contains("Carnage Tyrant")
+                        && o.label.contains("-> p1") && !o.label.contains("Bone Dancer"),
+                "Tyrant attacks p1 alone"));
+        final DecisionFrame blockFrame = driveTo(session, "p1",
+                DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS, null, 40);
+        submit(session, blockFrame, pickOption(blockFrame,
+                o -> o.label != null && o.label.contains("Runeclaw Bear")
+                        && o.label.contains("Llanowar Elves"),
+                "double block"));
+        assignDamage(session, "Carnage Tyrant", "Runeclaw Bear", 2);
+        assignDamage(session, "Carnage Tyrant", "Llanowar Elves", 1);
+        assignDamage(session, "Carnage Tyrant", "player p1", 4);
+        boolean orderAnswered = false;
+        for (int i = 0; i < 40; i++) {
+            if (orderAnswered && session.getGame().getPlayers().get(0).getLife() == 36) {
+                break;
+            }
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.kind == DecisionFrame.Kind.ORDER_CHOICE
+                    && parked.actorPlayerId.equals("p1")) {
+                Assert.assertEquals(parked.options.size(), 2, "Bear/Elves permutations");
+                assertNegatives(session, parked);
+                // Scripted pilot choice (recorded): Bear closest to graveyard top.
+                submit(session, parked, pickOption(parked,
+                        o -> o.label != null && o.label.indexOf("Runeclaw Bear") >= 0
+                                && o.label.indexOf("Llanowar Elves") >= 0
+                                && o.label.indexOf("Runeclaw Bear")
+                                        < o.label.indexOf("Llanowar Elves"),
+                        "Bear then Elves"));
+                orderAnswered = true;
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+            } else if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+            } else {
+                break;
+            }
+        }
+        Assert.assertTrue(orderAnswered, "ORDER_CHOICE never parked for ordered graveyard");
+        Assert.assertEquals(session.getGame().getPlayers().get(0).getLife(), 36);
+        boolean orderChosen = false;
+        for (BridgeSession.AuditEvent event : session.auditSnapshot()) {
+            if ("zone_order_chosen".equals(event.type)
+                    && "p1".equals(event.details.get("actor"))) {
+                orderChosen = true;
+            }
+        }
+        Assert.assertTrue(orderChosen, "framed zone order must be audited");
         session.shutdown(5000);
     }
 
@@ -2222,6 +2406,23 @@ public class WS202ExecutableSurfaceTest {
             }
         }
         Assert.assertTrue(plainsDiscarded, "Plains never reached graveyard as cost");
+        // Principal-scoping negative: as p2, p1's remaining hand is opaque.
+        final JsonObject foeView = StateProjection.gameState(session, "p2");
+        final StringBuilder foeHand = new StringBuilder();
+        for (Object element : foeView.getAsJsonArray("players")) {
+            final JsonObject playerState = (JsonObject) element;
+            if (!playerState.get("player_id").getAsString().equals("p1")) {
+                continue;
+            }
+            for (Object card : playerState.getAsJsonObject("zones").getAsJsonArray("hand")) {
+                final String shown = ((com.google.gson.JsonElement) card).getAsString();
+                Assert.assertEquals(shown, "<hidden>", "foe must not see p1 hand names");
+                foeHand.append(shown).append(';');
+            }
+        }
+        Assert.assertTrue(foeHand.length() > 0, "p1 must still hold cards for the foe view");
+        Assert.assertFalse(foeHand.toString().contains("Plains"));
+        Assert.assertFalse(foeHand.toString().contains("Tormenting Voice"));
         session.shutdown(5000);
     }
 
@@ -2414,6 +2615,9 @@ public class WS202ExecutableSurfaceTest {
         Assert.assertEquals(second, first, "same-seed twins must deal the same opening");
         final String third = runSeededTwin("ws202-twin-c", 777L);
         Assert.assertFalse(third.isEmpty());
+        // Distinct-seed control: varied 100-card pods deal different openings
+        // (collision chance is combinatorial noise, not determinism).
+        Assert.assertNotEquals(third, first, "distinct seeds must not deal identical openings");
     }
 
     private static String runSeededTwin(String gameId, long seed) throws Exception {
