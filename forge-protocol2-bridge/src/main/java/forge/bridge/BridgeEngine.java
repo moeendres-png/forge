@@ -662,6 +662,13 @@ public final class BridgeEngine {
                     "proposal requires non-empty actor_id, legal_action_id and action_type",
                     (int) session.auditSize());
         }
+        final Long value;
+        try {
+            value = BridgeProtocol.optLong(proposal, "value");
+        } catch (BridgeProtocol.MalformedRequestException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    e.getMessage(), (int) session.auditSize());
+        }
         final Long revision;
         try {
             revision = requiredRevision(request, request.payload, session);
@@ -669,7 +676,7 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
                     e.getMessage(), (int) session.auditSize());
         }
-        final BridgeSession.SubmitOutcome outcome = session.submit(actorId, legalActionId, actionType, revision);
+        final BridgeSession.SubmitOutcome outcome = session.submit(actorId, legalActionId, actionType, revision, value);
         return submitResponse(request, session, outcome, actorId);
     }
 

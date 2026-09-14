@@ -194,6 +194,11 @@ public final class StateProjection {
         summary.addProperty("status", frame.status.name());
         summary.addProperty("actor", frame.actorPlayerId);
         summary.addProperty("options", frame.options.size());
+        if (frame.freeInput) {
+            summary.addProperty("free_input", true);
+            summary.addProperty("input_min", frame.inputMin);
+            summary.addProperty("input_max", frame.inputMax);
+        }
         if (!frame.reason.isEmpty()) {
             summary.addProperty("reason", frame.reason);
         }
@@ -228,7 +233,15 @@ public final class StateProjection {
         action.add("target_ids", new JsonArray());
         action.add("allowed_target_ids", new JsonArray());
         action.add("modes", new JsonArray());
-        action.add("choices_schema", new JsonObject());
+        if (frame.freeInput && DecisionFrame.FREE_INPUT_ID.equals(option.optionId)) {
+            final JsonObject schema = new JsonObject();
+            schema.addProperty("type", "integer");
+            schema.addProperty("min", frame.inputMin);
+            schema.addProperty("max", frame.inputMax);
+            action.add("choices_schema", schema);
+        } else {
+            action.add("choices_schema", new JsonObject());
+        }
         action.add("cost", new JsonObject());
         final JsonObject metadata = new JsonObject();
         metadata.addProperty("revision", frame.revision);

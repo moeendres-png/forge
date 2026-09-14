@@ -366,6 +366,23 @@ public final class BridgeTestSupport {
         return card;
     }
 
+    /**
+     * Registers a real commander identity the same way engine game setup does
+     * (command-zone placement plus native commander registration, which creates
+     * the commander replacement effect and keys damage/casts/movement). The
+     * constructed-game starter bypasses Match variant setup, so tests needing
+     * true commander semantics establish it here through the same native calls.
+     */
+    public static Card addCommander(Game game, int seat, String commanderName) {
+        final Player owner = game.getPlayers().get(seat);
+        final PaperCard paper = StaticData.instance().getCommonCards().getCard(commanderName);
+        Assert.assertNotNull(paper, "commander must resolve: " + commanderName);
+        final Card commander = Card.fromPaperCard(paper, owner);
+        owner.getZone(ZoneType.Command).add(commander);
+        owner.addCommander(commander);
+        return commander;
+    }
+
     /** Custom starter: deterministic opening (no shuffle, no mulligan). */
     public static void launchConstructed(ConstructedGame constructed) {
         final Game game = constructed.game;

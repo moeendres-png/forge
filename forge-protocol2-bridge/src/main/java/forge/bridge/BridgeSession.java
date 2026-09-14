@@ -37,18 +37,24 @@ public final class BridgeSession {
     public static final class FrameAnswer {
         public final DecisionFrame.Option selected;
         public final boolean aborted;
+        public final Long inputValue;
 
-        private FrameAnswer(DecisionFrame.Option selected, boolean aborted) {
+        private FrameAnswer(DecisionFrame.Option selected, boolean aborted, Long inputValue) {
             this.selected = selected;
             this.aborted = aborted;
+            this.inputValue = inputValue;
         }
 
         public static FrameAnswer select(DecisionFrame.Option selected) {
-            return new FrameAnswer(selected, false);
+            return new FrameAnswer(selected, false, null);
         }
 
         public static FrameAnswer abort() {
-            return new FrameAnswer(null, true);
+            return new FrameAnswer(null, true, null);
+        }
+
+        public static FrameAnswer input(DecisionFrame.Option sentinel, long value) {
+            return new FrameAnswer(sentinel, false, Long.valueOf(value));
         }
     }
 
@@ -412,8 +418,48 @@ public final class BridgeSession {
         }
     }
 
-    private static String frameParkedEvent(DecisionFrame.Kind kind) {
-        switch (kind) {
+    /**
+     * Parks a validated free-integer input frame for the calling game thread:
+     * unbounded engine ranges the pilot answers with any integer inside native
+     * [min,max]. Same revision/actor/handoff discipline as {@link #parkFrame}.
+     */
+    public FrameAnswer parkFreeInput(DecisionFrame.Kind kind, Player actor, String actionType,
+            String title, long min, long max, List<DecisionFrame.Option> sentinel) {
+        final long revision = frameSeq.incrementAndGet();
+        final String actorId = playerIdOf(actor);
+        final int seat = seatOf(actor);
+        final String preHash = StateHash.ofGame(game, this);
+        final String reason = "integer input [" + min + ".." + max + "]";
+        final DecisionFrame frame = new DecisionFrame(revision, kind, DecisionFrame.Status.SUPPORTED,
+                reason, actorId, seat, sentinel, preHash, true, min, max);
+        final BlockingQueue<FrameAnswer> handoff = new ArrayBlockingQueue<>(1);
+        synchronized (this) {
+            currentFrame = frame;
+            currentHandoff = handoff;
+            currentHandoffRevision = revision;
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("revision", Long.toString(revision));
+        details.put("kind", kind.name());
+        details.put("status", DecisionFrame.Status.SUPPORTED.name());
+        details.put("actor", actorId);
+        details.put("options", "free-input");
+        details.put("pre_hash", preHash);
+        details.put("reason", reason);
+        audit(frameParkedEvent(kind), details);
+        try {
+            final FrameAnswer answer = handoff.take();
+            if (answer.aborted || (answer.selected == null && answer.inputValue == null)) {
+                throw new SessionAbortedException("frame " + revision + " aborted");
+            }
+            return answer;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SessionAbortedException("frame " + revision + " interrupted");
+        }
+    }
+
+    private static String frameParkedEvent(DecisionFrame.Kind kind) {        switch (kind) {
             case PRIORITY:
                 return "priority_frame_parked";
             case MULLIGAN:
@@ -449,10 +495,31 @@ public final class BridgeSession {
      * this boundary rejects nulls even if an upstream parser failed to enforce them).
      */
     public SubmitOutcome submit(String actorId, String optionId, String actionType, Long revision) {
+        return submit(actorId, optionId, actionType, revision, null);
+    }
+
+    /**
+     * Validates and delivers a proposal selection. All negative controls fire here,
+     * before the engine is touched. R16 ordering protects private frame metadata:
+     * after syntactic checks and lifecycle checks, the caller must prove actor and
+     * revision BEFORE any frame-specific status, reason, count or option data is
+     * exposed. Only the authenticated current actor ever sees UNSUPPORTED reasons.
+     * Actor, option, action type and revision are all mandatory (defense in depth:
+     * this boundary rejects nulls even if an upstream parser failed to enforce them).
+     *
+     * <p>Validated free-integer input frames (unbounded X / numeric ranges) take
+     * a pilot-supplied {@code value} bound by native engine bounds instead of an
+     * enumerated option: the value must be present and inside
+     * [{@code inputMin},{@code inputMax}], and the frame answers exactly once.
+     * Any {@code value} on an enumerated frame is malformed.
+     */
+    public SubmitOutcome submit(String actorId, String optionId, String actionType, Long revision,
+            Long value) {
         final DecisionFrame frame;
         final BlockingQueue<FrameAnswer> handoff;
         final DecisionFrame.Option option;
         final String preHash;
+        final FrameAnswer answer;
         // Validation and handoff under the monitor; the settle wait runs WITHOUT the
         // monitor so the game thread can park its next frame (else self-deadlock).
         synchronized (this) {
@@ -511,14 +578,39 @@ public final class BridgeSession {
                 return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
                         "action type " + actionType + " does not match option", currentHash());
             }
-            if (!option.consume()) {
-                return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
-                        "option was already consumed", currentHash());
+            if (frame.freeInput) {
+                if (value == null) {
+                    return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                            "value is required for revision " + frame.revision, currentHash());
+                }
+                if (value.longValue() < frame.inputMin || value.longValue() > frame.inputMax) {
+                    return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
+                            "value out of range for revision " + frame.revision, currentHash());
+                }
+                if (!frame.markAnswered()) {
+                    return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
+                            "option was already consumed", currentHash());
+                }
+                preHash = StateHash.ofGame(game, this);
+                audit("decision_submitted", submitDetails(frame, option, actorId));
+                clearExecutionError();
+                answer = FrameAnswer.input(option, value.longValue());
+                handoff.offer(answer);
+            } else {
+                if (value != null) {
+                    return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                            "value is not accepted for revision " + frame.revision, currentHash());
+                }
+                if (!option.consume()) {
+                    return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
+                            "option was already consumed", currentHash());
+                }
+                preHash = StateHash.ofGame(game, this);
+                audit("decision_submitted", submitDetails(frame, option, actorId));
+                clearExecutionError();
+                answer = FrameAnswer.select(option);
+                handoff.offer(answer);
             }
-            preHash = StateHash.ofGame(game, this);
-            audit("decision_submitted", submitDetails(frame, option, actorId));
-            clearExecutionError();
-            handoff.offer(FrameAnswer.select(option));
         }
         return waitForSettle(frame.revision, preHash, actorId);
     }

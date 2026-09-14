@@ -135,6 +135,23 @@ public final class BridgeProtocol {
         return obj.get(key).getAsJsonObject();
     }
 
+    /**
+     * Optional integer proposal values (validated free-integer input frames).
+     * Returns null when absent or null; throws MalformedRequestException when
+     * present but not an integer, so non-integer values fail closed loudly.
+     */
+    public static Long optLong(JsonObject obj, String key)
+            throws MalformedRequestException {
+        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(obj.get(key).getAsLong());
+        } catch (Exception e) {
+            throw new MalformedRequestException(key + " must be an integer");
+        }
+    }
+
     public static String ok(String requestId, JsonObject payload, int engineEventOffset) {
         final JsonObject response = base(requestId, true, "ok", payload, engineEventOffset);
         response.addProperty("ok", true);

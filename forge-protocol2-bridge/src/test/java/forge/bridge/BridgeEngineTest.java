@@ -663,6 +663,7 @@ public class BridgeEngineTest {
         final BridgeSession session = constructed.session;
         BridgeTestSupport.addCard(constructed.game, 0, "Grizzly Bears", ZoneType.Hand);
         BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Battlefield);
         for (int seat = 0; seat < 4; seat++) {
             for (int i = 0; i < 5; i++) {
                 BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
@@ -685,10 +686,10 @@ public class BridgeEngineTest {
             }
         }
         Assert.assertTrue(nativeLegal, "Grizzly Bears must be natively playable here");
-        // WS202: nonzero mana is now representable via pre-floated pool payment.
-        // The frame is SUPPORTED with the spell offered; with no green mana floated
-        // the native pool deduction declines and the engine rolls back with no state
-        // change (fail-closed execution, not heuristic payment).
+        // WS202: nonzero mana pays from the pool with framed mid-payment taps.
+        // The frame is SUPPORTED with the spell offered; the Plains tap is then
+        // offered mid-payment, and the pilot's explicit Decline rolls back with
+        // no state change (no heuristic tap, no fabricated payment).
         Assert.assertEquals(frame.status, DecisionFrame.Status.SUPPORTED);
         DecisionFrame.Option bears = null;
         for (DecisionFrame.Option option : frame.options) {
@@ -701,24 +702,48 @@ public class BridgeEngineTest {
         Assert.assertNotNull(bears, "Grizzly Bears must be offered");
         final BridgeSession.SubmitOutcome attempt = session.submit("p1", bears.optionId,
                 "cast_spell", frame.revision);
-        // Either the engine declines (insufficient green, rolled back, no state change
-        // beyond a fresh parked frame) or the submission settles to the next frame;
-        // in both cases no heuristic mana is fabricated and the spell stays uncast.
-        if (!attempt.applied) {
-            Assert.assertEquals(attempt.errorCode, BridgeErrors.SESSION_FAILED,
-                    "declined execution must surface session failure, got " + attempt.errorCode);
-        } else {
-            Assert.assertFalse(attempt.executionOk,
-                    "unfunded Grizzly Bears must not execute cleanly");
+        Assert.assertTrue(attempt.applied, "cast submit failed: " + attempt.errorCode);
+        final DecisionFrame tapFrame = BridgeTestSupport.awaitFrame(session, 15000);
+        Assert.assertNotNull(tapFrame);
+        Assert.assertEquals(tapFrame.kind, DecisionFrame.Kind.MANA_PAYMENT);
+        Assert.assertEquals(tapFrame.actorPlayerId, "p1");
+        DecisionFrame.Option tapPlains = null;
+        DecisionFrame.Option decline = null;
+        for (DecisionFrame.Option option : tapFrame.options) {
+            if ("tap_mana_source".equals(option.actionType)
+                    && option.label != null && option.label.contains("Plains")) {
+                tapPlains = option;
+            }
+            if ("tap_mana_source".equals(option.actionType) && option.confirmValue != null
+                    && !option.confirmValue.booleanValue()) {
+                decline = option;
+            }
         }
+        Assert.assertNotNull(tapPlains, "Plains tap must be offered mid-payment");
+        Assert.assertNotNull(decline, "explicit Decline must be offered");
+        final BridgeSession.SubmitOutcome wrongActor = session.submit("p2", tapPlains.optionId,
+                tapPlains.actionType, tapFrame.revision);
+        Assert.assertFalse(wrongActor.applied);
+        Assert.assertEquals(wrongActor.errorCode, BridgeErrors.WRONG_ACTOR);
+        final BridgeSession.SubmitOutcome declined = session.submit("p1", decline.optionId,
+                decline.actionType, tapFrame.revision);
+        Assert.assertTrue(declined.applied, "decline failed: " + declined.errorCode);
         boolean stillInHand = false;
         for (Card card : session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Hand)) {
             if (card.getName().equals("Grizzly Bears")) {
                 stillInHand = true;
             }
         }
-        Assert.assertTrue(stillInHand, "unfunded spell must remain in hand");
-        // Unknown-option negative control still fails closed on the current frame.
+        Assert.assertTrue(stillInHand, "declined spell must remain in hand");
+        boolean plainsUntapped = false;
+        for (Card card : session.getGame().getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if (card.getName().equals("Plains") && !card.isTapped()) {
+                plainsUntapped = true;
+            }
+        }
+        Assert.assertTrue(plainsUntapped, "declined tap must leave the Plains untapped");
+        // Unknown-option negative control still fails closed on the live frame.
         final DecisionFrame current = session.getCurrentFrame();
         if (current != null && current.status == DecisionFrame.Status.SUPPORTED) {
             final BridgeSession.SubmitOutcome unknown = session.submit(current.actorPlayerId,

@@ -41,6 +41,7 @@ public final class ScenarioBootstrap {
         public final List<Placement> battlefield = new ArrayList<>();
         public final Map<String, List<String>> hands = new LinkedHashMap<>();
         public final Map<String, Integer> life = new LinkedHashMap<>();
+        public final Map<String, Map<String, Integer>> commanderDamage = new LinkedHashMap<>();
     }
 
     /** One battlefield placement: card name plus owner/controller seat ids. */
@@ -48,11 +49,18 @@ public final class ScenarioBootstrap {
         public final String cardName;
         public final String controllerId;
         public final String ownerId;
+        public final boolean tapped;
+        public final Map<String, Integer> counters;
+        public final String attachedTo;
 
-        Placement(String cardName, String controllerId, String ownerId) {
+        Placement(String cardName, String controllerId, String ownerId, boolean tapped,
+                Map<String, Integer> counters, String attachedTo) {
             this.cardName = cardName;
             this.controllerId = controllerId;
             this.ownerId = ownerId;
+            this.tapped = tapped;
+            this.counters = counters;
+            this.attachedTo = attachedTo;
         }
     }
 
@@ -99,8 +107,42 @@ public final class ScenarioBootstrap {
                 if (controller.isEmpty()) {
                     throw new IllegalArgumentException("battlefield entry missing controller");
                 }
+                boolean tapped = false;
+                if (entry.has("tapped") && !entry.get("tapped").isJsonNull()) {
+                    try {
+                        tapped = entry.get("tapped").getAsBoolean();
+                    } catch (Exception e) {
+                        throw new IllegalArgumentException("tapped must be a boolean");
+                    }
+                }
+                final Map<String, Integer> counters = new LinkedHashMap<>();
+                if (entry.has("counters") && !entry.get("counters").isJsonNull()) {
+                    if (!entry.get("counters").isJsonObject()) {
+                        throw new IllegalArgumentException("counters must be an object");
+                    }
+                    for (Map.Entry<String, JsonElement> counter
+                            : entry.getAsJsonObject("counters").entrySet()) {
+                        try {
+                            final int amount = counter.getValue().getAsInt();
+                            if (amount < 0) {
+                                throw new IllegalArgumentException("counter amounts must be >= 0");
+                            }
+                            if (amount > 0) {
+                                counters.put(counter.getKey(), amount);
+                            }
+                        } catch (IllegalArgumentException e) {
+                            throw e;
+                        } catch (Exception e) {
+                            throw new IllegalArgumentException("counter amounts must be integers");
+                        }
+                    }
+                }
+                String attachedTo = "";
+                if (entry.has("attached_to") && !entry.get("attached_to").isJsonNull()) {
+                    attachedTo = cleanCardName(optString(entry, "attached_to", ""));
+                }
                 plan.battlefield.add(new Placement(name, controller, owner.isEmpty()
-                        ? controller : owner));
+                        ? controller : owner, tapped, counters, attachedTo));
             }
         }
         if (neutral.has("hands") && neutral.get("hands").isJsonObject()) {
@@ -131,6 +173,47 @@ public final class ScenarioBootstrap {
                     plan.life.put(entry.getKey(), entry.getValue().getAsInt());
                 } catch (Exception e) {
                     throw new IllegalArgumentException("life must be integers");
+                }
+            }
+        }
+        if (neutral.has("players") && neutral.get("players").isJsonArray()) {
+            for (JsonElement element : neutral.getAsJsonArray("players")) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                final JsonObject playerEntry = element.getAsJsonObject();
+                final String playerId = optString(playerEntry, "id", "");
+                if (playerId.isEmpty() || !playerEntry.has("commander_damage_taken")
+                        || playerEntry.get("commander_damage_taken").isJsonNull()) {
+                    continue;
+                }
+                if (!playerEntry.get("commander_damage_taken").isJsonObject()) {
+                    throw new IllegalArgumentException("commander_damage_taken must be an object");
+                }
+                final Map<String, Integer> damage = new LinkedHashMap<>();
+                for (Map.Entry<String, JsonElement> dealt
+                        : playerEntry.getAsJsonObject("commander_damage_taken").entrySet()) {
+                    final String commanderName = cleanCardName(dealt.getKey());
+                    if (commanderName.isEmpty()) {
+                        continue;
+                    }
+                    try {
+                        final int amount = dealt.getValue().getAsInt();
+                        if (amount < 0) {
+                            throw new IllegalArgumentException(
+                                    "commander damage must be >= 0");
+                        }
+                        if (amount > 0) {
+                            damage.put(commanderName, amount);
+                        }
+                    } catch (IllegalArgumentException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new IllegalArgumentException("commander damage must be integers");
+                    }
+                }
+                if (!damage.isEmpty()) {
+                    plan.commanderDamage.put(playerId, damage);
                 }
             }
         }
@@ -194,14 +277,21 @@ public final class ScenarioBootstrap {
                 }
             }
         }
-        // Battlefield placements: prefer library identities, else create.
+        // Battlefield placements: real commander identities first (command zone),
+        // then library identities (preserving singleton deck identity), else create
+        // via Card.fromPaperCard for genuinely absent cards (basic fill or slot
+        // cards outside the 100).
+        final List<Card> placed = new ArrayList<>();
         for (Placement placement : plan.battlefield) {
             final Player owner = session.playerById(placement.ownerId);
             final Player controller = session.playerById(placement.controllerId);
             if (owner == null || controller == null) {
                 throw new IllegalStateException("unknown placement player");
             }
-            Card card = takeFromLibrary(owner, placement.cardName);
+            Card card = takeCommander(owner, placement.cardName);
+            if (card == null) {
+                card = takeFromLibrary(owner, placement.cardName);
+            }
             if (card == null) {
                 card = createCard(owner, placement.cardName);
             }
@@ -210,10 +300,69 @@ public final class ScenarioBootstrap {
             } catch (Throwable t) {
                 throw new IllegalStateException("battlefield placement failed");
             }
+            if (placement.tapped) {
+                try {
+                    card.setTapped(true);
+                } catch (Throwable t) {
+                    throw new IllegalStateException("tap failed");
+                }
+            }
+            for (Map.Entry<String, Integer> counter : placement.counters.entrySet()) {
+                final forge.game.card.CounterType counterType;
+                try {
+                    counterType = forge.game.card.CounterEnumType.valueOf(counter.getKey());
+                } catch (Exception e) {
+                    throw new IllegalStateException("unknown counter: " + counter.getKey());
+                }
+                try {
+                    card.addCounterInternal(counterType, counter.getValue(), null, false, null,
+                            null);
+                } catch (Throwable t) {
+                    throw new IllegalStateException("counter placement failed");
+                }
+            }
+            placed.add(card);
             final Map<String, String> details = new LinkedHashMap<>();
             details.put("card", placement.cardName);
             details.put("controller", placement.controllerId);
+            details.put("owner", placement.ownerId);
             session.audit("scenario_placed_battlefield", details);
+        }
+        // Aura attachments resolve after all placements so named hosts exist.
+        // Uses the native attach path (legality + timestamps); the attach target
+        // is matched by card name among the controller's battlefield cards.
+        for (int i = 0; i < plan.battlefield.size(); i++) {
+            final Placement placement = plan.battlefield.get(i);
+            if (placement.attachedTo == null || placement.attachedTo.isEmpty()) {
+                continue;
+            }
+            final Card aura = placed.get(i);
+            final Player controller = session.playerById(placement.controllerId);
+            Card host = null;
+            try {
+                for (Card candidate : controller.getCardsIn(ZoneType.Battlefield)) {
+                    if (candidate != null && candidate != aura
+                            && placement.attachedTo.equals(candidate.getName())) {
+                        host = candidate;
+                        break;
+                    }
+                }
+            } catch (Throwable t) {
+                throw new IllegalStateException("attach host lookup failed");
+            }
+            if (host == null) {
+                throw new IllegalStateException(
+                        "attach host not on battlefield: " + placement.attachedTo);
+            }
+            try {
+                aura.attachToEntity(host, null);
+            } catch (Throwable t) {
+                throw new IllegalStateException("attach failed");
+            }
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("card", placement.cardName);
+            details.put("attached_to", placement.attachedTo);
+            session.audit("scenario_attached", details);
         }
         // Scripted hands: prefer library identities, else create.
         for (Map.Entry<String, List<String>> entry : plan.hands.entrySet()) {
@@ -255,6 +404,97 @@ public final class ScenarioBootstrap {
                 throw new IllegalStateException("life setup failed");
             }
         }
+        // Commander damage seeding resolves commander identities across all
+        // players' native commander collections first (identity-correct), then
+        // any battlefield card of that name. Audited per player/commander.
+        for (Map.Entry<String, Map<String, Integer>> entry : plan.commanderDamage.entrySet()) {
+            final Player player = session.playerById(entry.getKey());
+            if (player == null) {
+                throw new IllegalStateException("unknown damage player");
+            }
+            for (Map.Entry<String, Integer> dealt : entry.getValue().entrySet()) {
+                final Card commander = findCommander(game, session, dealt.getKey());
+                if (commander == null) {
+                    throw new IllegalStateException(
+                            "commander not found: " + dealt.getKey());
+                }
+                try {
+                    player.addCommanderDamage(commander, dealt.getValue().intValue());
+                } catch (Throwable t) {
+                    throw new IllegalStateException("commander damage setup failed");
+                }
+                final Map<String, String> details = new LinkedHashMap<>();
+                details.put("player", entry.getKey());
+                details.put("commander", dealt.getKey());
+                details.put("damage", dealt.getValue().toString());
+                session.audit("scenario_commander_damage", details);
+            }
+        }
+        final Map<String, String> applied = new LinkedHashMap<>();
+        applied.put("battlefield", Integer.toString(plan.battlefield.size()));
+        applied.put("hands", Integer.toString(plan.hands.size()));
+        applied.put("life", Integer.toString(plan.life.size()));
+        applied.put("commander_damage", Integer.toString(plan.commanderDamage.size()));
+        session.audit("scenario_applied", applied);
+    }
+
+    /**
+     * Real commander identity first: the same Card object the engine keys
+     * commander damage, casts and SBA movement on. Falls back to any battlefield
+     * card of that name.
+     */
+    private static Card findCommander(Game game, BridgeSession session, String commanderName) {
+        try {
+            for (Player player : session.registryPlayers()) {
+                for (Card commander : player.getCommanders()) {
+                    try {
+                        if (commanderName.equals(commander.getName())) {
+                            return commander;
+                        }
+                    } catch (Throwable t) {
+                        continue;
+                    }
+                }
+            }
+            for (Player player : session.registryPlayers()) {
+                for (Card card : player.getCardsIn(ZoneType.Battlefield)) {
+                    try {
+                        if (commanderName.equals(card.getName())) {
+                            return card;
+                        }
+                    } catch (Throwable t) {
+                        continue;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+        return null;
+    }
+
+    /**
+     * Real commander identity from the owner's native commander collection, so
+     * placement preserves commander movement/tax/damage semantics. Anything
+     * else stays untouched in the command zone.
+     */
+    private static Card takeCommander(Player owner, String cardName) {
+        try {
+            for (Card commander : owner.getCommanders()) {
+                try {
+                    if (cardName.equals(commander.getName())
+                            && owner.getZone(ZoneType.Command).contains(commander)) {
+                        owner.getZone(ZoneType.Command).remove(commander);
+                        return commander;
+                    }
+                } catch (Throwable t) {
+                    continue;
+                }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+        return null;
     }
 
     private static Card takeFromLibrary(Player owner, String cardName) {

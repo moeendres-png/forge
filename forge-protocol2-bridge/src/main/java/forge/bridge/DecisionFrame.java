@@ -60,10 +60,17 @@ public final class DecisionFrame {
         UNSUPPORTED
     }
 
+    /**
+     * Stable sentinel action id for validated free-integer input frames. The id
+     * is predictable by design: authority comes from the actor/revision binding
+     * plus native range validation of the pilot-supplied value, never from id
+     * secrecy (which only guards enumerated native bindings).
+     */
+    public static final String FREE_INPUT_ID = "free-input";
+
     /** One externally selectable option. */
     public static final class Option {
-        public final String optionId;
-        public final String actionType;
+        public final String optionId;        public final String actionType;
         public final String label;
         public final String sourceCardName;
         public final SpellAbility nativeBinding;
@@ -88,7 +95,16 @@ public final class DecisionFrame {
                 SpellAbility nativeBinding, Player nativePlayer, boolean isPass, boolean isKeep,
                 boolean isConcede, Boolean confirmValue, Integer intValue, String stringValue,
                 Object nativePayload, String payloadKind) {
-            this.optionId = "opt-" + UUID.randomUUID();
+            this(null, actionType, label, sourceCardName, nativeBinding, nativePlayer, isPass,
+                    isKeep, isConcede, confirmValue, intValue, stringValue, nativePayload,
+                    payloadKind);
+        }
+
+        Option(String optionId, String actionType, String label, String sourceCardName,
+                SpellAbility nativeBinding, Player nativePlayer, boolean isPass, boolean isKeep,
+                boolean isConcede, Boolean confirmValue, Integer intValue, String stringValue,
+                Object nativePayload, String payloadKind) {
+            this.optionId = optionId == null ? "opt-" + UUID.randomUUID() : optionId;
             this.actionType = actionType;
             this.label = label;
             this.sourceCardName = sourceCardName;
@@ -127,11 +143,29 @@ public final class DecisionFrame {
     public final List<Option> options;
     public final String preStateHash;
     public final long createdAtNanos;
+    /**
+     * Validated free-integer input (unbounded X / numeric ranges). When true,
+     * the frame carries only the sentinel option and the pilot submits an
+     * integer value bound by {@link #inputMin}/{@link #inputMax} (native
+     * engine bounds); anything outside fails closed. Enumerated frames leave
+     * this false.
+     */
+    public final boolean freeInput;
+    public final long inputMin;
+    public final long inputMax;
+    private boolean answered;
 
     private final Map<String, Option> byId;
 
     DecisionFrame(long revision, Kind kind, Status status, String reason, String actorPlayerId,
             int actorSeat, List<Option> options, String preStateHash) {
+        this(revision, kind, status, reason, actorPlayerId, actorSeat, options, preStateHash,
+                false, 0L, 0L);
+    }
+
+    DecisionFrame(long revision, Kind kind, Status status, String reason, String actorPlayerId,
+            int actorSeat, List<Option> options, String preStateHash, boolean freeInput,
+            long inputMin, long inputMax) {
         this.revision = revision;
         this.kind = kind;
         this.status = status;
@@ -141,11 +175,28 @@ public final class DecisionFrame {
         this.options = Collections.unmodifiableList(new ArrayList<>(options));
         this.preStateHash = preStateHash;
         this.createdAtNanos = System.nanoTime();
+        this.freeInput = freeInput;
+        this.inputMin = inputMin;
+        this.inputMax = inputMax;
+        this.answered = false;
         final Map<String, Option> map = new LinkedHashMap<>();
         for (Option option : options) {
             map.put(option.optionId, option);
         }
         this.byId = Collections.unmodifiableMap(map);
+    }
+
+    /**
+     * Single-use guard for validated free-input frames (the option-level
+     * consume guard cannot apply to a pilot-supplied value). First validated
+     * submission wins; concurrent replays fail closed as unknown options.
+     */
+    synchronized boolean markAnswered() {
+        if (answered) {
+            return false;
+        }
+        answered = true;
+        return true;
     }
 
     public static Option passOption() {
@@ -193,6 +244,16 @@ public final class DecisionFrame {
             Object payload, String payloadKind) {
         return new Option(actionType, label, sourceCardName, null, null, false, false,
                 false, null, null, null, payload, payloadKind);
+    }
+
+    /**
+     * Sentinel option for validated free-integer input frames (unbounded X and
+     * numeric ranges the engine leaves open-ended). Carries no native binding;
+     * the pilot-supplied value is range-checked against native bounds at submit.
+     */
+    public static Option freeInputOption(String actionType, String label) {
+        return new Option(FREE_INPUT_ID, actionType, label, null, null, null, false, false,
+                false, null, null, null, null, "FREE_INPUT");
     }
 
     public Option find(String optionId) {

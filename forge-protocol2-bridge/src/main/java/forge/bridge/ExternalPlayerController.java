@@ -10,6 +10,7 @@ import forge.game.GameEntity;
 import forge.game.GameObject;
 import forge.game.GameType;
 import forge.game.PlanarDice;
+import forge.game.ability.ApiType;
 import forge.game.ability.effects.RollDiceEffect;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
@@ -403,7 +404,25 @@ public final class ExternalPlayerController extends PlayerController {
 
     private static String describe(SpellAbility sa) {
         try {
-            return sa.getHostCard().getName() + " [" + actionTypeOf(sa) + "]";
+            final String base = sa.getHostCard().getName() + " [" + actionTypeOf(sa) + "]";
+            // WS202: alternative-cost variants (Force pitch vs hard cast) are
+            // distinct native candidates with identical names; the engine-owned
+            // pay-cost text keeps every offered route discriminable so the
+            // pilot selects a real route, never an ambiguous duplicate. Any
+            // unreadable cost falls back to the bare label; enumeration never
+            // fails here.
+            try {
+                final Cost payCosts = sa.getPayCosts();
+                if (payCosts != null) {
+                    final String costText = payCosts.toSimpleString();
+                    if (costText != null && !costText.isEmpty()) {
+                        return base + " (" + costText + ")";
+                    }
+                }
+            } catch (Throwable ignored) {
+                // Fall through to the bare label.
+            }
+            return base;
         } catch (Throwable t) {
             return "[option]";
         }
@@ -534,14 +553,17 @@ public final class ExternalPlayerController extends PlayerController {
         throw unsupported("chooseStartingHand", "filtered-hands selection is not represented");
     }
 
-    // ---- mana/cost execution: pre-floated pool only, no heuristic tapping ----
+    // ---- mana/cost execution: pool-first, framed mid-payment taps ----
     //
     // WS202 L1: the pilot floats mana beforehand via explicit fixed-output mana
-    // ability activations (each a framed PRIORITY option). Payment consumes only
+    // ability activations (each a framed PRIORITY option) and/or taps mana
+    // sources mid-payment through parked MANA_PAYMENT options (Propaganda-style
+    // combat taxes and other costs collected outside priority). Payment consumes
     // from the floating pool through the native ManaPool deduction, framing
-    // chooseManaFromPool when multiple equally-weighted mana could pay a shard.
-    // No weighted auto-tap, no mid-payment mana-ability activation, no AI.
-    // Pool-insufficient payment declines and the engine rolls the play back.
+    // chooseManaFromPool on ambiguity; tapped sources resolve through the real
+    // play pipeline (which itself frames choice-mana outputs). No weighted
+    // auto-tap, no AI. Pool-and-taps-insufficient payment declines (explicit
+    // Decline option) and the engine rolls the play back.
 
     @Override
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa,
@@ -584,30 +606,157 @@ public final class ExternalPlayerController extends PlayerController {
                 forge.game.staticability.StaticAbilityManaConvert.manaConvert(useMatrix, player,
                         source, null);
             }
-            // Pool-only: attempt native deduction; ambiguity frames chooseManaFromPool.
-            final java.util.List<Mana> spent = new java.util.ArrayList<>();
-            final boolean ok = player.getManaPool().payManaCostFromPool(beingPaid, sa, false,
-                    spent);
-            if (ok && source != null) {
-                try {
-                    source.setXManaCostPaidByColor(beingPaid.getXManaCostPaidByColor());
-                } catch (Throwable t) {
-                    // Non-fatal; payment already deducted.
+            // Pool-first, then framed mid-payment taps for any shortfall.
+            if (payFromPoolWithTaps(beingPaid, sa)) {
+                if (source != null) {
+                    try {
+                        source.setXManaCostPaidByColor(beingPaid.getXManaCostPaidByColor());
+                    } catch (Throwable t) {
+                        // Non-fatal; payment already deducted.
+                    }
                 }
+                return true;
             }
-            if (!ok) {
-                final Map<String, String> details = new LinkedHashMap<>();
-                details.put("actor", actorId());
-                details.put("reason", "insufficient floating mana; pre-float required");
-                session.audit("mana_payment_declined", details);
-            }
-            return ok;
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("reason", "insufficient floating mana and no further taps taken");
+            session.audit("mana_payment_declined", details);
+            return false;
         } catch (BridgeUnsupportedDecision e) {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    /**
+     * WS202: native pool deduction, then authoritative mid-payment taps. Each
+     * offered tap is a complete native mana ability (Core-filtered playable set)
+     * the pilot activates through the real pipeline; Decline (or an empty/failed
+     * tap set) returns false so the engine rolls back with no state fabricated.
+     * Partial pool deductions persist across loop iterations exactly as the
+     * engine leaves them (spent mana stays spent).
+     */
+    private boolean payFromPoolWithTaps(forge.game.mana.ManaCostBeingPaid beingPaid,
+            SpellAbility sa) {
+        final java.util.Set<SpellAbility> tried =
+                Collections.newSetFromMap(new IdentityHashMap<SpellAbility, Boolean>());
+        for (int guard = 0; guard < 24; guard++) {
+            final java.util.List<Mana> spent = new java.util.ArrayList<>();
+            try {
+                if (player.getManaPool().payManaCostFromPool(beingPaid, sa, false, spent)
+                        && beingPaid.isPaid()) {
+                    return true;
+                }
+            } catch (BridgeUnsupportedDecision e) {
+                session.setLastExecutionError(e.getMessage());
+                throw e;
+            } catch (Throwable t) {
+                return false;
+            }
+            if (beingPaid.isPaid()) {
+                return true;
+            }
+            final List<SpellAbility> taps = untappedManaAbilities(tried);
+            if (taps.isEmpty()) {
+                return false;
+            }
+            final List<DecisionFrame.Option> options = new ArrayList<>(taps.size() + 1);
+            for (SpellAbility ability : taps) {
+                final String hostName;
+                try {
+                    hostName = ability.getHostCard().getName();
+                } catch (Throwable t) {
+                    throw unsupported("payManaCost", "tap source unreadable");
+                }
+                options.add(DecisionFrame.payloadOption("tap_mana_source",
+                        "Tap " + hostName + " for mana", hostName, ability, "SPELL_ABILITY"));
+            }
+            options.add(DecisionFrame.confirmOption("tap_mana_source",
+                    "Decline to tap (leave cost unpaid)", false));
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.MANA_PAYMENT, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            if (answer.selected.confirmValue != null
+                    && !answer.selected.confirmValue.booleanValue()) {
+                final Map<String, String> details = new LinkedHashMap<>();
+                details.put("actor", actorId());
+                details.put("choice", "declined");
+                session.audit("mana_tap_declined", details);
+                return false;
+            }
+            final SpellAbility chosen = (SpellAbility) answer.selected.nativePayload;
+            if (chosen == null) {
+                throw new IllegalStateException("tap option without native payload");
+            }
+            tried.add(chosen);
+            final boolean activated;
+            try {
+                activated = PlaySpellAbility.playSpellAbility(this, player, chosen);
+            } catch (BridgeUnsupportedDecision e) {
+                session.setLastExecutionError(e.getMessage());
+                throw e;
+            } catch (Throwable t) {
+                return false;
+            }
+            if (!activated) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Core-filtered playable mana abilities on the payer's battlefield the pilot
+     * may activate mid-payment. Enumeration failure degrades to no taps (the
+     * payment then declines and rolls back) with an audit reason, never to a
+     * partial or fabricated set.
+     */
+    private List<SpellAbility> untappedManaAbilities(java.util.Set<SpellAbility> tried) {
+        final List<SpellAbility> result = new ArrayList<>();
+        final List<Card> battlefield;
+        try {
+            battlefield = new ArrayList<>(player.getCardsIn(ZoneType.Battlefield));
+        } catch (Throwable t) {
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("reason", "battlefield unreadable");
+            session.audit("mana_tap_unavailable", details);
+            return result;
+        }
+        for (Card card : battlefield) {
+            if (card == null) {
+                continue;
+            }
+            final List<SpellAbility> abilities;
+            try {
+                abilities = card.getAllPossibleAbilities(player, true);
+            } catch (Throwable t) {
+                final Map<String, String> details = new LinkedHashMap<>();
+                details.put("actor", actorId());
+                details.put("reason", "ability enumeration failed");
+                session.audit("mana_tap_unavailable", details);
+                return new ArrayList<>();
+            }
+            for (SpellAbility ability : abilities) {
+                if (ability == null || tried.contains(ability)) {
+                    continue;
+                }
+                try {
+                    if (ability.isManaAbility()) {
+                        result.add(ability);
+                    }
+                } catch (Throwable t) {
+                    final Map<String, String> details = new LinkedHashMap<>();
+                    details.put("actor", actorId());
+                    details.put("reason", "ability unreadable");
+                    session.audit("mana_tap_unavailable", details);
+                    return new ArrayList<>();
+                }
+            }
+        }
+        return result;
     }
 
     @Override
@@ -620,16 +769,14 @@ public final class ExternalPlayerController extends PlayerController {
             return true;
         }
         try {
-            final java.util.List<Mana> spent = new java.util.ArrayList<>();
-            final boolean ok = player.getManaPool().payManaCostFromPool(toPay, ability, false,
-                    spent);
-            if (!ok) {
-                final Map<String, String> details = new LinkedHashMap<>();
-                details.put("actor", actorId());
-                details.put("reason", "insufficient floating mana; pre-float required");
-                session.audit("mana_payment_declined", details);
+            if (payFromPoolWithTaps(toPay, ability)) {
+                return true;
             }
-            return ok;
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("reason", "insufficient floating mana and no further taps taken");
+            session.audit("mana_payment_declined", details);
+            return false;
         } catch (BridgeUnsupportedDecision e) {
             session.setLastExecutionError(e.getMessage());
             throw e;
@@ -1112,12 +1259,48 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public void playSpellAbilityNoStack(SpellAbility effectSA, boolean mayChoseNewTargets) {
-        throw unsupported("playSpellAbilityNoStack", "no-stack triggers are not represented");
+        // WS202: mirror Human exactly — delegate to the real no-stack pipeline.
+        // No decision of its own: targets/costs/modes inside route through the
+        // already-framed controller callbacks (or fail closed there).
+        PlaySpellAbility.playSpellAbilityNoStack(this, player, effectSA, !mayChoseNewTargets);
     }
 
     @Override
     public void orderAndPlaySimultaneousSa(List<SpellAbility> activePlayerSAs) {
-        throw unsupported("orderAndPlaySimultaneousSa", "simultaneous stack entries are not represented");
+        // WS202: mirror the Human order-then-play pipeline exactly, except the
+        // order itself is always an authoritative parked decision when more than
+        // one ability is present. The Human needPrompt skip (identical triggers
+        // auto-order, remembered GUI orders) is a UI convenience default the
+        // bridge must not replicate as external authority: the engine called
+        // into the controller to order, and every complete order is offered.
+        final List<SpellAbility> ordered;
+        if (activePlayerSAs == null || activePlayerSAs.size() <= 1) {
+            ordered = activePlayerSAs == null
+                    ? new ArrayList<>() : new ArrayList<>(activePlayerSAs);
+        } else {
+            ordered = orderSimultaneousSa(activePlayerSAs);
+        }
+        for (int i = ordered.size() - 1; i >= 0; i--) {
+            final SpellAbility next = ordered.get(i);
+            if (next.isTrigger() && !next.isCopied()) {
+                PlaySpellAbility.playSpellAbility(this, player, next);
+            } else {
+                if (next.isCopied()) {
+                    if (next.isSpell()) {
+                        if (!next.getHostCard().isInZone(ZoneType.Stack)) {
+                            next.setHostCard(player.getGame().getAction()
+                                    .moveToStack(next.getHostCard(), next));
+                        } else {
+                            player.getGame().getStackZone().add(next.getHostCard());
+                        }
+                    }
+                    if (next.isMayChooseNewTargets()) {
+                        next.setupNewTargets(player);
+                    }
+                }
+                player.getGame().getStack().add(next);
+            }
+        }
     }
 
     @Override
@@ -1470,7 +1653,7 @@ public final class ExternalPlayerController extends PlayerController {
             try {
                 sa.clearTargets();
                 for (GameEntity entity : subset) {
-                    sa.getTargets().add(entity);
+                    sa.getTargets().add(toTargetObject(entity, "chooseNewTargetsFor"));
                 }
                 if (forge.game.staticability.StaticAbilityMustTarget.meetsMustTargetRestriction(
                         sa)) {
@@ -1536,7 +1719,7 @@ public final class ExternalPlayerController extends PlayerController {
         try {
             sa.clearTargets();
             for (GameEntity entity : chosen) {
-                sa.getTargets().add(entity);
+                sa.getTargets().add(toTargetObject(entity, "chooseNewTargetsFor"));
             }
         } catch (Throwable t) {
             try {
@@ -1615,7 +1798,7 @@ public final class ExternalPlayerController extends PlayerController {
         for (List<GameEntity> subset : enumerateSubsets(legal, min, Math.min(max, legal.size()))) {
             try {
                 for (GameEntity entity : subset) {
-                    currentAbility.getTargets().add(entity);
+                    currentAbility.getTargets().add(toTargetObject(entity, "chooseTargetsFor"));
                 }
                 if (forge.game.staticability.StaticAbilityMustTarget.meetsMustTargetRestriction(
                         currentAbility)) {
@@ -1664,7 +1847,7 @@ public final class ExternalPlayerController extends PlayerController {
         }
         try {
             for (GameEntity entity : chosen) {
-                currentAbility.getTargets().add(entity);
+                currentAbility.getTargets().add(toTargetObject(entity, "chooseTargetsFor"));
             }
         } catch (Throwable t) {
             throw unsupported("chooseTargetsFor", "target assignment failed");
@@ -1706,6 +1889,53 @@ public final class ExternalPlayerController extends PlayerController {
         } catch (Throwable t) {
             return "?";
         }
+    }
+
+    /**
+     * WS202: stack-spell target mapping, mirroring the Human
+     * {@code TargetSelection} path exactly. Counter-style effects resolve
+     * through {@code TargetChoices.getTargetSpells()}, which only sees
+     * {@link SpellAbility} targets: a stack-zone Card stored raw would make
+     * the effect silently do nothing at resolution. A chosen Card that hosts a
+     * spell on the stack therefore stores that stack SpellAbility (first
+     * spell, skipping cast triggers, exactly like the Human flow); anything
+     * else stores unchanged. An unresolvable stack Card fails closed instead
+     * of fabricating a no-op target.
+     */
+    private GameObject toTargetObject(GameEntity entity, String action) {
+        if (entity instanceof Card) {
+            final Card card = (Card) entity;
+            boolean hostsStackSpell = false;
+            try {
+                for (SpellAbilityStackInstance si : getGame().getStack()) {
+                    final SpellAbility onStack = si == null ? null : si.getSpellAbility();
+                    if (onStack != null && onStack.isSpell() && onStack.getHostCard() == card) {
+                        hostsStackSpell = true;
+                        break;
+                    }
+                }
+            } catch (Throwable t) {
+                throw unsupported(action, "stack lookup failed");
+            }
+            if (hostsStackSpell) {
+                try {
+                    for (SpellAbilityStackInstance si : getGame().getStack()) {
+                        final SpellAbility onStack = si == null ? null : si.getSpellAbility();
+                        if (onStack != null && onStack.isSpell()
+                                && onStack.getHostCard() == card) {
+                            return onStack;
+                        }
+                    }
+                } catch (Throwable t) {
+                    throw unsupported(action, "stack spell read failed");
+                }
+                throw unsupported(action, "stack spell instance unresolvable");
+            }
+        }
+        if (entity instanceof GameObject) {
+            return (GameObject) entity;
+        }
+        throw unsupported(action, "target is not a game object");
     }
 
     @Override
@@ -2209,7 +2439,7 @@ public final class ExternalPlayerController extends PlayerController {
         applyAttackDeclaration(attacker, combat, chosen);
     }
 
-    private static String attackDeclarationLabel(Map<Card, GameEntity> declaration) {
+    private String attackDeclarationLabel(Map<Card, GameEntity> declaration) {
         if (declaration.isEmpty()) {
             return "No attacks";
         }
@@ -2225,7 +2455,7 @@ public final class ExternalPlayerController extends PlayerController {
             try {
                 final GameEntity defender = entry.getValue();
                 if (defender instanceof Player) {
-                    label.append("player");
+                    label.append(session.playerIdOf((Player) defender));
                 } else if (defender instanceof Card) {
                     label.append(((Card) defender).getName());
                 } else {
@@ -2506,7 +2736,62 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public CardCollectionView orderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone,
             SpellAbility source) {
-        throw unsupported("orderMoveToZoneList", "zone ordering is not represented");
+        // WS202: mirror the Human no-decision path exactly, frame the rest.
+        // The Human controller performs no ordering for graveyard moves outside
+        // ReorderZone effects in unordered-graveyard games (its default path):
+        // no discretion exists there, so the input order returns untouched with
+        // no frame. Anything else over 2+ cards is a genuine order decision and
+        // parks ORDER_CHOICE over the complete permutation set (>4 fails closed).
+        final List<Card> legal = new ArrayList<>();
+        if (cards != null) {
+            for (Card card : cards) {
+                if (card != null) {
+                    legal.add(card);
+                }
+            }
+        }
+        if (legal.size() <= 1) {
+            return cards;
+        }
+        final boolean reorderEffect;
+        try {
+            reorderEffect = source != null && source.getApi() == ApiType.ReorderZone;
+        } catch (Throwable t) {
+            throw unsupported("orderMoveToZoneList", "source effect unreadable");
+        }
+        if (!reorderEffect && destinationZone == ZoneType.Graveyard) {
+            final boolean ordered;
+            try {
+                ordered = getGame().isGraveyardOrdered(getPlayer());
+            } catch (Throwable t) {
+                throw unsupported("orderMoveToZoneList", "graveyard order state unreadable");
+            }
+            if (!ordered) {
+                final Map<String, String> details = new LinkedHashMap<>();
+                details.put("actor", actorId());
+                details.put("destination", "Graveyard");
+                details.put("count", Integer.toString(legal.size()));
+                session.audit("zone_order_unneeded", details);
+                return cards;
+            }
+        }
+        if (legal.size() > 4) {
+            throw unsupported("orderMoveToZoneList", "too many cards to order completely");
+        }
+        final Card subject;
+        try {
+            subject = source == null ? null : source.getHostCard();
+        } catch (Throwable t) {
+            throw unsupported("orderMoveToZoneList", "source card unreadable");
+        }
+        final CardCollection ordered = frameOrderedCards(DecisionFrame.Kind.ORDER_CHOICE,
+                "order_zone", subject, permutations(legal));
+        final Map<String, String> chosen = new LinkedHashMap<>();
+        chosen.put("actor", actorId());
+        chosen.put("destination", destinationZone == null ? "?" : destinationZone.name());
+        chosen.put("count", Integer.toString(legal.size()));
+        session.audit("zone_order_chosen", chosen);
+        return ordered;
     }
 
     @Override
@@ -2996,23 +3281,44 @@ public final class ExternalPlayerController extends PlayerController {
             return min;
         }
         final long size = (long) max - (long) min + 1L;
-        if (size > 128L) {
-            throw unsupported("chooseNumber", "numeric range too large to offer completely");
+        if (size <= 128L) {
+            final List<DecisionFrame.Option> options = new ArrayList<>((int) size);
+            for (int value = min; value <= max; value++) {
+                options.add(DecisionFrame.intOption(actionType, title + " [" + value + "]", value));
+            }
+            final BridgeSession.FrameAnswer answer = session.parkFrame(kind, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            if (answer.selected.intValue == null) {
+                throw new IllegalStateException("number option without int value");
+            }
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("choice", answer.selected.intValue.toString());
+            session.audit("number_chosen", details);
+            return answer.selected.intValue.intValue();
         }
-        final List<DecisionFrame.Option> options = new ArrayList<>((int) size);
-        for (int value = min; value <= max; value++) {
-            options.add(DecisionFrame.intOption(actionType, title + " [" + value + "]", value));
-        }
-        final BridgeSession.FrameAnswer answer = session.parkFrame(kind, player,
-                DecisionFrame.Status.SUPPORTED, "", options);
-        if (answer.selected.intValue == null) {
-            throw new IllegalStateException("number option without int value");
+        // WS202: unbounded engine ranges (X defaults to 0..2^31-1) cannot be
+        // enumerated without filtering the pilot's legal set, so they park a
+        // validated free-integer frame instead: the pilot submits any integer
+        // inside native [min,max] and the submit boundary range-checks it. No
+        // affordable-cap heuristic, no truncation.
+        final List<DecisionFrame.Option> sentinel = new ArrayList<>(1);
+        sentinel.add(DecisionFrame.freeInputOption(actionType,
+                title + " [integer " + min + ".." + max + "]"));
+        final BridgeSession.FrameAnswer answer = session.parkFreeInput(kind, player,
+                actionType, title, min, max, sentinel);
+        if (answer.inputValue == null) {
+            throw new IllegalStateException("free input without a value");
         }
         final Map<String, String> details = new LinkedHashMap<>();
         details.put("actor", actorId());
-        details.put("choice", answer.selected.intValue.toString());
+        details.put("choice", answer.inputValue.toString());
         session.audit("number_chosen", details);
-        return answer.selected.intValue.intValue();
+        final long picked = answer.inputValue.longValue();
+        if (picked < Integer.MIN_VALUE || picked > Integer.MAX_VALUE) {
+            throw new IllegalStateException("input outside int domain");
+        }
+        return (int) picked;
     }
 
     @Override
