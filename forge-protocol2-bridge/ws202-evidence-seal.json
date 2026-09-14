@@ -1,0 +1,199 @@
+{
+  "seal_format": "ws202-evidence-seal/1",
+  "workstream": "WS202 Forge WS90 executable surface",
+  "status_note": "This seal describes observed reality only. It does not adjudicate qualification; gates belong to the Coordinator.",
+  "source_lock": {
+    "repository": "moeendres-png/forge",
+    "branch": "ws202/forge-ws90-executable-surface-20260914",
+    "remote_slug": "moeendres-png/forge",
+    "audit_base_sha": "7360737b7f1f3580eb51b7aca49bd1c0e72d9bff",
+    "audit_base_tree": "378cec5d90d847aeb38d69165f7eff97a0c4d146",
+    "rules_core_ancestor": "aa5c00aa32dfd40e213f223f8fd400c43daabb24",
+    "candidate_head": "34bc83a20e8bb3714e626e1698e358281c5b689a",
+    "candidate_tree": "c5d1de0d8542eed1fd5fe0d29439c1db4fdd7cd2",
+    "working_tree": "clean",
+    "mutation_surface": "forge-protocol2-bridge/** only (name-only diff vs audit base outside it is empty)"
+  },
+  "validation_runs": [
+    {
+      "command": "mvn test -pl forge-protocol2-bridge -am -q -o",
+      "workdir": "<worktree>",
+      "result": "PASS",
+      "tests": 163,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "evidence": "forge-protocol2-bridge/target/surefire-reports/*.xml (one stale WS202DebugTest report from a deleted scratch file was removed before counting)"
+    },
+    {
+      "command": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS202ExecutableSurfaceTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -q -o",
+      "result": "PASS",
+      "tests": 27,
+      "note": "25 methods; testH01CloneFirstRetainsBearThroughHumility invocationCount=3"
+    },
+    {
+      "command": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS202SeparateProcessTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -q -o",
+      "result": "PASS",
+      "tests": 13,
+      "note": "each test boots its own child BridgeMain JVM; scenario injection plus fixed seeds"
+    }
+  ],
+  "in_process_verdicts": {
+    "testA03BoltRegenerationShield": "PASS",
+    "testA04SerpentReplacementOrdering": "PASS",
+    "testAllControllersExternalNoAi": "PASS",
+    "testB01TriggerOrdering": "PASS",
+    "testBootstrapStateProof": "PASS",
+    "testC03FireballMultiTarget": "PASS",
+    "testChoiceManaFundsCast": "PASS",
+    "testD06CasualtiesModes": "PASS",
+    "testDiscardTormentingVoice": "PASS",
+    "testE01PropagandaAttack": "PASS",
+    "testE02TrampleDamageDivision": "PASS",
+    "testF01RampantGrowthSearch": "PASS",
+    "testForcePitchAlternateCost": "PASS",
+    "testG02CommanderMovementAndTax": "PASS",
+    "testG03CommanderAttackDamage": "PASS",
+    "testG04Concession": "PASS",
+    "testH01CloneFirstRetainsBearThroughHumility": "PASS",
+    "testH01HumilityFirstOffersNoCopy": "PASS",
+    "testH01NoHumilityCopyOfferedAndTaken": "PASS",
+    "testJ02DelinaAttackTrigger": "PASS",
+    "testModesBorosCharm": "PASS",
+    "testOrderMoveToZoneListBounds": "PASS",
+    "testOrderedGraveyardFramesChoice": "PASS",
+    "testSeedTwinsDeterministic": "PASS",
+    "testSpecifyManaComboFraming": "PASS"
+  },
+  "separate_process_verdicts": {
+    "testPipeCharmModesTargets": "PASS",
+    "testPipeFireballX": "PASS",
+    "testPipeCounterPitch": "PASS",
+    "testPipeTriggerOrder": "PASS",
+    "testPipeCombatDamage": "PASS",
+    "testPipeCommanderMoveConcede": "PASS",
+    "testPipeCloneEntry": "PASS",
+    "testPipeHumilityLayers": "PASS",
+    "testPipeDiscardHidden": "PASS",
+    "testPipeRampantSearch": "PASS",
+    "testPipeSerpentReplacement": "PASS",
+    "testPipePropagandaTax": "PASS",
+    "testPipeSeedTwins": "PASS"
+  },
+  "artifacts": [
+    {
+      "path": "forge-protocol2-bridge/src/test/java/forge/bridge/WS202ExecutableSurfaceTest.java",
+      "size": 137899,
+      "sha256": "75be42c73de71ff767727e246827be688aeb2550ae6a99a74e63d89acae79611",
+      "role": "in-process actual-card evidence (27 invocations)"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/test/java/forge/bridge/WS202SeparateProcessTest.java",
+      "size": 77761,
+      "sha256": "b6e3105236a556900949143f7c6e891e6db8bd49c8428571bc24c040bf3f1e6b",
+      "role": "separate-process actual-card evidence (13 tests)"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/test/java/forge/bridge/BridgeEngineTest.java",
+      "size": 85281,
+      "sha256": "7130dcb341fa37089d7643c7f5d33815a66417ad88f4035f4aaf2ffd0a0971e3",
+      "role": "surface regression plus principal/fail-closed evidence"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/test/java/forge/bridge/BridgeProtocolProcessTest.java",
+      "size": 25432,
+      "sha256": "50ca50c78b1175712650ff4fafc9afeb6b16cb98bb04386d3a28556af03e6b9a",
+      "role": "protocol handshake, negatives, principal gates over the pipe"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/ExternalPlayerController.java",
+      "size": 160703,
+      "sha256": "832c1b41c753a556de6e7f90ba533051333d07bd206755bd72e155b09ca71065",
+      "role": "decision-frame production surface"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/BridgeSession.java",
+      "size": 30622,
+      "sha256": "49ce64e2de3d92a293034618aefcc2659f151c9e79a71618a0a1d30ff4332381",
+      "role": "actor/revision binding, audit trail, submit boundary"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/BridgeEngine.java",
+      "size": 45998,
+      "sha256": "0afb02ae8bd55aee2e62a0246486d0a6b6db8126a6c421fe4b5da09086f54451",
+      "role": "protocol dispatch, seed and scenario binding"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/DecisionFrame.java",
+      "size": 10218,
+      "sha256": "1cace3f25f3b2283d1baacaa3620fd19c89e8477c20d7eea31e450856d1d4ebe",
+      "role": "frame/option identity model (29 kinds)"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/StateProjection.java",
+      "size": 25691,
+      "sha256": "a15dd779a68489642a3e90f566ebca86effec7a7e9ad94fde26cea3e7340864c",
+      "role": "principal-scoped projection and wire shapes"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/ScenarioBootstrap.java",
+      "size": 24695,
+      "sha256": "9ae04d53dba447b6ecb7eee01c28a0f2a73f5bc8172a6547b1921b5b68fc39b1",
+      "role": "native-hook scenario placement and rejection proofs"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/BridgeCostDecisionMaker.java",
+      "size": 21223,
+      "sha256": "bb53e830538bc000c14110daae7f78bf747ba625187b3a68321671e6370f297c",
+      "role": "cost-part framing (sacrifice/discard/exile/life)"
+    },
+    {
+      "path": "forge-protocol2-bridge/src/main/java/forge/bridge/BridgeProtocol.java",
+      "size": 9407,
+      "sha256": "94d2407a7b0053932330fb69f0dc0fde554e2033557a8af2d30fd2aca44bdb1d",
+      "role": "Protocol-2.0.0 envelopes and additive free-input value"
+    }
+  ],
+  "invalidated_evidence": [
+    {
+      "entry": "ebb3483 22/22 WS202ExecutableSurfaceTest base",
+      "cause": "superseded by extension (34bc83a adds pins, bounds, no-AI, H01bx3); all 22 still green inside the 27-invocation suite",
+      "disposition": "retained-as-superseded"
+    },
+    {
+      "entry": "WS202DebugTest.java (untracked scratch) and its surefire report",
+      "cause": "diagnostic scratch only, never evidence; file deleted, stale report removed",
+      "disposition": "removed"
+    },
+    {
+      "entry": "H01 historical single timing flake (Humility cast not offered)",
+      "cause": "adjudicated TRANSIENT-HISTORICAL: in-process 3/3 plus process-isolated Humility layers green with no rewording",
+      "disposition": "retained-with-adjudication"
+    }
+  ],
+  "explicitly_unknown": [
+    "COMBAT_ORDER runtime (framing exists; fixtures never park it)",
+    "STATIC_CHOICE runtime (framing exists; fixtures never park it)",
+    "HIDDEN_ZONE_SELECTION runtime (framing exists; discard fixtures take the cost-decision path)",
+    "NUMBER_CHOICE small-range enumeration runtime (large ranges use validated free input)",
+    "CONCESSION kind (never produced; concession rides PRIORITY concede options, evidenced in-process and over pipe)",
+    "Divided-allocation fail-closed runtime (no fixture reaches it)",
+    "MANA_PAYMENT Decline submit execution (option offered and recorded; never submitted in a committed test)",
+    "COST_SELECTION Decline submit execution (offered in Force exile frame; never submitted)",
+    "ORDER_CHOICE framed path over the pipe (no pipe fixture orders a graveyard; in-process BoneDancer covers it)",
+    "COLOR_CHOICE over the pipe (driver handles it; no pipe fixture parks it)",
+    "Commander tax recast over the pipe (multi-turn drive; in-process G02 covers it)",
+    "Search library-shrink and tapped-arrival over the pipe (zones.library is always empty; tapped state is not projected)",
+    "Counter/PT values over the pipe (battlefield projects names only)",
+    "Malformed-scenario rejection over the pipe (proven in-process only)",
+    "Deterministic replay (export_replay fails closed by design; replay_supported=false)"
+  ],
+  "gates": {
+    "global_behavior_credit_change": 0,
+    "full107": "NOT_RUN",
+    "architecture_freeze": "NOT_CLAIMED",
+    "production_provider": "NOT_SELECTED",
+    "raw_git_push_used": "NO",
+    "ws197_reinterpretation": "NONE"
+  }
+}
