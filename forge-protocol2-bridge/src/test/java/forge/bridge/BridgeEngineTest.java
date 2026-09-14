@@ -53,13 +53,22 @@ public class BridgeEngineTest {
         final BridgeEngine engine = new BridgeEngine();
         BridgeTestSupport.startEngine(engine);
         final List<String> handles = BridgeTestSupport.importPod(engine);
-        // Seed rejected: RNG truth.
+        // WS202: explicit seeds bind native MyRandom per session (single-flight for
+        // twin determinism). Non-integer seeds still fail closed.
         final JsonObject seeded = BridgeTestSupport.rpc(engine,
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"seed1\","
                         + "\"message_type\":\"create_commander_game\",\"payload\":{\"request\":{"
                         + "\"game_id\":\"seeded\",\"format\":\"commander\",\"seed\":42,"
                         + "\"deck_handles\":[\"" + String.join("\",\"", handles) + "\"]}}}");
-        BridgeTestSupport.assertError(seeded, BridgeErrors.SEED_UNSUPPORTED);
+        BridgeTestSupport.assertOk(seeded);
+        Assert.assertEquals(
+                engine.sessionsForTests().get("seeded").getSeedBinding(), Long.valueOf(42L));
+        final JsonObject badSeed = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"seedbad\","
+                        + "\"message_type\":\"create_commander_game\",\"payload\":{\"request\":{"
+                        + "\"game_id\":\"seedbad\",\"format\":\"commander\",\"seed\":\"nope\","
+                        + "\"deck_handles\":[\"" + String.join("\",\"", handles) + "\"]}}}");
+        BridgeTestSupport.assertError(badSeed, BridgeErrors.MALFORMED_REQUEST);
         // Wrong pod size rejected.
         final JsonObject pod3 = BridgeTestSupport.rpc(engine,
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"pod3\","

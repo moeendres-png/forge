@@ -117,6 +117,10 @@ public final class BridgeSession {
     private volatile Status status = Status.CREATED;
     private volatile String failReason = "";
     private volatile boolean closeRequested;
+    // WS202: qualification seed binding (explicit native RNG control) and scenario
+    // plan (native hook placement). Both set once at creation, read at launch.
+    private volatile Long seedBinding;
+    private volatile ScenarioBootstrap.Plan scenarioPlan;
 
     private final AtomicLong frameSeq = new AtomicLong(0);
     private final AtomicLong auditSeq = new AtomicLong(0);
@@ -142,6 +146,24 @@ public final class BridgeSession {
 
     public String getGameId() {
         return gameId;
+    }
+
+    /** WS202: explicit seed binding for native RNG (null when uncontrolled). */
+    public Long getSeedBinding() {
+        return seedBinding;
+    }
+
+    public synchronized void setSeedBinding(Long seed) {
+        this.seedBinding = seed;
+    }
+
+    /** WS202: validated scenario plan for native hook placement (null when none). */
+    public ScenarioBootstrap.Plan getScenarioPlan() {
+        return scenarioPlan;
+    }
+
+    public synchronized void setScenarioPlan(ScenarioBootstrap.Plan plan) {
+        this.scenarioPlan = plan;
     }
 
     public synchronized void attach(Match match, Game game) {
@@ -251,7 +273,28 @@ public final class BridgeSession {
     public synchronized void launch() {
         final Match capturedMatch = match;
         final Game capturedGame = game;
-        launchStarter(() -> capturedMatch.startGame(capturedGame));
+        final Long capturedSeed = seedBinding;
+        final ScenarioBootstrap.Plan capturedPlan = scenarioPlan;
+        // WS202: explicit native RNG control. Installed on the protocol thread
+        // before the game thread shuffles/rolls. Global MyRandom scope requires
+        // single-flight seeded execution for twin determinism; concurrent seeded
+        // games share the global and must be serialized by the orchestrator.
+        if (capturedSeed != null) {
+            try {
+                forge.util.MyRandom.setRandom(new java.util.Random(capturedSeed.longValue()));
+            } catch (Throwable t) {
+                throw new IllegalStateException("seed install failed");
+            }
+            audit("seed_bound", detail("seed", capturedSeed.toString()));
+        }
+        if (capturedPlan == null) {
+            launchStarter(() -> capturedMatch.startGame(capturedGame));
+        } else {
+            final BridgeSession self = this;
+            launchStarter(() -> capturedMatch.startGame(capturedGame, () -> {
+                ScenarioBootstrap.apply(self, capturedGame, capturedPlan);
+            }));
+        }
     }
 
     /**

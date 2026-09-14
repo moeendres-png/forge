@@ -83,7 +83,12 @@ public final class StateProjection {
         }
         final JsonObject state = new JsonObject();
         state.addProperty("game_id", session.getGameId());
-        state.add("seed", JsonNull.INSTANCE);
+        final Long seedBinding = session.getSeedBinding();
+        if (seedBinding == null) {
+            state.add("seed", JsonNull.INSTANCE);
+        } else {
+            state.addProperty("seed", seedBinding.longValue());
+        }
         state.add("rng_counter", JsonNull.INSTANCE);
         state.addProperty("status", statusOf(session));
         final PhaseHandler phases = require("phase_handler", () -> game.getPhaseHandler());

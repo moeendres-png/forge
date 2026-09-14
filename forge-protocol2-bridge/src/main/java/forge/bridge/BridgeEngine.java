@@ -229,7 +229,7 @@ public final class BridgeEngine {
         caps.addProperty("multiplayer_supported", true);
         caps.addProperty("max_players", 4);
         caps.addProperty("headless_supported", true);
-        caps.addProperty("seed_supported", false);
+        caps.addProperty("seed_supported", true);
         caps.addProperty("deck_import_supported", true);
         caps.addProperty("legal_actions_supported", false);
         caps.addProperty("action_submission_supported", false);
@@ -239,26 +239,32 @@ public final class BridgeEngine {
         caps.addProperty("priority_visible", true);
         caps.addProperty("commander_damage_visible", true);
         caps.addProperty("commander_tax_visible", true);
-        caps.addProperty("starting_state_injection_supported", false);
-        caps.addProperty("scenario_injection_supported", false);
+        caps.addProperty("starting_state_injection_supported", true);
+        caps.addProperty("scenario_injection_supported", true);
         caps.addProperty("healthcheck_supported", true);
-        caps.addProperty("target_selection_supported", false);
-        caps.addProperty("mode_selection_supported", false);
-        caps.addProperty("trigger_order_supported", false);
+        caps.addProperty("target_selection_supported", true);
+        caps.addProperty("mode_selection_supported", true);
+        caps.addProperty("trigger_order_supported", true);
         caps.addProperty("mulligan_supported", false);
-        caps.addProperty("concede_supported", false);
+        caps.addProperty("concede_supported", true);
         caps.addProperty("game_shutdown_supported", true);
         caps.addProperty("engine_shutdown_supported", true);
         caps.addProperty("runtime_kind", "external_rules_engine");
         final JsonArray notes = new JsonArray();
-        notes.add("bounded proven subset only: priority pass, targetless nonmodal zero-mana "
-                + "execution (no discretionary mana payment; nonzero-mana candidates fail closed), "
-                + "fixed-output mana abilities, binary mulligan keep/ship, external starting-player "
-                + "choice; global legal_actions_supported and action_submission_supported stay false "
-                + "until the full decision surface qualifies");
+        notes.add("WS202 executable surface: pre-floated pool mana payment with framed "
+                + "ambiguity, single-target selection, X/number, modes, trigger/replacement/"
+                + "static ordering, copy/entity/spell/zone/color selections, alternate costs, "
+                + "commander-move confirms and priority concession; multi-target/divided, combat, "
+                + "sacrifice/discard/exile costs and choice-mana outputs still fail closed; global "
+                + "legal_actions_supported and action_submission_supported stay false until the "
+                + "full decision surface qualifies");
         notes.add("partner commanders import but pod-level partner lifecycle is not yet qualified");
         notes.add("mulligan keep/ship is externally decided per player; London-tuck selection aborts loudly");
-        notes.add("seeds are rejected: engine RNG is global and same-seed determinism is not claimed");
+        notes.add("seeds are bound per session via native MyRandom; global scope requires "
+                + "single-flight seeded execution for twin determinism");
+        notes.add("scenario bootstrap establishes battlefield/hands/life only through native "
+                + "zone/lifecycle APIs inside the engine-owned start hook; outcomes, stack, "
+                + "decisions and continuous effects are never injected");
         notes.add("external event export is disabled for principal privacy; the bridge "
                 + "audit trail remains internal engineering evidence only");
         notes.add("replay is not offered: deterministic replay is not claimed");
@@ -405,9 +411,16 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
                     "only commander format is supported, got " + format, 0);
         }
+        // WS202: explicit native seed control. Integer seeds bind per-session
+        // MyRandom before shuffle/dice; single-flight required for twin determinism.
+        Long seedBinding = null;
         if (gameRequest.has("seed") && !gameRequest.get("seed").isJsonNull()) {
-            return BridgeProtocol.error(request.requestId, BridgeErrors.SEED_UNSUPPORTED,
-                    "seeds are not supported: engine RNG is global and not reproducible", 0);
+            try {
+                seedBinding = Long.valueOf(gameRequest.get("seed").getAsLong());
+            } catch (Exception e) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                        "seed must be an integer", 0);
+            }
         }
         final List<String> handles = stringList(gameRequest, "deck_handles");
         if (handles.size() != 4) {
@@ -441,6 +454,34 @@ public final class BridgeEngine {
             handleToDeck.put(handles.get(i), pod.get(i).deckId);
         }
         final BridgeSession session = new BridgeSession(gameId, handleToDeck);
+        if (seedBinding != null) {
+            session.setSeedBinding(seedBinding);
+        }
+        // WS202: qualification scenario bootstrap (native hook placement only).
+        if (gameRequest.has("scenario") && !gameRequest.get("scenario").isJsonNull()) {
+            final JsonObject scenarioObj;
+            try {
+                scenarioObj = gameRequest.getAsJsonObject("scenario");
+            } catch (Exception e) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                        "scenario must be an object", (int) session.auditSize());
+            }
+            final JsonObject neutral = BridgeProtocol.optObject(scenarioObj,
+                    "neutral_initial_state");
+            if (neutral == null) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                        "scenario.neutral_initial_state is required",
+                        (int) session.auditSize());
+            }
+            final ScenarioBootstrap.Plan plan;
+            try {
+                plan = ScenarioBootstrap.parse(neutral);
+            } catch (IllegalArgumentException e) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
+                        "scenario rejected: " + e.getMessage(), (int) session.auditSize());
+            }
+            session.setScenarioPlan(plan);
+        }
         final List<RegisteredPlayer> players = new ArrayList<>(4);
         for (int i = 0; i < 4; i++) {
             final ImportedDeck deck = pod.get(i);
