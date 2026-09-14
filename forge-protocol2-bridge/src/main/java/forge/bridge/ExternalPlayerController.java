@@ -42,7 +42,6 @@ import forge.game.player.PlayerActionConfirmMode;
 import forge.game.player.PlayerController;
 import forge.game.player.PlayerView;
 import forge.game.replacement.ReplacementEffect;
-import forge.game.spellability.AbilityManaPart;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.OptionalCostValue;
 import forge.game.spellability.SpellAbility;
@@ -74,16 +73,22 @@ import org.apache.commons.lang3.tuple.Pair;
 /**
  * External-decision player controller: the native interception boundary.
  *
- * <p>Priority, mulligan and starting-player callbacks rendezvous with the protocol
- * thread through parked {@link DecisionFrame}s. Forge rules/RNG selects which
- * controller receives the starting-player choice; that chooser is offered the
- * complete native player set with no preset seat and no default. Every other
- * discretionary callback throws {@link BridgeUnsupportedDecision} so an
- * unrepresented decision aborts loudly instead of being answered by AI, defaults,
- * first-option, randomness or silent pass.
+ * <p>Priority, mulligan, starting-player, mana/cost, target, mode, number,
+ * combat, trigger, replacement, copy, search, commander-move and concession
+ * callbacks rendezvous with the protocol thread through parked
+ * {@link DecisionFrame}s. Forge rules/RNG selects which controller receives
+ * the starting-player choice; that chooser is offered the complete native
+ * player set with no preset seat and no default. Every discretionary option set
+ * offered is the engine's own complete legal set for that callback; anything
+ * that cannot be offered completely fails closed via
+ * {@link BridgeUnsupportedDecision} so an unrepresented decision aborts loudly
+ * instead of being answered by AI, defaults, first-option, randomness or
+ * silent pass.
  *
- * <p>Execution uses the real {@link PlaySpellAbility} pipeline; the engine keeps full
- * legality, cost and timing authority, including rollback on failure.
+ * <p>Execution uses the real {@link PlaySpellAbility} pipeline and the real
+ * combat/cost pipelines; the engine keeps full legality, cost and timing
+ * authority, including rollback on failure and re-prompt on invalid combat
+ * declarations.
  */
 public final class ExternalPlayerController extends PlayerController {
     private final BridgeSession session;
@@ -144,6 +149,19 @@ public final class ExternalPlayerController extends PlayerController {
         }
         if (legal.size() == 1) {
             return legal.get(0);
+        }
+        return parkChoices(kind, actionType, legal, labeler, payloadKind);
+    }
+
+    /**
+     * WS202: parks even a lone option. Used where the Core has already applied
+     * forced progress, so anything reaching the bridge is discretionary and must
+     * be externally selected with full revision/actor/option binding.
+     */
+    private <T> T parkChoices(DecisionFrame.Kind kind, String actionType,
+            List<T> legal, java.util.function.Function<T, String> labeler, String payloadKind) {
+        if (legal == null || legal.isEmpty()) {
+            throw unsupported("parkChoices", "empty legal set cannot be framed");
         }
         final List<DecisionFrame.Option> options = new ArrayList<>(legal.size());
         for (T item : legal) {
@@ -269,11 +287,13 @@ public final class ExternalPlayerController extends PlayerController {
      * a blocker, never to an offer.
      *
      * <p>WS202: X/announce (X_ANNOUNCE frames), modal Charm (MODE_SELECTION frames),
-     * alternative costs (COST_SELECTION frames) and pre-floated pool mana payment
-     * (MANA_PAYMENT frames) are now representable. Single-target selection
-     * (TARGET_SELECTION frames) is representable; multi-target/divided still fails
-     * closed. AnnounceType, optional costs, choice mana outputs and non-forced cost
-     * parts still fail closed until their families qualify.
+     * alternative costs (COST_SELECTION frames), pre-floated pool mana payment
+     * (MANA_PAYMENT frames), choice mana outputs (COLOR_CHOICE/MANA_PAYMENT
+     * frames via the Core-owned ManaEffect paths), single- and multi-target
+     * selection (TARGET_SELECTION frames) and sacrifice/discard/exile/pay-life
+     * costs (COST_SELECTION frames) are now representable. Chooser-divided
+     * allocation has no native controller surface and still fails closed, as do
+     * AnnounceType, optional costs and the remaining non-framed cost parts.
      */
     static String classifyComplex(SpellAbility sa) {
         if (sa.usesTargeting() && !isSingleTargetRepresentable(sa)) {
@@ -304,6 +324,18 @@ public final class ExternalPlayerController extends PlayerController {
                 if (part instanceof CostAddMana) {
                     continue;
                 }
+                if (part instanceof forge.game.cost.CostSacrifice) {
+                    continue;
+                }
+                if (part instanceof forge.game.cost.CostDiscard) {
+                    continue;
+                }
+                if (part instanceof forge.game.cost.CostExile) {
+                    continue;
+                }
+                if (part instanceof forge.game.cost.CostPayLife) {
+                    continue;
+                }
                 return "COMPLEX_COST:" + part.getClass().getSimpleName();
             }
         }
@@ -311,19 +343,19 @@ public final class ExternalPlayerController extends PlayerController {
     }
 
     /**
-     * WS202 single-target representability: exactly one required target, no
-     * division. Mirrors the chooseTargetsFor framing boundary. Any uncertainty
-     * (bounds unreadable, divided) resolves to not-representable.
+     * WS202 target representability: any min..max combination is framed, except
+     * chooser-divided allocation, which has no native controller surface (the
+     * engine resolves it GUI-direct). Any uncertainty resolves to
+     * not-representable.
      */
     static boolean isSingleTargetRepresentable(SpellAbility sa) {
         try {
-            if (sa.getMinTargets() != 1 || sa.getMaxTargets() != 1) {
-                return false;
-            }
             if (sa.isDividedAsYouChoose() || sa.hasParam("DividedUpTo")) {
                 return false;
             }
-            return true;
+            final int min = sa.getMinTargets();
+            final int max = sa.getMaxTargets();
+            return max >= min && min >= 0;
         } catch (Throwable t) {
             return false;
         }
@@ -332,9 +364,11 @@ public final class ExternalPlayerController extends PlayerController {
     /**
      * WS202 mana boundary. Payment from the pre-floated pool is representable via
      * native ManaPool deduction with framed chooseManaFromPool on ambiguity; no
-     * heuristic auto-tap is reachable. Only mana abilities with a color/output
-     * choice still block; fixed-output mana abilities pass, as proven by native
-     * AbilityManaPart structure.
+     * heuristic auto-tap is reachable. Choice mana outputs (any/combo/special,
+     * including previously-chosen colors) resolve through the Core-owned
+     * ManaEffect paths into framed chooseColor/specifyManaCombo decisions, so
+     * they no longer block offering the ability. Only an unreadable mana
+     * structure fails closed.
      */
     private static String classifyMana(SpellAbility sa) {
         // WS202: nonzero mana payment is representable via pre-floated pool
@@ -342,23 +376,10 @@ public final class ExternalPlayerController extends PlayerController {
         if (sa.isManaAbility()) {
             SpellAbility tail = sa;
             while (tail != null) {
-                final AbilityManaPart manaPart;
                 try {
-                    manaPart = tail.getManaPart();
+                    tail.getManaPart();
                 } catch (Throwable t) {
                     return "MANA_OUTPUT_CHOICE";
-                }
-                if (manaPart != null) {
-                    if (manaPart.isAnyMana() || manaPart.isComboMana() || manaPart.isSpecialMana()) {
-                        return "MANA_OUTPUT_CHOICE";
-                    }
-                    try {
-                        if (manaPart.getOrigProduced().contains("Chosen")) {
-                            return "MANA_OUTPUT_CHOICE";
-                        }
-                    } catch (Throwable t) {
-                        return "MANA_OUTPUT_CHOICE";
-                    }
                 }
                 try {
                     tail = tail.getSubAbility();
@@ -626,21 +647,122 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public boolean confirmPayment(CostPart costPart, String message, SpellAbility sa) {
         // Decline rather than auto-confirm: the engine rolls the play back.
+        // Optional cost-part confirms with real discretion (pay life/energy, exile
+        // all/library, discard hand/random) are framed inline by the specific
+        // BridgeCostDecisionMaker visits or cost branches, never here, so this
+        // stay-closed gate only guards prompts with no represented shape.
         return false;
+    }
+
+    /**
+     * WS202: exact-count cost-card selection shared by the casting pipeline
+     * ({@code chooseCardsForCost}) and the cost-decision visits. Returns the
+     * chosen cards, or null on pilot decline / insufficient legals / incompletely
+     * offerable sets (engine rolls back; the decline/audit records the reason).
+     */
+    CardCollection frameCostCards(String actionType, String prompt, CardCollectionView legalView,
+            int count, boolean cancelAllowed) {
+        final List<Card> legal = new ArrayList<>();
+        if (legalView != null) {
+            for (Card card : legalView) {
+                if (card != null) {
+                    legal.add(card);
+                }
+            }
+        }
+        if (legal.size() < count) {
+            return null;
+        }
+        final List<List<Card>> subsets = enumerateSubsets(legal, count, count);
+        if (subsets.isEmpty() || subsets.size() > 128) {
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("action", actionType);
+            details.put("reason", subsets.isEmpty() ? "no valid set" : "too many sets");
+            session.audit("cost_unrepresentable", details);
+            return null;
+        }
+        if (subsets.size() == 1 && !cancelAllowed) {
+            return new CardCollection(subsets.get(0));
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size() + 1);
+        for (List<Card> subset : subsets) {
+            final StringBuilder label = new StringBuilder(
+                    prompt == null || prompt.isEmpty() ? "Choose" : prompt);
+            label.append(" [");
+            for (Card card : subset) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption(actionType, label.toString(), null,
+                    new CardCollection(subset), "CARD_LIST"));
+        }
+        if (cancelAllowed) {
+            options.add(DecisionFrame.confirmOption(actionType, "Decline payment", false));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.COST_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        if (answer.selected.confirmValue != null && !answer.selected.confirmValue.booleanValue()) {
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("action", actionType);
+            details.put("choice", "declined");
+            session.audit("cost_declined", details);
+            return null;
+        }
+        final CardCollection chosen = (CardCollection) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("cost option without native payload");
+        }
+        return chosen;
+    }
+
+    /**
+     * WS202: binary cost confirm shared by cost-decision visits (pay life and
+     * similar optional payments). No ambient default is consulted.
+     */
+    boolean frameCostConfirm(String actionType, String prompt) {
+        return parkBinary(DecisionFrame.Kind.COST_SELECTION, actionType,
+                prompt == null || prompt.isEmpty() ? "Pay cost" : prompt);
+    }
+
+    @Override
+    public boolean payCombatCost(Card card, Cost cost, SpellAbility sa, String prompt) {
+        // WS202: route combat taxes through the real cost pipeline so mana
+        // payments use pre-floated pool framing and card selections are parked.
+        // Engine validates and removes unpaid attackers/blockers natively.
+        try {
+            return PlaySpellAbility.payCostDuringAbilityResolve(this, player, cost, sa, prompt);
+        } catch (BridgeUnsupportedDecision e) {
+            session.setLastExecutionError(e.getMessage());
+            throw e;
+        }
     }
 
     @Override
     public List<CostPart> orderCosts(List<CostPart> costs) {
-        if (costs.size() <= 1) {
-            return costs;
-        }
-        throw unsupported("orderCosts", "cost ordering is a choice");
+        // WS202: mirror the Human default without the ChooseCostOrder full-control
+        // flag (which the bridge never sets): scripted order stands, no discretion.
+        return costs;
     }
 
     @Override
     public CardCollectionView chooseCardsForCost(CardCollectionView optionList, SpellAbility sa,
             CostPartWithList cpl, int amount, boolean isOptional, String prompt) {
-        throw unsupported("chooseCardsForCost", "cost card selection is a choice");
+        // WS202: authoritative exact-count selection from the engine-supplied
+        // legal list. Decline returns null so the engine rolls the play back.
+        final CardCollection chosen = frameCostCards("cost_cards",
+                prompt == null ? "Choose cards for cost" : prompt, optionList, amount,
+                isOptional);
+        if (chosen == null) {
+            return null;
+        }
+        return chosen;
     }
 
     @Override
@@ -664,7 +786,79 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public Map<Byte, Integer> specifyManaCombo(SpellAbility sa, ColorSet colorSet, int manaAmount,
             boolean different) {
-        throw unsupported("specifyManaCombo", "mana combo specification is a choice");
+        // WS202: Core-owned combo-mana choice (ManaEffect). Every color-count map
+        // over the engine-supplied options summing to the required amount (each at
+        // most once when colors must differ) is one authoritative option, bounded
+        // to avoid partial sets. Mirrors the AI's sequential chooseColor shape but
+        // parks the complete combination instead of deciding tactically.
+        if (colorSet == null || manaAmount <= 0) {
+            throw unsupported("specifyManaCombo", "empty mana choice");
+        }
+        final List<forge.card.MagicColor.Color> colors =
+                new ArrayList<>(colorSet.getOrderedColors());
+        if (colors.isEmpty()) {
+            throw unsupported("specifyManaCombo", "no colors offered by engine");
+        }
+        final List<Map<Byte, Integer>> combos = new ArrayList<>();
+        // Sentinel cap: 129 means "more than offerable" and fails closed below,
+        // so the frame never carries a truncated legal set.
+        enumerateManaCombos(colors, 0, manaAmount, different, new LinkedHashMap<>(), combos, 129);
+        if (combos.isEmpty()) {
+            throw unsupported("specifyManaCombo", "no valid combination");
+        }
+        if (combos.size() > 128) {
+            throw unsupported("specifyManaCombo", "too many combinations to offer completely");
+        }
+        if (combos.size() == 1) {
+            return new LinkedHashMap<>(combos.get(0));
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(combos.size());
+        for (Map<Byte, Integer> combo : combos) {
+            final StringBuilder label = new StringBuilder("Mana [");
+            for (Map.Entry<Byte, Integer> entry : combo.entrySet()) {
+                label.append(forge.card.MagicColor.toShortString(entry.getKey()))
+                        .append('x').append(entry.getValue()).append(';');
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption("mana_combo", label.toString(), null,
+                    new LinkedHashMap<>(combo), "MANA_COMBO"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.MANA_PAYMENT, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final Map<Byte, Integer> chosen = (Map<Byte, Integer>) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("mana option without native payload");
+        }
+        return new LinkedHashMap<>(chosen);
+    }
+
+    private static void enumerateManaCombos(List<forge.card.MagicColor.Color> colors, int index,
+            int remaining, boolean different, Map<Byte, Integer> working,
+            List<Map<Byte, Integer>> result, int cap) {
+        if (result.size() >= cap) {
+            return;
+        }
+        if (index == colors.size()) {
+            if (remaining == 0 && !working.isEmpty()) {
+                result.add(new LinkedHashMap<>(working));
+            }
+            return;
+        }
+        final byte mask = colors.get(index).getColorMask();
+        final int max = different ? Math.min(1, remaining) : remaining;
+        for (int count = 0; count <= max; count++) {
+            if (count > 0) {
+                working.put(mask, count);
+            }
+            enumerateManaCombos(colors, index + 1, remaining - count, different, working,
+                    result, cap);
+            working.remove(mask);
+            if (result.size() >= cap) {
+                return;
+            }
+        }
     }
 
     // ---- forced trivial cases ----
@@ -751,18 +945,66 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public List<Card> exertAttackers(List<Card> attackers) {
-        if (attackers.isEmpty()) {
-            return attackers;
-        }
-        throw unsupported("exertAttackers", "exert selection is a choice");
+        return frameCombatSubset(attackers, "exert", "Exert");
     }
 
     @Override
     public List<Card> enlistAttackers(List<Card> attackers) {
-        if (attackers.isEmpty()) {
-            return attackers;
+        return frameCombatSubset(attackers, "enlist", "Enlist");
+    }
+
+    /**
+     * WS202: optional attack-cost creature selection. The engine supplies the
+     * complete legal candidate list; every subset (including empty) is offered
+     * as one authoritative option, bounded to avoid partial sets.
+     */
+    private List<Card> frameCombatSubset(List<Card> candidates, String actionType, String verb) {
+        final List<Card> legal = new ArrayList<>();
+        if (candidates != null) {
+            for (Card card : candidates) {
+                if (card != null) {
+                    legal.add(card);
+                }
+            }
         }
-        throw unsupported("enlistAttackers", "enlist selection is a choice");
+        if (legal.isEmpty()) {
+            return new ArrayList<>();
+        }
+        final List<List<Card>> subsets = enumerateSubsets(legal, 0, legal.size());
+        if (subsets.isEmpty() || subsets.size() > 128) {
+            throw unsupported(actionType + "Attackers", "cannot offer complete selection");
+        }
+        if (subsets.size() == 1) {
+            return new ArrayList<>(subsets.get(0));
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size());
+        for (List<Card> subset : subsets) {
+            final StringBuilder label = new StringBuilder(verb).append(" [");
+            for (Card card : subset) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption(actionType, label.toString(), null,
+                    new ArrayList<>(subset), "CARD_LIST"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final List<Card> chosen = (List<Card>) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException(actionType + " option without native payload");
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("action", actionType);
+        details.put("count", Integer.toString(chosen.size()));
+        session.audit("combat_subset_chosen", details);
+        return new ArrayList<>(chosen);
     }
 
     @Override
@@ -912,69 +1154,433 @@ public final class ExternalPlayerController extends PlayerController {
         throw unsupported("chooseCardsYouWonToAddToDeck", "ante card choice is not represented");
     }
 
-    // WS191: aa5c Rules-Core replaced the raw-map assignCombatDamage boundary with
-    // the Core-owned CombatDamageDecisionView/CombatDamageSelection choice. The
-    // bridge does not represent combat damage assignment and fails closed here.
+    // WS191: aa5c Rules-Core owns the incremental combat-damage transaction
+    // (CombatDamageDecision). Anything reaching this callback is discretionary:
+    // forced progress was already applied by the Core, so every legal
+    // (source, recipient, amount) triple from the Core-owned view is parked,
+    // even a lone triple (the amount is still a choice). The Core revalidates
+    // on apply; stale/foreign/illegal selections throw there, never silently.
     @Override
     public CombatDamageSelection chooseCombatDamage(final CombatDamageDecisionView decision) {
-        throw unsupported("chooseCombatDamage", "combat damage assignment is not represented");
+        if (decision == null || decision.isEmpty()) {
+            throw unsupported("chooseCombatDamage", "empty damage decision");
+        }
+        final List<CombatDamageSelection> triples = new ArrayList<>();
+        for (CombatDamageDecisionView.SourceView source : decision.getSources()) {
+            if (source == null) {
+                continue;
+            }
+            for (CombatDamageDecisionView.RecipientView recipient : source.getRecipients()) {
+                if (recipient == null || recipient.getRecipient() == null) {
+                    continue;
+                }
+                for (int amount = recipient.getMinDamage();
+                        amount <= recipient.getMaxDamage(); amount++) {
+                    if (amount <= 0) {
+                        continue;
+                    }
+                    triples.add(new CombatDamageSelection(source.getSource(),
+                            recipient.getRecipient(), amount));
+                    if (triples.size() > 128) {
+                        throw unsupported("chooseCombatDamage",
+                                "too many damage assignments to offer completely");
+                    }
+                }
+            }
+        }
+        if (triples.isEmpty()) {
+            throw unsupported("chooseCombatDamage", "no legal damage assignment");
+        }
+        return parkChoices(DecisionFrame.Kind.COMBAT_DAMAGE, "combat_damage", triples,
+                selection -> {
+                    try {
+                        final String from = selection.getSource() == null ? "?"
+                                : selection.getSource().getName();
+                        final GameEntity to = selection.getRecipient();
+                        final String toName;
+                        if (to instanceof Card) {
+                            toName = ((Card) to).getName();
+                        } else if (to instanceof Player) {
+                            toName = "player " + session.playerIdOf((Player) to);
+                        } else {
+                            toName = to.toString();
+                        }
+                        return "Assign " + selection.getAmount() + " from " + from + " to "
+                                + toName;
+                    } catch (Throwable t) {
+                        return "Assign combat damage";
+                    }
+                }, "COMBAT_DAMAGE_SELECTION");
     }
 
-    // WS191: aa5c Rules-Core added the Core-owned noncombat amount-distribution
-    // choice. The bridge does not represent it and fails closed here.
+    // WS191: aa5c Rules-Core owns the exact-total noncombat amount transaction
+    // (AmountDistributionDecision) with forced single-recipient collapse. As with
+    // combat damage, anything reaching this callback is discretionary and every
+    // legal (recipient, amount) pair from the Core-owned view is parked.
     @Override
     public AmountDistributionSelection chooseAmountDistribution(
             final AmountDistributionDecisionView decision) {
-        throw unsupported("chooseAmountDistribution", "amount distribution is not represented");
+        if (decision == null || decision.getRecipients().isEmpty()) {
+            throw unsupported("chooseAmountDistribution", "empty amount decision");
+        }
+        final List<AmountDistributionSelection> pairs = new ArrayList<>();
+        for (AmountDistributionDecisionView.RecipientView recipient : decision.getRecipients()) {
+            if (recipient == null || recipient.getRecipient() == null) {
+                continue;
+            }
+            for (int amount = recipient.getMinAmount();
+                    amount <= recipient.getMaxAmount(); amount++) {
+                if (amount <= 0) {
+                    continue;
+                }
+                pairs.add(new AmountDistributionSelection(recipient.getRecipient(), amount));
+                if (pairs.size() > 128) {
+                    throw unsupported("chooseAmountDistribution",
+                            "too many amount assignments to offer completely");
+                }
+            }
+        }
+        if (pairs.isEmpty()) {
+            throw unsupported("chooseAmountDistribution", "no legal amount assignment");
+        }
+        return parkChoices(DecisionFrame.Kind.AMOUNT_DISTRIBUTION, "amount_distribution",
+                pairs, selection -> {
+                    try {
+                        final GameEntity to = selection.getRecipient();
+                        final String toName;
+                        if (to instanceof Card) {
+                            toName = ((Card) to).getName();
+                        } else if (to instanceof Player) {
+                            toName = "player " + session.playerIdOf((Player) to);
+                        } else {
+                            toName = to.toString();
+                        }
+                        return "Assign " + selection.getAmount() + " to " + toName;
+                    } catch (Throwable t) {
+                        return "Assign amount";
+                    }
+                }, "AMOUNT_DISTRIBUTION_SELECTION");
     }
 
     @Override
     public Map<GameEntity, Integer> divideShield(Card effectSource, Map<GameEntity, Integer> affected,
             int shieldAmount) {
-        throw unsupported("divideShield", "shield division is not represented");
+        // WS202: bounded shield division. Each affected target may absorb
+        // 0..min(its damage, shield); every complete map spending at most the
+        // shield is one authoritative option. Anything larger fails closed.
+        if (affected == null || affected.isEmpty() || shieldAmount <= 0) {
+            return new LinkedHashMap<>();
+        }
+        final List<GameEntity> targets = new ArrayList<>(affected.keySet());
+        if (targets.size() > 4) {
+            throw unsupported("divideShield", "too many shield targets to offer completely");
+        }
+        final List<Map<GameEntity, Integer>> maps = new ArrayList<>();
+        maps.add(new LinkedHashMap<>());
+        for (GameEntity target : targets) {
+            if (target == null) {
+                continue;
+            }
+            final int damage;
+            try {
+                damage = Math.max(0, affected.getOrDefault(target, 0));
+            } catch (Throwable t) {
+                throw unsupported("divideShield", "shield amount unreadable");
+            }
+            final int cap = Math.min(damage, shieldAmount);
+            final List<Map<GameEntity, Integer>> next = new ArrayList<>();
+            for (Map<GameEntity, Integer> base : maps) {
+                int spent = 0;
+                for (int value : base.values()) {
+                    spent += value;
+                }
+                for (int amount = 0; amount <= cap && spent + amount <= shieldAmount; amount++) {
+                    final Map<GameEntity, Integer> extended = new LinkedHashMap<>(base);
+                    extended.put(target, amount);
+                    next.add(extended);
+                    if (next.size() > 128) {
+                        throw unsupported("divideShield",
+                                "too many shield divisions to offer completely");
+                    }
+                }
+            }
+            maps.clear();
+            maps.addAll(next);
+        }
+        if (maps.size() == 1) {
+            return new LinkedHashMap<>(maps.get(0));
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(maps.size());
+        for (Map<GameEntity, Integer> map : maps) {
+            final StringBuilder label = new StringBuilder("Shield [");
+            for (Map.Entry<GameEntity, Integer> entry : map.entrySet()) {
+                try {
+                    if (entry.getKey() instanceof Card) {
+                        label.append(((Card) entry.getKey()).getName());
+                    } else {
+                        label.append(entry.getKey().toString());
+                    }
+                } catch (Throwable t) {
+                    label.append('?');
+                }
+                label.append(':').append(entry.getValue()).append(';');
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption("divide_shield", label.toString(), null,
+                    new LinkedHashMap<>(map), "SHIELD_MAP"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.GENERIC_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final Map<GameEntity, Integer> chosen =
+                (Map<GameEntity, Integer>) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("shield option without native payload");
+        }
+        return new LinkedHashMap<>(chosen);
     }
 
     @Override
     public CardCollectionView choosePermanentsToSacrifice(SpellAbility sa, int min, int max,
             CardCollectionView validTargets, String message) {
-        throw unsupported("choosePermanentsToSacrifice", "sacrifice selection is not represented");
+        return frameEffectCards("sacrifice",
+                message == null ? "Choose permanents to sacrifice" : message, validTargets,
+                min, max);
     }
 
     @Override
     public CardCollectionView choosePermanentsToDestroy(SpellAbility sa, int min, int max,
             CardCollectionView validTargets, String message) {
-        throw unsupported("choosePermanentsToDestroy", "destroy selection is not represented");
+        return frameEffectCards("destroy",
+                message == null ? "Choose permanents to destroy" : message, validTargets,
+                min, max);
+    }
+
+    /**
+     * WS202: effect-resolution card selection. Every min..max subset of the
+     * engine-supplied valid list is one authoritative option, bounded to avoid
+     * partial sets. Empty results pass through as empty (engine fizzles/shorts
+     * downstream); oversized sets fail closed loudly.
+     */
+    private CardCollection frameEffectCards(String actionType, String prompt,
+            CardCollectionView validTargets, int min, int max) {
+        final List<Card> legal = new ArrayList<>();
+        if (validTargets != null) {
+            for (Card card : validTargets) {
+                if (card != null) {
+                    legal.add(card);
+                }
+            }
+        }
+        if (legal.isEmpty()) {
+            return new CardCollection();
+        }
+        final List<List<Card>> subsets = enumerateSubsets(legal, Math.max(0, min),
+                Math.min(Math.max(0, max), legal.size()));
+        if (subsets.isEmpty()) {
+            return new CardCollection();
+        }
+        if (subsets.size() == 1) {
+            return new CardCollection(subsets.get(0));
+        }
+        if (subsets.size() > 128) {
+            throw unsupported(actionType, "too many combinations to offer completely");
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size());
+        for (List<Card> subset : subsets) {
+            final StringBuilder label = new StringBuilder(prompt).append(" [");
+            for (Card card : subset) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption(actionType, label.toString(), null,
+                    new CardCollection(subset), "CARD_LIST"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.GENERIC_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        final CardCollection chosen = (CardCollection) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException(actionType + " option without native payload");
+        }
+        return chosen;
     }
 
     @Override
     public TargetChoices chooseNewTargetsFor(SpellAbility ability, Predicate<GameObject> filter,
             boolean optional) {
-        throw unsupported("chooseNewTargetsFor", "target selection is not represented");
+        // WS202: mirror the Human redirect flow (unwrap, save/restore, exact-count
+        // reselect) with the new targets parked as one authoritative TARGET_SELECTION
+        // frame. Divided reselects have no native controller surface and fail closed.
+        final SpellAbility sa = ability != null && ability.isWrapper()
+                ? ((WrappedAbility) ability).getWrappedAbility() : ability;
+        if (sa == null) {
+            throw unsupported("chooseNewTargetsFor", "null ability");
+        }
+        if (!sa.usesTargeting()) {
+            return null;
+        }
+        final TargetChoices oldTargets = sa.getTargets();
+        final int count = oldTargets == null ? 0 : oldTargets.size();
+        final boolean divided;
+        try {
+            divided = sa.isDividedAsYouChoose() || sa.hasParam("DividedUpTo");
+        } catch (Throwable t) {
+            throw unsupported("chooseNewTargetsFor", "target bounds unreadable");
+        }
+        if (divided && count > 0) {
+            throw unsupported("chooseNewTargetsFor",
+                    "divided allocation has no native controller surface");
+        }
+        final List<GameEntity> candidates;
+        try {
+            candidates = sa.getTargetRestrictions().getAllCandidates(sa);
+        } catch (Throwable t) {
+            throw unsupported("chooseNewTargetsFor", "candidate enumeration failed");
+        }
+        final List<GameEntity> legal = new ArrayList<>();
+        if (candidates != null) {
+            for (GameEntity entity : candidates) {
+                if (entity == null) {
+                    continue;
+                }
+                try {
+                    if (filter != null && !filter.test(entity)) {
+                        continue;
+                    }
+                    if (!sa.canTarget(entity)) {
+                        continue;
+                    }
+                    legal.add(entity);
+                } catch (Throwable t) {
+                    throw unsupported("chooseNewTargetsFor", "target legality check failed");
+                }
+            }
+        }
+        if (legal.size() > 9) {
+            throw unsupported("chooseNewTargetsFor", "too many candidates to offer completely");
+        }
+        final List<List<GameEntity>> validSets = new ArrayList<>();
+        for (List<GameEntity> subset : enumerateSubsets(legal, count, count)) {
+            try {
+                sa.clearTargets();
+                for (GameEntity entity : subset) {
+                    sa.getTargets().add(entity);
+                }
+                if (forge.game.staticability.StaticAbilityMustTarget.meetsMustTargetRestriction(
+                        sa)) {
+                    validSets.add(subset);
+                }
+            } catch (Throwable t) {
+                try {
+                    sa.setTargets(oldTargets);
+                } catch (Throwable inner) {
+                    // Ignore restore failure; report selection failure.
+                }
+                throw unsupported("chooseNewTargetsFor", "target combination check failed");
+            }
+            if (validSets.size() > 512) {
+                try {
+                    sa.setTargets(oldTargets);
+                } catch (Throwable inner) {
+                    // Ignore restore failure; report selection failure.
+                }
+                throw unsupported("chooseNewTargetsFor",
+                        "too many target combinations to offer completely");
+            }
+        }
+        try {
+            sa.setTargets(oldTargets);
+        } catch (Throwable t) {
+            throw unsupported("chooseNewTargetsFor", "target restore failed");
+        }
+        if (validSets.isEmpty()) {
+            return null;
+        }
+        final List<GameEntity> chosen;
+        if (validSets.size() == 1 && !optional) {
+            chosen = validSets.get(0);
+        } else {
+            final List<DecisionFrame.Option> options = new ArrayList<>(validSets.size() + 1);
+            for (List<GameEntity> set : validSets) {
+                final StringBuilder label = new StringBuilder("New targets [");
+                for (GameEntity entity : set) {
+                    label.append(targetName(entity)).append(';');
+                }
+                label.append(']');
+                options.add(DecisionFrame.payloadOption("retarget", label.toString(), null,
+                        new ArrayList<>(set), "GAME_ENTITY_LIST"));
+            }
+            if (optional) {
+                options.add(DecisionFrame.confirmOption("retarget", "Keep existing targets", false));
+            }
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.TARGET_SELECTION, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            if (answer.selected.confirmValue != null
+                    && !answer.selected.confirmValue.booleanValue()) {
+                return null;
+            }
+            @SuppressWarnings("unchecked")
+            final List<GameEntity> picked = (List<GameEntity>) answer.selected.nativePayload;
+            if (picked == null) {
+                throw new IllegalStateException("retarget option without native payload");
+            }
+            chosen = picked;
+        }
+        try {
+            sa.clearTargets();
+            for (GameEntity entity : chosen) {
+                sa.getTargets().add(entity);
+            }
+        } catch (Throwable t) {
+            try {
+                sa.setTargets(oldTargets);
+            } catch (Throwable inner) {
+                // Ignore restore failure; report assignment failure.
+            }
+            throw unsupported("chooseNewTargetsFor", "target assignment failed");
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("count", Integer.toString(chosen.size()));
+        session.audit("targets_redirected", details);
+        return sa.getTargets();
     }
 
     @Override
     public boolean chooseTargetsFor(SpellAbility currentAbility) {
-        // WS202: authoritative single-target selection via the engine's own
-        // TargetRestrictions.getAllCandidates (Rules-Core legal set). Multi-target
-        // (min/max != 1/1, divided, etc.) still fails closed with an explicit reason
-        // until combination-legality framing qualifies.
+        // WS202: authoritative target selection via the engine's own
+        // TargetRestrictions.getAllCandidates (Rules-Core legal set) filtered by
+        // canTarget (fizzle/protection layers). Every MustTarget-valid combination
+        // of min..max targets is one authoritative option, bounded to avoid partial
+        // sets. Chooser-divided allocation has no native controller surface (the
+        // engine resolves it GUI-direct), so divided spells fail closed precisely.
         if (currentAbility == null) {
             throw unsupported("chooseTargetsFor", "null ability");
         }
         final int min;
         final int max;
+        final boolean divided;
         try {
             min = currentAbility.getMinTargets();
             max = currentAbility.getMaxTargets();
+            divided = currentAbility.isDividedAsYouChoose()
+                    || currentAbility.hasParam("DividedUpTo");
         } catch (Throwable t) {
             throw unsupported("chooseTargetsFor", "target bounds unreadable");
         }
-        if (min != 1 || max != 1) {
+        if (divided) {
             throw unsupported("chooseTargetsFor",
-                    "multi-target selection not yet represented (min=" + min + " max=" + max + ")");
+                    "divided allocation has no native controller surface");
         }
-        if (currentAbility.isDividedAsYouChoose() || currentAbility.hasParam("DividedUpTo")) {
-            throw unsupported("chooseTargetsFor", "divided damage not yet represented");
+        if (max < min) {
+            throw unsupported("chooseTargetsFor", "inverted target bounds");
         }
         final List<GameEntity> candidates;
         try {
@@ -982,52 +1588,87 @@ public final class ExternalPlayerController extends PlayerController {
         } catch (Throwable t) {
             throw unsupported("chooseTargetsFor", "candidate enumeration failed");
         }
-        if (candidates == null || candidates.isEmpty()) {
-            return false;
-        }
-        // Filter to individually legal via canTarget (defense in depth; getAllCandidates
-        // already applies Restrictions, but canTarget covers fizzle/protection layers).
         final List<GameEntity> legal = new ArrayList<>();
-        for (GameEntity entity : candidates) {
-            if (entity == null) {
-                continue;
-            }
-            try {
-                if (currentAbility.canTarget(entity)) {
-                    legal.add(entity);
+        if (candidates != null) {
+            for (GameEntity entity : candidates) {
+                if (entity == null) {
+                    continue;
                 }
-            } catch (Throwable t) {
-                throw unsupported("chooseTargetsFor", "target legality check failed");
+                try {
+                    if (currentAbility.canTarget(entity)) {
+                        legal.add(entity);
+                    }
+                } catch (Throwable t) {
+                    throw unsupported("chooseTargetsFor", "target legality check failed");
+                }
             }
         }
         if (legal.isEmpty()) {
+            return min <= 0;
+        }
+        if (legal.size() > 9) {
+            throw unsupported("chooseTargetsFor", "too many candidates to offer completely");
+        }
+        // Trial-assign each combination so MustTarget and sibling-target rules
+        // prune the offered set exactly; the frame carries only valid sets.
+        final List<List<GameEntity>> validSets = new ArrayList<>();
+        for (List<GameEntity> subset : enumerateSubsets(legal, min, Math.min(max, legal.size()))) {
+            try {
+                for (GameEntity entity : subset) {
+                    currentAbility.getTargets().add(entity);
+                }
+                if (forge.game.staticability.StaticAbilityMustTarget.meetsMustTargetRestriction(
+                        currentAbility)) {
+                    validSets.add(subset);
+                }
+            } catch (Throwable t) {
+                throw unsupported("chooseTargetsFor", "target combination check failed");
+            } finally {
+                try {
+                    currentAbility.resetTargets();
+                } catch (Throwable t) {
+                    throw unsupported("chooseTargetsFor", "target reset failed");
+                }
+            }
+            if (validSets.size() > 512) {
+                throw unsupported("chooseTargetsFor",
+                        "too many target combinations to offer completely");
+            }
+        }
+        if (validSets.isEmpty()) {
             return false;
         }
-        final GameEntity chosen;
-        if (legal.size() == 1) {
-            chosen = legal.get(0);
+        final List<GameEntity> chosen;
+        if (validSets.size() == 1) {
+            chosen = validSets.get(0);
         } else {
-            chosen = parkSingleChoice(DecisionFrame.Kind.TARGET_SELECTION, "target", legal,
-                    item -> {
-                        try {
-                            if (item instanceof Card) {
-                                return "Target [" + ((Card) item).getName() + "]";
-                            }
-                            if (item instanceof Player) {
-                                return "Target [player " + session.playerIdOf((Player) item) + "]";
-                            }
-                            return "Target [" + item.toString() + "]";
-                        } catch (Throwable t) {
-                            return "Target";
-                        }
-                    }, "GAME_ENTITY");
+            final List<DecisionFrame.Option> options = new ArrayList<>(validSets.size());
+            for (List<GameEntity> set : validSets) {
+                final StringBuilder label = new StringBuilder("Target [");
+                for (GameEntity entity : set) {
+                    label.append(targetName(entity)).append(';');
+                }
+                label.append(']');
+                options.add(DecisionFrame.payloadOption("target", label.toString(), null,
+                        new ArrayList<>(set), "GAME_ENTITY_LIST"));
+            }
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.TARGET_SELECTION, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            @SuppressWarnings("unchecked")
+            final List<GameEntity> picked = (List<GameEntity>) answer.selected.nativePayload;
+            if (picked == null) {
+                throw new IllegalStateException("target option without native payload");
+            }
+            chosen = picked;
         }
         try {
-            currentAbility.getTargets().add(chosen);
+            for (GameEntity entity : chosen) {
+                currentAbility.getTargets().add(entity);
+            }
         } catch (Throwable t) {
             throw unsupported("chooseTargetsFor", "target assignment failed");
         }
-        // Verify the engine accepts the assignment (MustTarget etc.).
         try {
             if (!forge.game.staticability.StaticAbilityMustTarget.meetsMustTargetRestriction(
                     currentAbility)) {
@@ -1035,7 +1676,6 @@ public final class ExternalPlayerController extends PlayerController {
                 return false;
             }
         } catch (Throwable t) {
-            // If the restriction check itself fails, fail closed without targets.
             try {
                 currentAbility.resetTargets();
             } catch (Throwable inner) {
@@ -1045,14 +1685,27 @@ public final class ExternalPlayerController extends PlayerController {
         }
         final Map<String, String> details = new LinkedHashMap<>();
         details.put("actor", actorId());
-        try {
-            details.put("target", chosen instanceof Card ? ((Card) chosen).getName() : chosen
-                    .toString());
-        } catch (Throwable t) {
-            details.put("target", "?");
+        final StringBuilder chosenNames = new StringBuilder();
+        for (GameEntity entity : chosen) {
+            chosenNames.append(targetName(entity)).append(';');
         }
-        session.audit("target_chosen", details);
+        details.put("targets", chosenNames.toString());
+        session.audit("targets_chosen", details);
         return true;
+    }
+
+    private String targetName(GameEntity entity) {
+        try {
+            if (entity instanceof Card) {
+                return ((Card) entity).getName();
+            }
+            if (entity instanceof Player) {
+                return "player " + session.playerIdOf((Player) entity);
+            }
+            return entity.toString();
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     @Override
@@ -1091,13 +1744,88 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public CardCollectionView chooseCardsForEffect(CardCollectionView sourceList, SpellAbility sa,
             String title, int min, int max, boolean isOptional, Map<String, Object> params) {
-        throw unsupported("chooseCardsForEffect", "effect card selection is not represented");
+        // WS202: mirror the Human single-pick delegation, then subset framing.
+        // Decline returns null so the engine treats the effect choice as refused.
+        if (min == 1 && max == 1) {
+            final Card single = chooseSingleEntityForEffect(sourceList, null, sa,
+                    title == null ? "Choose card" : title, isOptional, null, params);
+            if (single == null) {
+                return CardCollection.EMPTY;
+            }
+            return new CardCollection(single);
+        }
+        final List<Card> legal = new ArrayList<>();
+        if (sourceList != null) {
+            for (Card card : sourceList) {
+                if (card != null) {
+                    legal.add(card);
+                }
+            }
+        }
+        if (legal.isEmpty()) {
+            return new CardCollection();
+        }
+        final List<List<Card>> subsets = enumerateSubsets(legal, Math.max(0, min),
+                Math.min(Math.max(0, max), legal.size()));
+        if (subsets.isEmpty()) {
+            return new CardCollection();
+        }
+        if (subsets.size() == 1 && !isOptional) {
+            return new CardCollection(subsets.get(0));
+        }
+        if (subsets.size() > 128) {
+            throw unsupported("chooseCardsForEffect", "too many combinations to offer completely");
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size() + 1);
+        for (List<Card> subset : subsets) {
+            final StringBuilder label = new StringBuilder(
+                    title == null || title.isEmpty() ? "Choose cards" : title);
+            label.append(" [");
+            for (Card card : subset) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption("effect_cards", label.toString(), null,
+                    new CardCollection(subset), "CARD_LIST"));
+        }
+        if (isOptional) {
+            options.add(DecisionFrame.confirmOption("effect_cards", "Decline selection", false));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.GENERIC_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        if (answer.selected.confirmValue != null && !answer.selected.confirmValue.booleanValue()) {
+            return null;
+        }
+        final CardCollection chosen = (CardCollection) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("effect option without native payload");
+        }
+        return chosen;
     }
 
     @Override
     public CardCollection chooseCardsForEffectMultiple(Map<String, CardCollection> validMap,
             SpellAbility sa, String title, boolean isOptional) {
-        throw unsupported("chooseCardsForEffectMultiple", "effect card selection is not represented");
+        // WS202: mirror the Human per-category 0..1 delegation exactly.
+        if (validMap == null || validMap.isEmpty()) {
+            throw unsupported("chooseCardsForEffectMultiple", "empty category set");
+        }
+        final CardCollection result = new CardCollection();
+        for (Map.Entry<String, CardCollection> entry : validMap.entrySet()) {
+            final CardCollectionView picked = chooseCardsForEffect(entry.getValue(), sa,
+                    (title == null ? "Choose cards" : title) + " (" + entry.getKey() + ")",
+                    0, 1, isOptional, null);
+            if (picked == null) {
+                return result;
+            }
+            result.addAll(picked);
+        }
+        return result;
     }
 
     @Override
@@ -1393,27 +2121,371 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public void declareAttackers(Player attacker, Combat combat) {
-        throw unsupported("declareAttackers", "combat declaration is not represented");
+        // WS202: Core-owned attacker declaration. Legal (attacker, defender) pairs
+        // come from CombatUtil.getPossibleAttackers (primitive checks) crossed with
+        // the combat's own defender set via CombatUtil.canAttack (restrictions).
+        // Every complete declaration (each attacker striking at most one defender,
+        // or sitting out, including the empty declaration) is one authoritative
+        // option. The engine revalidates (must-attack/goad/propaganda) and
+        // re-prompts on violation; propaganda taxes route through payCombatCost.
+        if (attacker == null || combat == null) {
+            throw unsupported("declareAttackers", "null combat state");
+        }
+        final List<Card> possible;
+        final List<GameEntity> defenders;
+        try {
+            possible = new ArrayList<>(
+                    forge.game.combat.CombatUtil.getPossibleAttackers(attacker));
+            defenders = new ArrayList<>(combat.getDefenders());
+        } catch (Throwable t) {
+            throw unsupported("declareAttackers", "combat enumeration failed");
+        }
+        final List<Card> canAttack = new ArrayList<>();
+        final Map<Card, List<GameEntity>> legalDefenders = new IdentityHashMap<>();
+        for (Card card : possible) {
+            if (card == null) {
+                continue;
+            }
+            final List<GameEntity> legal = new ArrayList<>();
+            for (GameEntity defender : defenders) {
+                if (defender == null) {
+                    continue;
+                }
+                try {
+                    if (forge.game.combat.CombatUtil.canAttack(card, defender)) {
+                        legal.add(defender);
+                    }
+                } catch (Throwable t) {
+                    throw unsupported("declareAttackers", "attack legality check failed");
+                }
+            }
+            if (!legal.isEmpty()) {
+                canAttack.add(card);
+                legalDefenders.put(card, legal);
+            }
+        }
+        if (canAttack.isEmpty()) {
+            return;
+        }
+        if (canAttack.size() > 4) {
+            throw unsupported("declareAttackers", "too many attackers to offer completely");
+        }
+        List<Map<Card, GameEntity>> declarations = new ArrayList<>();
+        declarations.add(new LinkedHashMap<>());
+        for (Card card : canAttack) {
+            final List<Map<Card, GameEntity>> next = new ArrayList<>();
+            for (Map<Card, GameEntity> base : declarations) {
+                next.add(new LinkedHashMap<>(base));
+                for (GameEntity defender : legalDefenders.get(card)) {
+                    final Map<Card, GameEntity> extended = new LinkedHashMap<>(base);
+                    extended.put(card, defender);
+                    next.add(extended);
+                }
+            }
+            declarations = next;
+            if (declarations.size() > 128) {
+                throw unsupported("declareAttackers", "too many declarations to offer completely");
+            }
+        }
+        if (declarations.size() == 1) {
+            applyAttackDeclaration(attacker, combat, declarations.get(0));
+            return;
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(declarations.size());
+        for (Map<Card, GameEntity> declaration : declarations) {
+            options.add(DecisionFrame.payloadOption("declare_attackers",
+                    attackDeclarationLabel(declaration), null,
+                    new LinkedHashMap<>(declaration), "ATTACK_DECLARATION"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final Map<Card, GameEntity> chosen =
+                (Map<Card, GameEntity>) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("attack declaration without native payload");
+        }
+        applyAttackDeclaration(attacker, combat, chosen);
+    }
+
+    private static String attackDeclarationLabel(Map<Card, GameEntity> declaration) {
+        if (declaration.isEmpty()) {
+            return "No attacks";
+        }
+        final StringBuilder label = new StringBuilder("Attack");
+        for (Map.Entry<Card, GameEntity> entry : declaration.entrySet()) {
+            label.append(' ');
+            try {
+                label.append(entry.getKey().getName());
+            } catch (Throwable t) {
+                label.append('?');
+            }
+            label.append(" -> ");
+            try {
+                final GameEntity defender = entry.getValue();
+                if (defender instanceof Player) {
+                    label.append("player");
+                } else if (defender instanceof Card) {
+                    label.append(((Card) defender).getName());
+                } else {
+                    label.append(defender.toString());
+                }
+            } catch (Throwable t) {
+                label.append('?');
+            }
+            label.append(';');
+        }
+        return label.toString();
+    }
+
+    private void applyAttackDeclaration(Player attacker, Combat combat,
+            Map<Card, GameEntity> declaration) {
+        try {
+            for (Card current : new ArrayList<>(combat.getAttackers())) {
+                if (current != null && current.getController() == attacker) {
+                    combat.removeFromCombat(current);
+                }
+            }
+            for (Map.Entry<Card, GameEntity> entry : declaration.entrySet()) {
+                combat.addAttacker(entry.getKey(), entry.getValue());
+            }
+        } catch (Throwable t) {
+            throw unsupported("declareAttackers", "declaration assignment failed");
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("count", Integer.toString(declaration.size()));
+        session.audit("attackers_declared", details);
     }
 
     @Override
     public void declareBlockers(Player defender, Combat combat) {
-        throw unsupported("declareBlockers", "combat declaration is not represented");
+        // WS202: Core-owned blocker declaration. Candidates are the defender's
+        // creatures passing CombatUtil.canBlock in this combat; per-pair legality
+        // comes from CombatUtil.canBlock(attacker, blocker, combat). Every complete
+        // assignment (each blocker on at most one attacker, or sitting out,
+        // including the empty assignment) is one authoritative option. The engine
+        // prunes group-block restrictions and unpaid block costs natively.
+        if (defender == null || combat == null) {
+            throw unsupported("declareBlockers", "null combat state");
+        }
+        final List<Card> attackers;
+        try {
+            attackers = new ArrayList<>(combat.getAttackers());
+        } catch (Throwable t) {
+            throw unsupported("declareBlockers", "combat enumeration failed");
+        }
+        if (attackers.isEmpty()) {
+            return;
+        }
+        final List<Card> candidates = new ArrayList<>();
+        final Map<Card, List<Card>> legalAttackers = new IdentityHashMap<>();
+        for (Card blocker : defender.getCreaturesInPlay()) {
+            if (blocker == null) {
+                continue;
+            }
+            try {
+                if (!forge.game.combat.CombatUtil.canBlock(blocker, combat)) {
+                    continue;
+                }
+            } catch (Throwable t) {
+                throw unsupported("declareBlockers", "block legality check failed");
+            }
+            final List<Card> legal = new ArrayList<>();
+            for (Card attacker : attackers) {
+                if (attacker == null) {
+                    continue;
+                }
+                try {
+                    if (forge.game.combat.CombatUtil.canBlock(attacker, blocker, combat)) {
+                        legal.add(attacker);
+                    }
+                } catch (Throwable t) {
+                    throw unsupported("declareBlockers", "block pairing check failed");
+                }
+            }
+            if (!legal.isEmpty()) {
+                candidates.add(blocker);
+                legalAttackers.put(blocker, legal);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        if (candidates.size() > 4) {
+            throw unsupported("declareBlockers", "too many blockers to offer completely");
+        }
+        List<Map<Card, Card>> assignments = new ArrayList<>();
+        assignments.add(new LinkedHashMap<>());
+        for (Card blocker : candidates) {
+            final List<Map<Card, Card>> next = new ArrayList<>();
+            for (Map<Card, Card> base : assignments) {
+                next.add(new LinkedHashMap<>(base));
+                for (Card attacker : legalAttackers.get(blocker)) {
+                    final Map<Card, Card> extended = new LinkedHashMap<>(base);
+                    extended.put(blocker, attacker);
+                    next.add(extended);
+                }
+            }
+            assignments = next;
+            if (assignments.size() > 128) {
+                throw unsupported("declareBlockers", "too many assignments to offer completely");
+            }
+        }
+        if (assignments.size() == 1) {
+            applyBlockDeclaration(defender, combat, assignments.get(0));
+            return;
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(assignments.size());
+        for (Map<Card, Card> assignment : assignments) {
+            final StringBuilder label = new StringBuilder();
+            if (assignment.isEmpty()) {
+                label.append("No blocks");
+            } else {
+                label.append("Block");
+                for (Map.Entry<Card, Card> entry : assignment.entrySet()) {
+                    label.append(' ');
+                    try {
+                        label.append(entry.getKey().getName());
+                    } catch (Throwable t) {
+                        label.append('?');
+                    }
+                    label.append(" blocks ");
+                    try {
+                        label.append(entry.getValue().getName());
+                    } catch (Throwable t) {
+                        label.append('?');
+                    }
+                    label.append(';');
+                }
+            }
+            options.add(DecisionFrame.payloadOption("declare_blockers", label.toString(), null,
+                    new LinkedHashMap<>(assignment), "BLOCK_DECLARATION"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final Map<Card, Card> chosen = (Map<Card, Card>) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("block declaration without native payload");
+        }
+        applyBlockDeclaration(defender, combat, chosen);
+    }
+
+    private void applyBlockDeclaration(Player defender, Combat combat,
+            Map<Card, Card> assignment) {
+        try {
+            for (Card current : new ArrayList<>(combat.getAllBlockers())) {
+                if (current != null && current.getController() == defender) {
+                    for (Card attacker : new ArrayList<>(combat.getAttackersBlockedBy(current))) {
+                        combat.removeBlockAssignment(attacker, current);
+                    }
+                }
+            }
+            for (Map.Entry<Card, Card> entry : assignment.entrySet()) {
+                combat.addBlocker(entry.getValue(), entry.getKey());
+            }
+        } catch (Throwable t) {
+            throw unsupported("declareBlockers", "block assignment failed");
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("count", Integer.toString(assignment.size()));
+        session.audit("blockers_declared", details);
     }
 
     @Override
     public CardCollection orderBlockers(Card attacker, CardCollection blockers) {
-        throw unsupported("orderBlockers", "combat ordering is not represented");
+        return frameCardOrder(DecisionFrame.Kind.COMBAT_ORDER, "order_blockers",
+                "Order blockers for", attacker, blockers);
     }
 
     @Override
     public CardCollection orderBlocker(Card attacker, Card blocker, CardCollection oldBlockers) {
-        throw unsupported("orderBlocker", "combat ordering is not represented");
+        // WS202: insertion framing. Each position in the existing order (plus the
+        // end) is one authoritative option carrying the complete resulting order.
+        final List<Card> current = new ArrayList<>();
+        if (oldBlockers != null) {
+            for (Card card : oldBlockers) {
+                if (card != null) {
+                    current.add(card);
+                }
+            }
+        }
+        if (blocker == null) {
+            throw unsupported("orderBlocker", "null blocker");
+        }
+        final List<List<Card>> orders = new ArrayList<>(current.size() + 1);
+        for (int i = 0; i <= current.size(); i++) {
+            final List<Card> order = new ArrayList<>(current);
+            order.add(i, blocker);
+            orders.add(order);
+        }
+        if (orders.size() == 1) {
+            return new CardCollection(orders.get(0));
+        }
+        return frameOrderedCards(DecisionFrame.Kind.COMBAT_ORDER, "order_blocker",
+                attacker, orders);
     }
 
     @Override
     public CardCollection orderAttackers(Card blocker, CardCollection attackers) {
-        throw unsupported("orderAttackers", "combat ordering is not represented");
+        return frameCardOrder(DecisionFrame.Kind.COMBAT_ORDER, "order_attackers",
+                "Order attackers for", blocker, attackers);
+    }
+
+    private CardCollection frameCardOrder(DecisionFrame.Kind kind, String actionType,
+            String verb, Card subject, CardCollection cards) {
+        final List<Card> legal = new ArrayList<>();
+        if (cards != null) {
+            for (Card card : cards) {
+                if (card != null) {
+                    legal.add(card);
+                }
+            }
+        }
+        if (legal.size() <= 1) {
+            return cards == null ? new CardCollection() : new CardCollection(cards);
+        }
+        if (legal.size() > 4) {
+            throw unsupported(actionType, "too many combatants to order completely");
+        }
+        return frameOrderedCards(kind, actionType, subject, permutations(legal));
+    }
+
+    private CardCollection frameOrderedCards(DecisionFrame.Kind kind, String actionType,
+            Card subject, List<List<Card>> orders) {
+        final String subjectName;
+        try {
+            subjectName = subject == null ? "?" : subject.getName();
+        } catch (Throwable t) {
+            throw unsupported(actionType, "subject unreadable");
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(orders.size());
+        for (List<Card> order : orders) {
+            final StringBuilder label = new StringBuilder("Order for ").append(subjectName)
+                    .append(" [");
+            for (Card card : order) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption(actionType, label.toString(), null,
+                    new ArrayList<>(order), "CARD_LIST"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(kind, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final List<Card> chosen = (List<Card>) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException(actionType + " option without native payload");
+        }
+        return new CardCollection(chosen);
     }
 
     @Override
@@ -1440,23 +2512,256 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public CardCollectionView chooseCardsToDiscardFrom(Player playerDiscard, SpellAbility sa,
             CardCollection validCards, int min, int max, CardCollectionView visibleToChooser) {
-        throw unsupported("chooseCardsToDiscardFrom", "discard selection is not represented");
+        // WS202: subset framing over the engine-supplied valid list. Labels show
+        // only identities the chooser is entitled to (visibleToChooser); anything
+        // else is an explicit hidden marker, never a name. The frame stays
+        // actor-scoped end to end.
+        final List<Card> legal = new ArrayList<>();
+        if (validCards != null) {
+            for (Card card : validCards) {
+                if (card != null) {
+                    legal.add(card);
+                }
+            }
+        }
+        if (legal.isEmpty()) {
+            return new CardCollection();
+        }
+        final List<List<Card>> subsets = enumerateSubsets(legal, Math.max(0, min),
+                Math.min(Math.max(0, max), legal.size()));
+        if (subsets.isEmpty()) {
+            return new CardCollection();
+        }
+        if (subsets.size() == 1) {
+            return new CardCollection(subsets.get(0));
+        }
+        if (subsets.size() > 128) {
+            throw unsupported("chooseCardsToDiscardFrom",
+                    "too many combinations to offer completely");
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size());
+        for (List<Card> subset : subsets) {
+            final StringBuilder label = new StringBuilder("Discard [");
+            for (Card card : subset) {
+                label.append(discardLabel(card, visibleToChooser)).append(';');
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption("discard", label.toString(), null,
+                    new CardCollection(subset), "CARD_LIST"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.HIDDEN_ZONE_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        final CardCollection chosen = (CardCollection) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("discard option without native payload");
+        }
+        return chosen;
+    }
+
+    private static String discardLabel(Card card, CardCollectionView visibleToChooser) {
+        try {
+            if (visibleToChooser != null && !visibleToChooser.contains(card)) {
+                return "<hidden>";
+            }
+            return card.getName();
+        } catch (Throwable t) {
+            return "<hidden>";
+        }
     }
 
     @Override
     public CardCollectionView chooseCardsToDiscardUnlessType(int min, CardCollectionView hand,
             String[] unlessTypes, SpellAbility sa) {
-        throw unsupported("chooseCardsToDiscardUnlessType", "discard selection is not represented");
+        // WS202: mirror the Human legality exactly — every subset that is either
+        // the full count or a non-empty escape containing an unless-type card.
+        final List<Card> cards = new ArrayList<>();
+        if (hand != null) {
+            for (Card card : hand) {
+                if (card != null) {
+                    cards.add(card);
+                }
+            }
+        }
+        if (cards.isEmpty()) {
+            return new CardCollection();
+        }
+        final Player activating;
+        final Card host;
+        try {
+            activating = sa == null ? null : sa.getActivatingPlayer();
+            host = sa == null ? null : sa.getHostCard();
+        } catch (Throwable t) {
+            throw unsupported("chooseCardsToDiscardUnlessType", "ability unreadable");
+        }
+        final List<List<Card>> validSets = new ArrayList<>();
+        for (List<Card> subset : enumerateSubsets(cards, 0, Math.min(min, cards.size()))) {
+            if (subset.isEmpty()) {
+                continue;
+            }
+            boolean escape = false;
+            boolean full = subset.size() >= min;
+            if (!full) {
+                for (Card card : subset) {
+                    try {
+                        if (unlessTypes != null && card.isValid(unlessTypes, activating, host,
+                                sa)) {
+                            escape = true;
+                            break;
+                        }
+                    } catch (Throwable t) {
+                        throw unsupported("chooseCardsToDiscardUnlessType",
+                                "unless-type check failed");
+                    }
+                }
+            }
+            if (full || escape) {
+                validSets.add(subset);
+            }
+        }
+        // Full-count sets (no escape needed) are always legal when available.
+        for (List<Card> subset : enumerateSubsets(cards, min, Math.min(min, cards.size()))) {
+            if (!validSets.contains(subset)) {
+                validSets.add(subset);
+            }
+        }
+        if (validSets.isEmpty()) {
+            return new CardCollection();
+        }
+        if (validSets.size() == 1) {
+            return new CardCollection(validSets.get(0));
+        }
+        if (validSets.size() > 128) {
+            throw unsupported("chooseCardsToDiscardUnlessType",
+                    "too many combinations to offer completely");
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(validSets.size());
+        for (List<Card> subset : validSets) {
+            final StringBuilder label = new StringBuilder("Discard [");
+            for (Card card : subset) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption("discard", label.toString(), null,
+                    new CardCollection(subset), "CARD_LIST"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.HIDDEN_ZONE_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        final CardCollection chosen = (CardCollection) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("discard option without native payload");
+        }
+        return chosen;
     }
 
     @Override
     public CardCollectionView chooseCardsToDiscardToMaximumHandSize(int numDiscard) {
-        throw unsupported("chooseCardsToDiscardToMaximumHandSize", "discard selection is not represented");
+        // WS202: exact-count subset of the actor's own hand, no cancel (mirror Human).
+        final List<Card> hand = new ArrayList<>(player.getCardsIn(ZoneType.Hand));
+        if (hand.size() < numDiscard) {
+            throw unsupported("chooseCardsToDiscardToMaximumHandSize", "hand too small");
+        }
+        final List<List<Card>> subsets = enumerateSubsets(hand, numDiscard, numDiscard);
+        if (subsets.isEmpty() || subsets.size() > 128) {
+            throw unsupported("chooseCardsToDiscardToMaximumHandSize",
+                    "cannot offer complete selection");
+        }
+        if (subsets.size() == 1) {
+            return new CardCollection(subsets.get(0));
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size());
+        for (List<Card> subset : subsets) {
+            final StringBuilder label = new StringBuilder("Discard to hand size [");
+            for (Card card : subset) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption("discard", label.toString(), null,
+                    new CardCollection(subset), "CARD_LIST"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.HIDDEN_ZONE_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        final CardCollection chosen = (CardCollection) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("discard option without native payload");
+        }
+        return chosen;
     }
 
     @Override
     public CardCollectionView chooseCardsToDelve(int genericAmount, CardCollection grave) {
-        throw unsupported("chooseCardsToDelve", "delve selection is not represented");
+        // WS202: mirror the Human two-step flow (count, then sequential picks)
+        // with framed choices. Cancel aborts delving and yields empty, as Human
+        // clears on cancel.
+        final List<Card> yard = new ArrayList<>();
+        if (grave != null) {
+            for (Card card : grave) {
+                if (card != null) {
+                    yard.add(card);
+                }
+            }
+        }
+        final int maxDelve = Math.min(Math.max(0, genericAmount), yard.size());
+        if (maxDelve == 0) {
+            return CardCollection.EMPTY;
+        }
+        final int count = parkIntRange(DecisionFrame.Kind.COST_SELECTION, "delve_count",
+                "Delve how many cards", 0, maxDelve);
+        final CardCollection chosen = new CardCollection();
+        final List<Card> remaining = new ArrayList<>(yard);
+        for (int i = 0; i < count; i++) {
+            if (remaining.isEmpty()) {
+                chosen.clear();
+                break;
+            }
+            if (remaining.size() == 1) {
+                chosen.add(remaining.remove(0));
+                continue;
+            }
+            final List<DecisionFrame.Option> options = new ArrayList<>(remaining.size() + 1);
+            for (Card card : remaining) {
+                final String label;
+                try {
+                    label = "Delve [" + card.getName() + "]";
+                } catch (Throwable t) {
+                    throw unsupported("chooseCardsToDelve", "label unreadable");
+                }
+                final String sourceName;
+                try {
+                    sourceName = card.getName();
+                } catch (Throwable t) {
+                    throw unsupported("chooseCardsToDelve", "name unreadable");
+                }
+                options.add(DecisionFrame.payloadOption("delve", label, sourceName, card,
+                        "CARD"));
+            }
+            options.add(DecisionFrame.confirmOption("delve", "Stop delving", false));
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.COST_SELECTION, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            if (answer.selected.confirmValue != null
+                    && !answer.selected.confirmValue.booleanValue()) {
+                chosen.clear();
+                break;
+            }
+            final Card picked = (Card) answer.selected.nativePayload;
+            if (picked == null) {
+                throw new IllegalStateException("delve option without native payload");
+            }
+            chosen.add(picked);
+            remaining.remove(picked);
+        }
+        return chosen;
     }
 
     @Override
@@ -1472,7 +2777,8 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public CardCollectionView chooseCardsToRevealFromHand(int min, int max, CardCollectionView valid) {
-        throw unsupported("chooseCardsToRevealFromHand", "reveal selection is not represented");
+        return frameEffectCards("reveal",
+                "Choose cards to reveal", valid, min, max);
     }
 
     @Override
@@ -1545,6 +2851,9 @@ public final class ExternalPlayerController extends PlayerController {
         }
         // WS202: enumerate all valid mode subsets (bounded). Each subset is one
         // authoritative option; submission selects exactly one subset.
+        if (possible.size() > 10) {
+            throw unsupported("chooseModeForAbility", "too many modes to offer completely");
+        }
         final List<List<AbilitySub>> subsets = enumerateModeSubsets(possible, min, num,
                 allowRepeat);
         if (subsets.isEmpty()) {
@@ -1607,10 +2916,10 @@ public final class ExternalPlayerController extends PlayerController {
                 result.add(subset);
             }
         } else {
-            // With repeats: bounded enumeration by size then compositions.
-            // Cards with repeatable modes are rare; bound total to avoid explosion.
+            // With repeats: bounded enumeration by size then compositions, with a
+            // 129 sentinel so oversized spaces fail closed instead of truncating.
             for (int size = min; size <= num; size++) {
-                enumerateWithRepeats(possible, size, 0, new ArrayList<>(), result, 128);
+                enumerateWithRepeats(possible, size, 0, new ArrayList<>(), result, 129);
                 if (result.size() > 128) {
                     break;
                 }
@@ -1945,11 +3254,6 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public boolean payCostDuringRoll(Cost cost, SpellAbility sa) {
         throw unsupported("payCostDuringRoll", "roll payment choice is not represented");
-    }
-
-    @Override
-    public boolean payCombatCost(Card card, Cost cost, SpellAbility sa, String prompt) {
-        throw unsupported("payCombatCost", "combat cost choice is not represented");
     }
 
     @Override

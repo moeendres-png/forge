@@ -377,52 +377,151 @@ public class BridgeEngineTest {
     }
 
     @Test(timeOut = 300000)
-    public void testConstructedUnsupportedSacrificeCost() {
+    public void testConstructedSacrificeCostExecution() {
         final BridgeTestSupport.ConstructedGame constructed =
-                BridgeTestSupport.buildConstructedGame("bolt-ok");
+                BridgeTestSupport.buildConstructedGame("altar-ok");
         final BridgeSession session = constructed.session;
-        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Hand);
         BridgeTestSupport.addCard(constructed.game, 0, "Altar's Reap", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Swamp", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Battlefield);
         BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Ornithopter", ZoneType.Battlefield);
         for (int seat = 0; seat < 4; seat++) {
             for (int i = 0; i < 10; i++) {
                 BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
             }
         }
         BridgeTestSupport.launchConstructed(constructed);
-        final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 60000);
-        Assert.assertNotNull(frame);
-        // The sacrifice-cost spell is legal but not yet representable: fail closed,
-        // never filtered. (Single-target selection now parks TARGET_SELECTION;
-        // sacrifice-cost framing is the remaining gap.)
-        Assert.assertEquals(frame.status, DecisionFrame.Status.UNSUPPORTED);
-        Assert.assertTrue(frame.reason.contains("COMPLEX_COST"), "reason: " + frame.reason);
-        Assert.assertTrue(frame.options.isEmpty());
-        Assert.assertEquals(frame.actorPlayerId, "p1");
-        final String hash = StateHash.ofGame(session.getGame(), session);
-        // R16: wrong actor learns nothing about the private frame.
-        final BridgeSession.SubmitOutcome wrongActor = session.submit("p2", "opt-anything",
-                "pass_priority", frame.revision);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        Assert.assertNotNull(frame, "never reached p1 main phase");
+        Assert.assertEquals(frame.status, DecisionFrame.Status.SUPPORTED);
+        // Pre-float {B} via the Swamp and generic via the Plains: each tap is an
+        // authoritative PRIORITY option, never an auto-tap.
+        for (String land : new String[] { "Swamp", "Plains" }) {
+            DecisionFrame.Option tap = null;
+            for (DecisionFrame.Option option : frame.options) {
+                if ("activate_ability".equals(option.actionType)
+                        && land.equals(option.sourceCardName)) {
+                    tap = option;
+                    break;
+                }
+            }
+            Assert.assertNotNull(tap, land + " tap must be offered");
+            final BridgeSession.SubmitOutcome tapOutcome = session.submit("p1", tap.optionId,
+                    "activate_ability", frame.revision);
+            Assert.assertTrue(tapOutcome.applied, "tap failed: " + tapOutcome.errorCode);
+            Assert.assertTrue(tapOutcome.executionOk,
+                    "engine declined: " + session.getLastExecutionError());
+            frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            Assert.assertEquals(frame.actorPlayerId, "p1");
+        }
+        // Cast Altar's Reap (1B, both mana floated): the sacrifice cost parks an
+        // authoritative COST_SELECTION frame naming both legal creatures.
+        DecisionFrame.Option cast = null;
+        for (DecisionFrame.Option option : frame.options) {
+            if ("cast_spell".equals(option.actionType)
+                    && "Altar's Reap".equals(option.sourceCardName)) {
+                cast = option;
+                break;
+            }
+        }
+        Assert.assertNotNull(cast, "Altar's Reap must be offered once funded");
+        final BridgeSession.SubmitOutcome castOutcome = session.submit("p1", cast.optionId,
+                "cast_spell", frame.revision);
+        Assert.assertTrue(castOutcome.applied, "cast failed: " + castOutcome.errorCode);
+        // Generic mana may need an explicit pool choice (W vs B tie); answer any
+        // MANA_PAYMENT frames until the COST_SELECTION sacrifice frame parks.
+        DecisionFrame costFrame = null;
+        for (int i = 0; i < 10 && costFrame == null; i++) {
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.kind == DecisionFrame.Kind.COST_SELECTION) {
+                costFrame = parked;
+            } else {
+                Assert.assertEquals(parked.kind, DecisionFrame.Kind.MANA_PAYMENT,
+                        "unexpected frame kind during payment");
+                final BridgeSession.SubmitOutcome manaChoice = session.submit(
+                        parked.actorPlayerId, parked.options.get(0).optionId,
+                        parked.options.get(0).actionType, parked.revision);
+                Assert.assertTrue(manaChoice.applied,
+                        "mana choice failed: " + manaChoice.errorCode);
+            }
+        }
+        Assert.assertNotNull(costFrame, "sacrifice COST_SELECTION never parked");
+        Assert.assertEquals(costFrame.kind, DecisionFrame.Kind.COST_SELECTION);
+        Assert.assertEquals(costFrame.actorPlayerId, "p1");
+        Assert.assertTrue(costFrame.options.size() >= 2,
+                "both creatures must be offered, got " + costFrame.options.size());
+        // Negative controls on the live cost frame before answering it.
+        final BridgeSession.SubmitOutcome wrongActor = session.submit("p2",
+                costFrame.options.get(0).optionId,
+                costFrame.options.get(0).actionType, costFrame.revision);
         Assert.assertFalse(wrongActor.applied);
         Assert.assertEquals(wrongActor.errorCode, BridgeErrors.WRONG_ACTOR);
-        Assert.assertFalse(wrongActor.errorMessage.contains("COMPLEX_COST"));
-        Assert.assertFalse(wrongActor.errorMessage.contains("Altar"));
-        Assert.assertFalse(wrongActor.errorMessage.contains("revision"),
-                "no revision detail for wrong actor: " + wrongActor.errorMessage);
-        // R16: stale revision from the correct actor learns nothing current.
-        final BridgeSession.SubmitOutcome stale = session.submit("p1", "opt-anything",
-                "pass_priority", frame.revision - 1);
+        final BridgeSession.SubmitOutcome stale = session.submit("p1",
+                costFrame.options.get(0).optionId,
+                costFrame.options.get(0).actionType, costFrame.revision - 1);
         Assert.assertFalse(stale.applied);
         Assert.assertEquals(stale.errorCode, BridgeErrors.STALE_REVISION);
-        Assert.assertFalse(stale.errorMessage.contains("COMPLEX_COST"));
-        // R16: correct actor at correct revision gets its own truthful fail-closed result.
-        final BridgeSession.SubmitOutcome attempt = session.submit("p1", "opt-anything",
-                "pass_priority", frame.revision);
-        Assert.assertFalse(attempt.applied);
-        Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
-        Assert.assertTrue(attempt.errorMessage.contains("COMPLEX_COST"));
-        Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash,
-                "rejected submissions must not mutate state");
+        final BridgeSession.SubmitOutcome unknown = session.submit("p1", "opt-nope",
+                costFrame.options.get(0).actionType, costFrame.revision);
+        Assert.assertFalse(unknown.applied);
+        Assert.assertEquals(unknown.errorCode, BridgeErrors.UNKNOWN_OPTION);
+        // Sacrifice the Memnite; Ornithopter survives as the live alternative.
+        DecisionFrame.Option memnite = null;
+        for (DecisionFrame.Option option : costFrame.options) {
+            if (option.label != null && option.label.contains("Memnite")) {
+                memnite = option;
+                break;
+            }
+        }
+        Assert.assertNotNull(memnite, "Memnite sacrifice must be offered");
+        final int handBefore = session.getGame().getPlayers().get(0)
+                .getCardsIn(ZoneType.Hand).size();
+        final BridgeSession.SubmitOutcome paid = session.submit("p1", memnite.optionId,
+                memnite.actionType, costFrame.revision);
+        Assert.assertTrue(paid.applied, "sacrifice failed: " + paid.errorCode);
+        // Native execution: Memnite in graveyard as the paid cost; drive passes
+        // until Altar's Reap resolves (draw two) into the graveyard.
+        boolean memniteSacrificed = false;
+        for (Card card : session.getGame().getPlayers().get(0)
+                .getCardsIn(ZoneType.Graveyard)) {
+            if (card.getName().equals("Memnite")) {
+                memniteSacrificed = true;
+            }
+        }
+        Assert.assertTrue(memniteSacrificed, "Memnite must be in graveyard");
+        boolean ornithopterAlive = false;
+        for (Card card : session.getGame().getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if (card.getName().equals("Ornithopter")) {
+                ornithopterAlive = true;
+            }
+        }
+        Assert.assertTrue(ornithopterAlive, "Ornithopter must survive");
+        boolean resolved = false;
+        for (int i = 0; i < 24 && !resolved; i++) {
+            for (Card card : session.getGame().getPlayers().get(0)
+                    .getCardsIn(ZoneType.Graveyard)) {
+                if (card.getName().equals("Altar's Reap")) {
+                    resolved = true;
+                }
+            }
+            if (resolved) {
+                break;
+            }
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.status != DecisionFrame.Status.SUPPORTED) {
+                break;
+            }
+            final BridgeSession.SubmitOutcome pass = BridgeTestSupport.submitPass(session, parked);
+            Assert.assertTrue(pass.applied);
+        }
+        Assert.assertTrue(resolved, "Altar's Reap never resolved to graveyard");
+        Assert.assertTrue(session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Hand).size()
+                >= handBefore + 1, "draw two must net cards");
         session.shutdown(5000);
     }
 
@@ -508,6 +607,21 @@ public class BridgeEngineTest {
             Assert.assertFalse(attempt.applied);
             Assert.assertEquals(attempt.errorCode, BridgeErrors.UNSUPPORTED_DECISION);
             Assert.assertEquals(StateHash.ofGame(session.getGame(), session), hash);
+            // R16: wrong actor learns nothing about the private frame, including
+            // the reason and the revision detail.
+            final BridgeSession.SubmitOutcome wrongActor = session.submit("p2", "opt-anything",
+                    "pass_priority", frame.revision);
+            Assert.assertFalse(wrongActor.applied);
+            Assert.assertEquals(wrongActor.errorCode, BridgeErrors.WRONG_ACTOR);
+            Assert.assertFalse(wrongActor.errorMessage.contains("NATIVE_ENUMERATION_FAILED"));
+            Assert.assertFalse(wrongActor.errorMessage.contains("revision"),
+                    "no revision detail for wrong actor: " + wrongActor.errorMessage);
+            // R16: stale revision from the correct actor learns nothing current.
+            final BridgeSession.SubmitOutcome stale = session.submit("p1", "opt-anything",
+                    "pass_priority", frame.revision - 1);
+            Assert.assertFalse(stale.applied);
+            Assert.assertEquals(stale.errorCode, BridgeErrors.STALE_REVISION);
+            Assert.assertFalse(stale.errorMessage.contains("NATIVE_ENUMERATION_FAILED"));
         } finally {
             ExternalPlayerController.enumerationFaultForTests = false;
             session.shutdown(5000);
