@@ -363,8 +363,16 @@ public final class StateProjection {
     private static JsonObject zones(Player player, Player observer, PlayerView observerView) {
         final JsonObject zones = new JsonObject();
         zones.add("library", new JsonArray());
+        zones.add("library_size", require("zones.library_size",
+                () -> {
+                    final com.google.gson.JsonPrimitive size =
+                            new com.google.gson.JsonPrimitive(player.getCardsIn(ZoneType.Library).size());
+                    return size;
+                }));
         zones.add("hand", require("zones.hand", () -> handZone(player, observer)));
         zones.add("battlefield", require("zones.battlefield", () -> battlefieldZone(player, observerView)));
+        zones.add("battlefield_details", require("zones.battlefield_details",
+                () -> battlefieldDetails(player, observerView)));
         zones.add("graveyard", require("zones.graveyard", () -> namesZone(player, ZoneType.Graveyard)));
         zones.add("exile", require("zones.exile", () -> exileZone(player, observerView)));
         zones.add("command", require("zones.command", () -> namesZone(player, ZoneType.Command)));
@@ -392,6 +400,63 @@ public final class StateProjection {
             zone.add(shownName(card, observerView));
         }
         return zone;
+    }
+
+    /**
+     * WS216 additive battlefield detail projection for pipe semantic outcomes.
+     *
+     * <p>Exposes only public battlefield truth alongside the existing name array:
+     * tapped status (public), counters and power/toughness for cards the observer
+     * is entitled to see (same {@code shownName} gates). Hidden/face-down cards
+     * keep redacted markers with empty counters and null PT, never names. Library
+     * order stays hidden; only {@code library_size} (public count) is exposed.
+     */
+    private static JsonArray battlefieldDetails(Player player, PlayerView observerView) {
+        final JsonArray details = new JsonArray();
+        for (Card card : player.getCardsIn(ZoneType.Battlefield)) {
+            final JsonObject entry = new JsonObject();
+            final String shown = shownName(card, observerView);
+            entry.addProperty("name", shown);
+            final boolean tapped;
+            try {
+                tapped = card.isTapped();
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("card.tapped", t);
+            }
+            entry.addProperty("tapped", tapped);
+            final boolean redacted =
+                    "<hidden>".equals(shown) || "<face-down>".equals(shown);
+            if (redacted) {
+                entry.add("counters", new JsonObject());
+                entry.add("power", JsonNull.INSTANCE);
+                entry.add("toughness", JsonNull.INSTANCE);
+            } else {
+                final JsonObject counters = new JsonObject();
+                try {
+                    for (forge.game.card.CounterType type : card.getCounters().elementSet()) {
+                        if (type == null) {
+                            continue;
+                        }
+                        counters.addProperty(type.getName(), card.getCounters(type));
+                    }
+                } catch (Throwable t) {
+                    throw new BridgeProjectionException("card.counters", t);
+                }
+                entry.add("counters", counters);
+                try {
+                    entry.addProperty("power", card.getNetPower());
+                } catch (Throwable t) {
+                    throw new BridgeProjectionException("card.power", t);
+                }
+                try {
+                    entry.addProperty("toughness", card.getNetToughness());
+                } catch (Throwable t) {
+                    throw new BridgeProjectionException("card.toughness", t);
+                }
+            }
+            details.add(entry);
+        }
+        return details;
     }
 
     private static JsonArray exileZone(Player player, PlayerView observerView) {
