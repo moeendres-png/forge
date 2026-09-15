@@ -672,6 +672,10 @@ public class WS216GapClosureTest {
     }
 
     // ---- FAMILY 5: DIVIDED fail-closed (Arc Lightning) ----
+    // WS217 remediation: valid Arc Lightning is now SUPPORTED through the native
+    // Core-owned divided-allocation seam (CR 601.2d); fail-closed remains required
+    // only for malformed/unsupported vectors, proven below via native validation
+    // with no Rules mutation. Full 2+1/1+2 resolution lives in WS217 tests.
 
     @Test(timeOut = 300000)
     public void testDividedFailClosed() {
@@ -695,19 +699,30 @@ public class WS216GapClosureTest {
         final int p2LifeBefore = session.getGame().getPlayers().get(1).getLife();
         final int bearCountBefore = session.getGame().getPlayers().get(1)
                 .getCardsIn(ZoneType.Battlefield).size();
-        // The divided spell cannot be offered SUPPORTED: the next priority frame
-        // for p1 fails closed with an explicit unsupported reason, never partial.
-        // The current SUPPORTED priority (parked before Arc arrived) must be
-        // passed first; the following revolution then blocks on TARGETING.
-        DecisionFrame unsupported = null;
+        // WS217: the divided spell is now offered SUPPORTED through the native seam
+        // (see WS217DividedAllocationTest for 2+1/1+2 resolution). Passing the stale
+        // pre-Arc priority must re-park SUPPORTED with Arc enumerated, never blocked.
+        DecisionFrame supported = null;
         for (int i = 0; i < 40; i++) {
             final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
             Assert.assertNotNull(parked, "no frame parked after introducing divided spell");
             if (parked.kind == DecisionFrame.Kind.PRIORITY
                     && parked.actorPlayerId.equals("p1")
-                    && parked.status == DecisionFrame.Status.UNSUPPORTED) {
-                unsupported = parked;
-                break;
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                boolean hasArc = false;
+                for (DecisionFrame.Option option : parked.options) {
+                    if ("cast_spell".equals(option.actionType)
+                            && "Arc Lightning".equals(option.sourceCardName)) {
+                        hasArc = true;
+                        break;
+                    }
+                }
+                if (hasArc) {
+                    supported = parked;
+                    break;
+                }
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+                continue;
             }
             if (parked.kind == DecisionFrame.Kind.PRIORITY
                     && parked.status == DecisionFrame.Status.SUPPORTED) {
@@ -726,27 +741,21 @@ public class WS216GapClosureTest {
                         "bystander decline"));
                 continue;
             }
-            throw new AssertionError("unexpected " + parked.kind + " awaiting divided block");
+            throw new AssertionError("unexpected " + parked.kind + " awaiting divided offering");
         }
-        Assert.assertNotNull(unsupported, "priority frame never re-parked after Arc added");
-        Assert.assertEquals(unsupported.status, DecisionFrame.Status.UNSUPPORTED,
-                "divided spell must block the whole priority frame, got " + unsupported.status);
-        Assert.assertTrue(unsupported.reason.contains("TARGETING"),
-                "reason must name the targeting blocker: " + unsupported.reason);
-        Assert.assertTrue(unsupported.options.isEmpty(), "fail-closed offers no options");
-        final BridgeSession.SubmitOutcome attempt = session.submit(unsupported.actorPlayerId,
-                "opt-does-not-exist", "cast_spell", unsupported.revision);
+        Assert.assertNotNull(supported, "Arc Lightning must be offered SUPPORTED after WS217");
+        final BridgeSession.SubmitOutcome attempt = session.submit(supported.actorPlayerId,
+                "opt-does-not-exist", "cast_spell", supported.revision);
         Assert.assertFalse(attempt.applied);
         // R16: actor/revision are checked before frame-specific data, so a wrong
-        // actor sees WRONG_ACTOR even on an UNSUPPORTED frame without leaking.
-        final String other = unsupported.actorPlayerId.equals("p1") ? "p2" : "p1";
+        // actor sees WRONG_ACTOR even on a SUPPORTED frame without leaking.
+        final String other = supported.actorPlayerId.equals("p1") ? "p2" : "p1";
         final BridgeSession.SubmitOutcome wrongActor = session.submit(other,
-                "opt-does-not-exist", "cast_spell", unsupported.revision);
+                "opt-does-not-exist", "cast_spell", supported.revision);
         Assert.assertFalse(wrongActor.applied);
         Assert.assertEquals(wrongActor.errorCode, BridgeErrors.WRONG_ACTOR);
-        // Exact runtime target path fails closed before incorrect mutation.
-        final ExternalPlayerController controller =
-                (ExternalPlayerController) constructed.game.getPlayers().get(0).getController();
+        // Malformed divided vectors still fail closed natively before mutation
+        // (Rules/Core remains sole legality authority; the bridge computes nothing).
         Card arcCard = null;
         for (Card card : session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Hand)) {
             if (card.getName().equals("Arc Lightning")) {
@@ -764,12 +773,28 @@ public class WS216GapClosureTest {
             }
         }
         Assert.assertNotNull(dividedAbility, "divided ability must exist natively");
-        try {
-            controller.chooseTargetsFor(dividedAbility);
-            throw new AssertionError("divided allocation must fail closed");
-        } catch (BridgeUnsupportedDecision expected) {
-            Assert.assertTrue(expected.getMessage().contains("divided allocation")
-                    || expected.getMessage().contains("chooseTargetsFor"));
+        // Native Core validation rejects an illegal total before any mutation.
+        final java.util.List<forge.game.GameEntity> natives = new java.util.ArrayList<>();
+        for (Card card : session.getGame().getPlayers().get(1)
+                .getCardsIn(ZoneType.Battlefield)) {
+            natives.add(card);
+        }
+        natives.add(session.getGame().getPlayers().get(1));
+        final forge.game.player.DividedAllocationDecision malformed =
+                new forge.game.player.DividedAllocationDecision(dividedAbility, 3,
+                        natives.subList(0, Math.min(2, natives.size())), false);
+        final java.util.Map<forge.game.GameEntity, Integer> badVector =
+                new java.util.LinkedHashMap<>();
+        if (natives.size() >= 2) {
+            badVector.put(natives.get(0), 1);
+            badVector.put(natives.get(1), 1);
+            try {
+                malformed.apply(new forge.game.player.DividedAllocationSelection(badVector));
+                throw new AssertionError("malformed divided total must fail closed natively");
+            } catch (IllegalArgumentException expected) {
+                Assert.assertTrue(expected.getMessage().contains("TOTAL")
+                        || expected.getMessage().contains("TOO_LOW"));
+            }
         }
         // No incorrect mutation: life and battlefield unchanged.
         Assert.assertEquals(session.getGame().getPlayers().get(1).getLife(), p2LifeBefore);

@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * The parent only transports pilot selections among offered options.
  */
 public class WS216SeparateProcessTest {
-    private static final String ENGINE_SHA = "aa5c00aa32dfd40e213f223f8fd400c43daabb24";
+    private static final String ENGINE_SHA = "c4d67145a6f9902e031a11dde5c33c60f51ed08d";
 
     private static final String[] SEATS = { "p1", "p2", "p3", "p4" };
 

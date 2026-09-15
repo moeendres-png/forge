@@ -655,9 +655,58 @@ public final class BridgeEngine {
                     "missing proposal object", (int) session.auditSize());
         }
         final String actorId = nonEmpty(proposal, "actor_id");
+        if (actorId == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    "proposal requires non-empty actor_id", (int) session.auditSize());
+        }
+        final Long revision;
+        try {
+            revision = requiredRevision(request, request.payload, session);
+        } catch (MalformedPayloadException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                    e.getMessage(), (int) session.auditSize());
+        }
+        final boolean hasAllocations = proposal.has("allocations")
+                && !proposal.get("allocations").isJsonNull();
+        if (hasAllocations) {
+            if (!proposal.get("allocations").isJsonObject()) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                        "allocations must be an object", (int) session.auditSize());
+            }
+            final Long valueCheck;
+            try {
+                valueCheck = BridgeProtocol.optLong(proposal, "value");
+            } catch (BridgeProtocol.MalformedRequestException e) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                        e.getMessage(), (int) session.auditSize());
+            }
+            if (valueCheck != null) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                        "value and allocations are mutually exclusive",
+                        (int) session.auditSize());
+            }
+            final JsonObject allocationsObj = proposal.getAsJsonObject("allocations");
+            final Map<String, Integer> allocations = new LinkedHashMap<>();
+            for (Map.Entry<String, com.google.gson.JsonElement> entry : allocationsObj.entrySet()) {
+                final String targetId = entry.getKey();
+                if (targetId == null || targetId.isEmpty()) {
+                    return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                            "target identity is required", (int) session.auditSize());
+                }
+                try {
+                    allocations.put(targetId, entry.getValue().getAsInt());
+                } catch (Exception e) {
+                    return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                            "allocation amounts must be integers", (int) session.auditSize());
+                }
+            }
+            final BridgeSession.SubmitOutcome outcome =
+                    session.submitDividedAllocation(actorId, revision, allocations);
+            return submitResponse(request, session, outcome, actorId);
+        }
         final String legalActionId = nonEmpty(proposal, "legal_action_id");
         final String actionType = nonEmpty(proposal, "action_type");
-        if (actorId == null || legalActionId == null || actionType == null) {
+        if (legalActionId == null || actionType == null) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
                     "proposal requires non-empty actor_id, legal_action_id and action_type",
                     (int) session.auditSize());
@@ -666,13 +715,6 @@ public final class BridgeEngine {
         try {
             value = BridgeProtocol.optLong(proposal, "value");
         } catch (BridgeProtocol.MalformedRequestException e) {
-            return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
-                    e.getMessage(), (int) session.auditSize());
-        }
-        final Long revision;
-        try {
-            revision = requiredRevision(request, request.payload, session);
-        } catch (MalformedPayloadException e) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
                     e.getMessage(), (int) session.auditSize());
         }

@@ -23,6 +23,9 @@ import forge.game.combat.CombatDamageDecisionView;
 import forge.game.combat.CombatDamageSelection;
 import forge.game.player.AmountDistributionDecisionView;
 import forge.game.player.AmountDistributionSelection;
+import forge.game.player.DividedAllocationDecision;
+import forge.game.player.DividedAllocationDecisionView;
+import forge.game.player.DividedAllocationSelection;
 import forge.game.cost.Cost;
 import forge.game.cost.CostDecisionMakerBase;
 import forge.game.cost.CostPart;
@@ -270,7 +273,15 @@ public final class ExternalPlayerController extends PlayerController {
         try {
             final boolean ok = PlaySpellAbility.playSpellAbility(this, player, sa);
             if (!ok) {
-                session.setLastExecutionError("engine declined the submitted option (rolled back)");
+                // Preserve a specific Rules/Core diagnostic (e.g., divided-allocation
+                // native validation) when one is already bound; otherwise record the
+                // generic rollback signal. Either way the pilot sees executionOk false
+                // with no Rules mutation.
+                if (session.getLastExecutionError() == null
+                        || session.getLastExecutionError().isEmpty()) {
+                    session.setLastExecutionError(
+                            "engine declined the submitted option (rolled back)");
+                }
                 session.audit("execution_declined",
                         BridgeSession.detail("label", sa.getHostCard().getName()));
             }
@@ -292,9 +303,11 @@ public final class ExternalPlayerController extends PlayerController {
      * (MANA_PAYMENT frames), choice mana outputs (COLOR_CHOICE/MANA_PAYMENT
      * frames via the Core-owned ManaEffect paths), single- and multi-target
      * selection (TARGET_SELECTION frames) and sacrifice/discard/exile/pay-life
-     * costs (COST_SELECTION frames) are now representable. Chooser-divided
-     * allocation has no native controller surface and still fails closed, as do
-     * AnnounceType, optional costs and the remaining non-framed cost parts.
+     * costs (COST_SELECTION frames) are now representable. WS217: chooser-divided
+     * allocation travels through the native Core-owned divided-allocation seam
+     * (DIVIDED_ALLOCATION frames, CR 601.2d) with native validation, so it no
+     * longer blocks offering. AnnounceType, optional costs and the remaining
+     * non-framed cost parts still fail closed.
      */
     static String classifyComplex(SpellAbility sa) {
         if (sa.usesTargeting() && !isSingleTargetRepresentable(sa)) {
@@ -344,16 +357,13 @@ public final class ExternalPlayerController extends PlayerController {
     }
 
     /**
-     * WS202 target representability: any min..max combination is framed, except
-     * chooser-divided allocation, which has no native controller surface (the
-     * engine resolves it GUI-direct). Any uncertainty resolves to
-     * not-representable.
+     * WS217 target representability: any min..max combination is framed, including
+     * chooser-divided allocation, whose exact vector now travels through the native
+     * Core-owned divided-allocation seam (CR 601.2d) with native validation.
+     * Any uncertainty resolves to not-representable.
      */
     static boolean isSingleTargetRepresentable(SpellAbility sa) {
         try {
-            if (sa.isDividedAsYouChoose() || sa.hasParam("DividedUpTo")) {
-                return false;
-            }
             final int min = sa.getMinTargets();
             final int max = sa.getMaxTargets();
             return max >= min && min >= 0;
@@ -1445,6 +1455,57 @@ public final class ExternalPlayerController extends PlayerController {
                 }, "AMOUNT_DISTRIBUTION_SELECTION");
     }
 
+    // WS217: Rules/Core owns the chooser-divided vector (CR 601.2d). The view carries
+    // authoritative targets plus Core-calculated total/min/UpTo constraints; the bridge
+    // projects them and accepts an exact vector, never computing legality itself.
+    // Native Forge validates before mutation; forced progress never parks.
+    @Override
+    public DividedAllocationSelection chooseDividedAllocation(
+            final DividedAllocationDecisionView decision) {
+        if (decision == null || decision.getRecipients().isEmpty()) {
+            throw unsupported("chooseDividedAllocation", "empty divided decision");
+        }
+        if (decision.getTotalAmount() <= 0) {
+            throw unsupported("chooseDividedAllocation", "empty divided total");
+        }
+        final List<DecisionFrame.Option> targetOptions = new ArrayList<>(
+                decision.getRecipients().size());
+        for (DividedAllocationDecisionView.RecipientView recipient : decision.getRecipients()) {
+            if (recipient == null || recipient.getRecipient() == null) {
+                throw unsupported("chooseDividedAllocation", "divided target unreadable");
+            }
+            final GameEntity entity = recipient.getRecipient();
+            final String label;
+            try {
+                label = "Divide to [" + targetName(entity) + "] ("
+                        + recipient.getMinAmount() + ".." + recipient.getMaxAmount()
+                        + " of " + decision.getTotalAmount() + ")";
+            } catch (Throwable t) {
+                throw unsupported("chooseDividedAllocation", "label unreadable");
+            }
+            targetOptions.add(DecisionFrame.payloadOption("divided_allocation_target", label,
+                    null, entity, "DIVIDED_TARGET"));
+        }
+        if (targetOptions.size() > 9) {
+            throw unsupported("chooseDividedAllocation",
+                    "too many divided targets to offer completely");
+        }
+        final BridgeSession.FrameAnswer answer = session.parkDividedAllocation(player,
+                targetOptions, decision.getTotalAmount(), decision.getRecipients().get(0)
+                        .getMinAmount(), decision.isDividedUpTo());
+        if (answer.dividedAllocations == null || answer.dividedAllocations.isEmpty()) {
+            throw new IllegalStateException("divided allocation without a vector");
+        }
+        final Map<GameEntity, Integer> allocations = new LinkedHashMap<>(
+                answer.dividedAllocations);
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("total", Integer.toString(decision.getTotalAmount()));
+        details.put("targets", Integer.toString(allocations.size()));
+        session.audit("divided_allocation_chosen", details);
+        return new DividedAllocationSelection(allocations);
+    }
+
     @Override
     public Map<GameEntity, Integer> divideShield(Card effectSource, Map<GameEntity, Integer> affected,
             int shieldAmount) {
@@ -1738,12 +1799,13 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public boolean chooseTargetsFor(SpellAbility currentAbility) {
-        // WS202: authoritative target selection via the engine's own
+        // WS217: authoritative target selection via the engine's own
         // TargetRestrictions.getAllCandidates (Rules-Core legal set) filtered by
         // canTarget (fizzle/protection layers). Every MustTarget-valid combination
         // of min..max targets is one authoritative option, bounded to avoid partial
-        // sets. Chooser-divided allocation has no native controller surface (the
-        // engine resolves it GUI-direct), so divided spells fail closed precisely.
+        // sets. Chooser-divided allocation (CR 601.2d) then travels through the
+        // native Core-owned divided-allocation seam with native validation before
+        // mutation; target choice and allocation stay separate lifecycle steps.
         if (currentAbility == null) {
             throw unsupported("chooseTargetsFor", "null ability");
         }
@@ -1757,10 +1819,6 @@ public final class ExternalPlayerController extends PlayerController {
                     || currentAbility.hasParam("DividedUpTo");
         } catch (Throwable t) {
             throw unsupported("chooseTargetsFor", "target bounds unreadable");
-        }
-        if (divided) {
-            throw unsupported("chooseTargetsFor",
-                    "divided allocation has no native controller surface");
         }
         if (max < min) {
             throw unsupported("chooseTargetsFor", "inverted target bounds");
@@ -1874,6 +1932,81 @@ public final class ExternalPlayerController extends PlayerController {
         }
         details.put("targets", chosenNames.toString());
         session.audit("targets_chosen", details);
+        if (!divided) {
+            return true;
+        }
+        // WS217 CR 601.2d announcement: targets are now authoritative; the exact
+        // vector travels through the Core-owned seam with native validation before
+        // mutation. DividedUpTo effective totals reuse the native number seam.
+        final List<GameEntity> dividedTargets = new ArrayList<>();
+        try {
+            for (GameEntity entity : currentAbility.getTargets().getTargetEntities()) {
+                dividedTargets.add(entity);
+            }
+        } catch (Throwable t) {
+            throw unsupported("chooseTargetsFor", "divided targets unreadable");
+        }
+        if (dividedTargets.isEmpty()) {
+            return true;
+        }
+        int total;
+        try {
+            total = currentAbility.getStillToDivide();
+        } catch (Throwable t) {
+            throw unsupported("chooseTargetsFor", "divided total unreadable");
+        }
+        if (total <= 0) {
+            return true;
+        }
+        final boolean dividedUpTo;
+        try {
+            dividedUpTo = currentAbility.hasParam("DividedUpTo");
+        } catch (Throwable t) {
+            throw unsupported("chooseTargetsFor", "divided kind unreadable");
+        }
+        if (dividedUpTo) {
+            try {
+                total = chooseNumber(currentAbility, "How many", dividedTargets.size(), total);
+            } catch (BridgeUnsupportedDecision e) {
+                throw e;
+            } catch (Throwable t) {
+                try {
+                    currentAbility.resetTargets();
+                } catch (Throwable inner) {
+                    // Ignore reset failure; report allocation failure.
+                }
+                session.setLastExecutionError("divided total choice failed: " + t.getMessage());
+                return false;
+            }
+            if (total <= 0) {
+                return true;
+            }
+        }
+        final DividedAllocationDecision decision;
+        try {
+            decision = new DividedAllocationDecision(currentAbility, total, dividedTargets,
+                    dividedUpTo);
+        } catch (Throwable t) {
+            throw unsupported("chooseTargetsFor", "divided decision unreadable");
+        }
+        try {
+            decision.resolve(this);
+        } catch (BridgeUnsupportedDecision e) {
+            throw e;
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            try {
+                currentAbility.resetTargets();
+            } catch (Throwable inner) {
+                // Ignore reset failure; report allocation failure.
+            }
+            session.setLastExecutionError(e.getMessage());
+            return false;
+        }
+        final Map<String, String> dividedDetails = new LinkedHashMap<>();
+        dividedDetails.put("actor", actorId());
+        dividedDetails.put("total", Integer.toString(total));
+        dividedDetails.put("targets", chosenNames.toString());
+        session.audit("divided_targets_allocated", dividedDetails);
         return true;
     }
 

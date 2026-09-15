@@ -38,23 +38,30 @@ public final class BridgeSession {
         public final DecisionFrame.Option selected;
         public final boolean aborted;
         public final Long inputValue;
+        public final Map<forge.game.GameEntity, Integer> dividedAllocations;
 
-        private FrameAnswer(DecisionFrame.Option selected, boolean aborted, Long inputValue) {
+        private FrameAnswer(DecisionFrame.Option selected, boolean aborted, Long inputValue,
+                Map<forge.game.GameEntity, Integer> dividedAllocations) {
             this.selected = selected;
             this.aborted = aborted;
             this.inputValue = inputValue;
+            this.dividedAllocations = dividedAllocations;
         }
 
         public static FrameAnswer select(DecisionFrame.Option selected) {
-            return new FrameAnswer(selected, false, null);
+            return new FrameAnswer(selected, false, null, null);
         }
 
         public static FrameAnswer abort() {
-            return new FrameAnswer(null, true, null);
+            return new FrameAnswer(null, true, null, null);
         }
 
         public static FrameAnswer input(DecisionFrame.Option sentinel, long value) {
-            return new FrameAnswer(sentinel, false, Long.valueOf(value));
+            return new FrameAnswer(sentinel, false, Long.valueOf(value), null);
+        }
+
+        public static FrameAnswer divided(Map<forge.game.GameEntity, Integer> allocations) {
+            return new FrameAnswer(null, false, null, allocations);
         }
     }
 
@@ -419,6 +426,42 @@ public final class BridgeSession {
     }
 
     /**
+     * Parks a Core-owned divided-allocation vector frame (CR 601.2d): authoritative
+     * targets as opaque options plus Core-calculated total/min/UpTo constraints.
+     * The pilot submits an exact vector via {@link #submitDividedAllocation};
+     * native Rules/Core validates before mutation. Same revision/actor discipline.
+     */
+    public FrameAnswer parkDividedAllocation(Player actor,
+            List<DecisionFrame.Option> targetOptions, int total, int minPerTarget,
+            boolean dividedUpTo) {
+        final long revision = frameSeq.incrementAndGet();
+        final String actorId = playerIdOf(actor);
+        final int seat = seatOf(actor);
+        final String preHash = StateHash.ofGame(game, this);
+        final DecisionFrame frame = new DecisionFrame(revision,
+                DecisionFrame.Kind.DIVIDED_ALLOCATION, DecisionFrame.Status.SUPPORTED, "",
+                actorId, seat, targetOptions, preHash, false, 0L, 0L,
+                total, minPerTarget, dividedUpTo);
+        final BlockingQueue<FrameAnswer> handoff = new ArrayBlockingQueue<>(1);
+        synchronized (this) {
+            currentFrame = frame;
+            currentHandoff = handoff;
+            currentHandoffRevision = revision;
+        }
+        audit(frameParkedEvent(DecisionFrame.Kind.DIVIDED_ALLOCATION), frameDetails(frame));
+        try {
+            final FrameAnswer answer = handoff.take();
+            if (answer.aborted || answer.dividedAllocations == null) {
+                throw new SessionAbortedException("frame " + revision + " aborted");
+            }
+            return answer;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new SessionAbortedException("frame " + revision + " interrupted");
+        }
+    }
+
+    /**
      * Parks a validated free-integer input frame for the calling game thread:
      * unbounded engine ranges the pilot answers with any integer inside native
      * [min,max]. Same revision/actor/handoff discipline as {@link #parkFrame}.
@@ -569,6 +612,11 @@ public final class BridgeSession {
                 return SubmitOutcome.rejected(BridgeErrors.UNSUPPORTED_DECISION,
                         "parked decision is not representable: " + frame.reason, currentHash());
             }
+            if (frame.kind == DecisionFrame.Kind.DIVIDED_ALLOCATION) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "divided allocation requires an exact vector for revision "
+                                + frame.revision, currentHash());
+            }
             option = frame.find(optionId);
             if (option == null) {
                 return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
@@ -611,6 +659,116 @@ public final class BridgeSession {
                 answer = FrameAnswer.select(option);
                 handoff.offer(answer);
             }
+        }
+        return waitForSettle(frame.revision, preHash, actorId);
+    }
+
+    /**
+     * Validates and delivers an exact divided-allocation vector (CR 601.2d).
+     * R16 ordering matches {@link #submit}: actor/revision prove before any
+     * frame-specific data. Session checks only syntactic identity (known opaque
+     * target option IDs, present integer amounts); all legality (totals, minima,
+     * membership, staleness of the target set) stays in Rules/Core validation
+     * before mutation. Single-option submits on divided frames stay malformed.
+     */
+    public SubmitOutcome submitDividedAllocation(String actorId, Long revision,
+            Map<String, Integer> allocationsByOptionId) {
+        final DecisionFrame frame;
+        final BlockingQueue<FrameAnswer> handoff;
+        final String preHash;
+        final FrameAnswer answer;
+        synchronized (this) {
+            if (actorId == null || actorId.isEmpty()) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "actor_id is required", currentHash());
+            }
+            if (revision == null) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "revision is required", currentHash());
+            }
+            if (allocationsByOptionId == null) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "allocations are required", currentHash());
+            }
+            if (status == Status.CLOSED) {
+                return SubmitOutcome.rejected(BridgeErrors.SESSION_CLOSED, "session is closed", currentHash());
+            }
+            if (status == Status.FAILED) {
+                return SubmitOutcome.rejected(BridgeErrors.SESSION_FAILED,
+                        "session failed", currentHash());
+            }
+            if (status == Status.OVER || (game != null && game.isGameOver())) {
+                return SubmitOutcome.rejected(BridgeErrors.GAME_OVER, "game is over", currentHash());
+            }
+            frame = currentFrame;
+            handoff = currentHandoff;
+            if (frame == null || handoff == null) {
+                return SubmitOutcome.rejected(BridgeErrors.NO_PENDING_DECISION,
+                        "engine is not awaiting an external decision", currentHash());
+            }
+            if (!actorId.equals(frame.actorPlayerId)) {
+                return SubmitOutcome.rejected(BridgeErrors.WRONG_ACTOR,
+                        "option belongs to " + frame.actorPlayerId, currentHash());
+            }
+            if (revision.longValue() != frame.revision) {
+                return SubmitOutcome.rejected(BridgeErrors.STALE_REVISION,
+                        "frame revision " + frame.revision + " expected, got " + revision, currentHash());
+            }
+            if (frame.status != DecisionFrame.Status.SUPPORTED) {
+                return SubmitOutcome.rejected(BridgeErrors.UNSUPPORTED_DECISION,
+                        "parked decision is not representable: " + frame.reason, currentHash());
+            }
+            if (frame.kind != DecisionFrame.Kind.DIVIDED_ALLOCATION) {
+                return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                        "frame revision " + frame.revision + " is not a divided allocation",
+                        currentHash());
+            }
+            final Map<forge.game.GameEntity, Integer> resolved = new LinkedHashMap<>();
+            for (Map.Entry<String, Integer> entry : allocationsByOptionId.entrySet()) {
+                final String targetId = entry.getKey();
+                final Integer amount = entry.getValue();
+                if (targetId == null || targetId.isEmpty()) {
+                    return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                            "target identity is required for revision " + frame.revision,
+                            currentHash());
+                }
+                if (amount == null) {
+                    return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                            "amount is required for revision " + frame.revision, currentHash());
+                }
+                final DecisionFrame.Option target = frame.find(targetId);
+                if (target == null) {
+                    return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
+                            "unknown target for revision " + frame.revision, currentHash());
+                }
+                if (!"divided_allocation_target".equals(target.actionType)) {
+                    return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
+                            "unknown target for revision " + frame.revision, currentHash());
+                }
+                if (!(target.nativePayload instanceof forge.game.GameEntity)) {
+                    return SubmitOutcome.rejected(BridgeErrors.INTERNAL_ERROR,
+                            "target without native binding for revision " + frame.revision,
+                            currentHash());
+                }
+                if (resolved.containsKey(target.nativePayload)) {
+                    return SubmitOutcome.rejected(BridgeErrors.MALFORMED_REQUEST,
+                            "duplicate target for revision " + frame.revision, currentHash());
+                }
+                resolved.put((forge.game.GameEntity) target.nativePayload, amount);
+            }
+            if (!frame.markAnswered()) {
+                return SubmitOutcome.rejected(BridgeErrors.UNKNOWN_OPTION,
+                        "option was already consumed", currentHash());
+            }
+            preHash = StateHash.ofGame(game, this);
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("revision", Long.toString(frame.revision));
+            details.put("actor", actorId);
+            details.put("targets", Integer.toString(resolved.size()));
+            audit("divided_allocation_submitted", details);
+            clearExecutionError();
+            answer = FrameAnswer.divided(Collections.unmodifiableMap(resolved));
+            handoff.offer(answer);
         }
         return waitForSettle(frame.revision, preHash, actorId);
     }

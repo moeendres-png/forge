@@ -199,6 +199,11 @@ public final class StateProjection {
             summary.addProperty("input_min", frame.inputMin);
             summary.addProperty("input_max", frame.inputMax);
         }
+        if (frame.kind == DecisionFrame.Kind.DIVIDED_ALLOCATION) {
+            summary.addProperty("divided_total", frame.dividedTotal);
+            summary.addProperty("divided_min_per_target", frame.dividedMinPerTarget);
+            summary.addProperty("divided_up_to", frame.dividedUpTo);
+        }
         if (!frame.reason.isEmpty()) {
             summary.addProperty("reason", frame.reason);
         }
@@ -238,6 +243,13 @@ public final class StateProjection {
             schema.addProperty("type", "integer");
             schema.addProperty("min", frame.inputMin);
             schema.addProperty("max", frame.inputMax);
+            action.add("choices_schema", schema);
+        } else if (frame.kind == DecisionFrame.Kind.DIVIDED_ALLOCATION) {
+            final JsonObject schema = new JsonObject();
+            schema.addProperty("type", "divided_allocation_target");
+            schema.addProperty("divided_total", frame.dividedTotal);
+            schema.addProperty("divided_min_per_target", frame.dividedMinPerTarget);
+            schema.addProperty("divided_up_to", frame.dividedUpTo);
             action.add("choices_schema", schema);
         } else {
             action.add("choices_schema", new JsonObject());

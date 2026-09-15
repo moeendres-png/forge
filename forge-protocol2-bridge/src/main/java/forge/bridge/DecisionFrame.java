@@ -52,7 +52,8 @@ public final class DecisionFrame {
         GENERIC_CONFIRM,
         GENERIC_SELECTION,
         ORDER_CHOICE,
-        BINARY_CHOICE
+        BINARY_CHOICE,
+        DIVIDED_ALLOCATION
     }
 
     public enum Status {
@@ -153,6 +154,15 @@ public final class DecisionFrame {
     public final boolean freeInput;
     public final long inputMin;
     public final long inputMax;
+    /**
+     * Core-owned divided-allocation constraints for DIVIDED_ALLOCATION frames
+     * (CR 601.2d). Authoritative total, per-target minimum and DividedUpTo flag
+     * calculated by Rules/Core; the bridge projects them and accepts an exact
+     * vector, never computing legality itself. Zero for all other Kinds.
+     */
+    public final int dividedTotal;
+    public final int dividedMinPerTarget;
+    public final boolean dividedUpTo;
     private boolean answered;
 
     private final Map<String, Option> byId;
@@ -166,6 +176,14 @@ public final class DecisionFrame {
     DecisionFrame(long revision, Kind kind, Status status, String reason, String actorPlayerId,
             int actorSeat, List<Option> options, String preStateHash, boolean freeInput,
             long inputMin, long inputMax) {
+        this(revision, kind, status, reason, actorPlayerId, actorSeat, options, preStateHash,
+                freeInput, inputMin, inputMax, 0, 0, false);
+    }
+
+    DecisionFrame(long revision, Kind kind, Status status, String reason, String actorPlayerId,
+            int actorSeat, List<Option> options, String preStateHash, boolean freeInput,
+            long inputMin, long inputMax, int dividedTotal, int dividedMinPerTarget,
+            boolean dividedUpTo) {
         this.revision = revision;
         this.kind = kind;
         this.status = status;
@@ -178,6 +196,9 @@ public final class DecisionFrame {
         this.freeInput = freeInput;
         this.inputMin = inputMin;
         this.inputMax = inputMax;
+        this.dividedTotal = dividedTotal;
+        this.dividedMinPerTarget = dividedMinPerTarget;
+        this.dividedUpTo = dividedUpTo;
         this.answered = false;
         final Map<String, Option> map = new LinkedHashMap<>();
         for (Option option : options) {
