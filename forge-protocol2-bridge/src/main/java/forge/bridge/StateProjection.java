@@ -142,6 +142,41 @@ public final class StateProjection {
         state.add("legal_actions", actorScoped ? legalActions(session) : new JsonArray());
         state.add("winner_ids", winnersState(session, game));
         state.addProperty("event_sequence", (int) Math.min(Integer.MAX_VALUE, session.auditSize()));
+        // WS227 additive semantic replay observability (Protocol 2.0.0 preserved:
+        // all pre-existing fields unchanged; new fields are additive only).
+        // rng_counter legacy null above is preserved; authoritative coordinates
+        // live in rng_binding (Core-owned, regenerate-not-inject).
+        try {
+            state.add("rng_binding", SemanticReplay.rngBinding(session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("rng_binding", t);
+        }
+        state.addProperty("event_offset",
+                (int) Math.min(Integer.MAX_VALUE, SemanticReplay.eventOffset(session)));
+        try {
+            state.addProperty("public_state_digest",
+                    SemanticReplay.publicStateDigest(session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("public_state_digest", t);
+        }
+        if (observerPlayerId != null && session.playerById(observerPlayerId) != null) {
+            try {
+                state.addProperty("principal_observation_digest",
+                        SemanticReplay.principalObservationDigest(session, observerPlayerId));
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("principal_observation_digest", t);
+            }
+        } else {
+            state.add("principal_observation_digest", JsonNull.INSTANCE);
+        }
+        try {
+            state.add("terminal_outcomes", SemanticReplay.terminalOutcomes(session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("terminal_outcomes", t);
+        }
+        state.addProperty("semantic_replay_version", SemanticReplay.SEMANTIC_REPLAY_VERSION);
+        state.addProperty("decision_protocol_version", SemanticReplay.DECISION_PROTOCOL_VERSION);
+        state.addProperty("tape_contract", SemanticReplay.TAPE_CONTRACT);
         return state;
     }
 
@@ -161,7 +196,7 @@ public final class StateProjection {
                 && observerPlayerId.equals(frame.actorPlayerId);
         if (actorScoped) {
             meta.addProperty("revision", frame.revision);
-            meta.add("pending_decision", decisionSummary(frame));
+            meta.add("pending_decision", decisionSummary(session, frame));
         } else {
             meta.addProperty("revision", -1);
             meta.add("pending_decision", JsonNull.INSTANCE);
@@ -210,6 +245,52 @@ public final class StateProjection {
         return summary;
     }
 
+    /**
+     * WS227 additive semantic decision summary (Protocol 2.0.0 preserved:
+     * all legacy fields unchanged). Adds neutral decision class, legal-set
+     * multiset semantics and RNG/event coordinates. Actor-scoped by the caller.
+     */
+    public static JsonObject decisionSummary(BridgeSession session, DecisionFrame frame) {
+        final JsonObject summary = decisionSummary(frame);
+        try {
+            summary.addProperty("decision_class", SemanticReplay.decisionClass(frame.kind));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("decision_class", t);
+        }
+        summary.addProperty("decision_protocol_version",
+                SemanticReplay.DECISION_PROTOCOL_VERSION);
+        summary.addProperty("lifecycle", SemanticReplay.isLifecycle(frame.kind));
+        try {
+            summary.addProperty("legal_set_digest",
+                    SemanticReplay.legalSetDigest(frame, session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("legal_set_digest", t);
+        }
+        summary.addProperty("legal_set_size", SemanticReplay.legalSetSize(frame));
+        try {
+            summary.add("rng_binding", SemanticReplay.rngBinding(session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("rng_binding", t);
+        }
+        summary.addProperty("event_offset",
+                (int) Math.min(Integer.MAX_VALUE, SemanticReplay.eventOffset(session)));
+        try {
+            summary.addProperty("public_state_digest",
+                    SemanticReplay.publicStateDigest(session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("public_state_digest", t);
+        }
+        try {
+            summary.addProperty("principal_observation_digest",
+                    SemanticReplay.principalObservationDigest(session, frame.actorPlayerId));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("principal_observation_digest", t);
+        }
+        summary.addProperty("semantic_replay_version",
+                SemanticReplay.SEMANTIC_REPLAY_VERSION);
+        return summary;
+    }
+
     public static JsonArray legalActions(BridgeSession session) {
         final JsonArray actions = new JsonArray();
         final DecisionFrame frame = session.getCurrentFrame();
@@ -220,7 +301,7 @@ public final class StateProjection {
             if (option.isConsumed()) {
                 continue;
             }
-            actions.add(legalAction(frame, option));
+            actions.add(legalAction(session, frame, option));
         }
         return actions;
     }
@@ -260,6 +341,36 @@ public final class StateProjection {
         metadata.addProperty("frame_kind", frame.kind.name());
         metadata.addProperty("label", option.label);
         action.add("metadata", metadata);
+        return action;
+    }
+
+    /**
+     * WS227 additive semantic legal action (Protocol 2.0.0 preserved: all
+     * legacy fields unchanged). Adds neutral decision class plus stable
+     * semantic fingerprint/key. The fingerprint is the replay identity;
+     * action_id remains the process-local submission handle (never the replay
+     * identity). Actor-scoped by the caller.
+     */
+    public static JsonObject legalAction(BridgeSession session, DecisionFrame frame,
+            DecisionFrame.Option option) {
+        final JsonObject action = legalAction(frame, option);
+        try {
+            action.addProperty("decision_class", SemanticReplay.decisionClass(frame.kind));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("decision_class", t);
+        }
+        try {
+            action.addProperty("semantic_fingerprint",
+                    SemanticReplay.optionFingerprint(frame, option, session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("semantic_fingerprint", t);
+        }
+        try {
+            action.addProperty("semantic_key",
+                    SemanticReplay.semanticKey(frame, option, session));
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("semantic_key", t);
+        }
         return action;
     }
 

@@ -610,8 +610,13 @@ public final class BridgeEngine {
                     "decision belongs to " + frame.actorPlayerId, (int) session.auditSize());
         }
         final JsonObject payload = new JsonObject();
-        payload.add("actions", StateProjection.legalActions(session));
-        payload.add("decision", StateProjection.decisionSummary(frame));
+        try {
+            payload.add("actions", StateProjection.legalActions(session));
+            payload.add("decision", StateProjection.decisionSummary(session, frame));
+        } catch (BridgeProjectionException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
+                    "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
+        }
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 
@@ -867,7 +872,13 @@ public final class BridgeEngine {
         if (next == null) {
             payload.add("next_decision", new JsonObject());
         } else if (submitterId != null && submitterId.equals(next.actorPlayerId)) {
-            payload.add("next_decision", StateProjection.decisionSummary(next));
+            try {
+                payload.add("next_decision", StateProjection.decisionSummary(session, next));
+            } catch (BridgeProjectionException e) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
+                        "authoritative state unreadable: " + e.getField(),
+                        (int) session.auditSize());
+            }
         } else {
             // R9: the next frame belongs to another actor. Withhold its private
             // metadata; the owner reads it through its own principal-scoped calls.

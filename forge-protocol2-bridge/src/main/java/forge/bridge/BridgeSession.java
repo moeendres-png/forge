@@ -292,9 +292,11 @@ public final class BridgeSession {
         // before the game thread shuffles/rolls. Global MyRandom scope requires
         // single-flight seeded execution for twin determinism; concurrent seeded
         // games share the global and must be serialized by the orchestrator.
+        // WS227: Core-owned explicit binding with call coordinates
+        // (regenerate-not-inject; no bridge RNG, no prediction).
         if (capturedSeed != null) {
             try {
-                forge.util.MyRandom.setRandom(new java.util.Random(capturedSeed.longValue()));
+                forge.util.MyRandom.bindSeed(capturedSeed.longValue());
             } catch (Throwable t) {
                 throw new IllegalStateException("seed install failed");
             }
