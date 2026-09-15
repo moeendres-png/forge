@@ -69,13 +69,13 @@ public class BridgeEngineTest {
                         + "\"game_id\":\"seedbad\",\"format\":\"commander\",\"seed\":\"nope\","
                         + "\"deck_handles\":[\"" + String.join("\",\"", handles) + "\"]}}}");
         BridgeTestSupport.assertError(badSeed, BridgeErrors.MALFORMED_REQUEST);
-        // Wrong pod size rejected.
-        final JsonObject pod3 = BridgeTestSupport.rpc(engine,
-                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"pod3\","
+        // Wrong pod size rejected (WS233: contract is exactly 2..5; 1P fails closed).
+        final JsonObject pod1 = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"pod1\","
                         + "\"message_type\":\"create_commander_game\",\"payload\":{\"request\":{"
-                        + "\"game_id\":\"pod3\",\"format\":\"commander\",\"deck_handles\":[\""
-                        + handles.get(0) + "\",\"" + handles.get(1) + "\"]}}}");
-        BridgeTestSupport.assertError(pod3, BridgeErrors.PLAYER_COUNT_UNSUPPORTED);
+                        + "\"game_id\":\"pod1\",\"format\":\"commander\",\"deck_handles\":[\""
+                        + handles.get(0) + "\"]}}}");
+        BridgeTestSupport.assertError(pod1, BridgeErrors.PLAYER_COUNT_UNSUPPORTED);
         // Unknown handle rejected.
         final JsonObject unknown = BridgeTestSupport.rpc(engine,
                 "{\"protocol_version\":\"2.0.0\",\"request_id\":\"unk1\","

@@ -33,6 +33,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * described in capability notes while the global action flags stay false.
  */
 public final class BridgeEngine {
+    /** Production-supported technical cardinality: exactly 2..5 players. */
+    public static final int MIN_PLAYERS = 2;
+    public static final int MAX_PLAYERS = 5;
+
     private volatile boolean started;
     private volatile boolean shutDown;
     private volatile long startNanos;
@@ -227,7 +231,8 @@ public final class BridgeEngine {
         caps.addProperty("commander_supported", true);
         caps.addProperty("partner_supported", false);
         caps.addProperty("multiplayer_supported", true);
-        caps.addProperty("max_players", 4);
+        caps.addProperty("max_players", MAX_PLAYERS);
+        caps.addProperty("min_players", MIN_PLAYERS);
         caps.addProperty("headless_supported", true);
         caps.addProperty("seed_supported", true);
         caps.addProperty("deck_import_supported", true);
@@ -377,7 +382,7 @@ public final class BridgeEngine {
         return BridgeProtocol.ok(request.requestId, payload, 0);
     }
 
-    // ---- game creation: four real players, real Commander game ----
+    // ---- game creation: two to five real players, real Commander game ----
 
     private String createGameAlias(BridgeProtocol.Request request) {
         if (BridgeProtocol.optObject(request.payload, "request") != null) {
@@ -423,11 +428,11 @@ public final class BridgeEngine {
             }
         }
         final List<String> handles = stringList(gameRequest, "deck_handles");
-        if (handles.size() != 4) {
+        if (handles.size() < MIN_PLAYERS || handles.size() > MAX_PLAYERS) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.PLAYER_COUNT_UNSUPPORTED,
-                    "this bridge qualifies exactly four players; got " + handles.size(), 0);
+                    "this bridge qualifies two to five players; got " + handles.size(), 0);
         }
-        final List<ImportedDeck> pod = new ArrayList<>(4);
+        final List<ImportedDeck> pod = new ArrayList<>(handles.size());
         for (String handle : handles) {
             final ImportedDeck deck = decks.get(handle);
             if (deck == null) {
@@ -482,8 +487,8 @@ public final class BridgeEngine {
             }
             session.setScenarioPlan(plan);
         }
-        final List<RegisteredPlayer> players = new ArrayList<>(4);
-        for (int i = 0; i < 4; i++) {
+        final List<RegisteredPlayer> players = new ArrayList<>(handles.size());
+        for (int i = 0; i < handles.size(); i++) {
             final ImportedDeck deck = pod.get(i);
             final RegisteredPlayer player = RegisteredPlayer.forCommander(deck.forgeDeck);
             player.setPlayer(new BridgeLobbyPlayer("forge-p" + (i + 1), session));
@@ -505,10 +510,10 @@ public final class BridgeEngine {
         session.audit("game_created", creationDetails(gameId, handles));
         final JsonObject payload = new JsonObject();
         payload.addProperty("game_id", gameId);
-        payload.addProperty("player_count", 4);
+        payload.addProperty("player_count", handles.size());
         payload.addProperty("status", "created");
         final JsonArray seats = new JsonArray();
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < handles.size(); i++) {
             final JsonObject seat = new JsonObject();
             seat.addProperty("seat", i);
             seat.addProperty("player_id", "p" + (i + 1));

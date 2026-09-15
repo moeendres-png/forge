@@ -111,9 +111,23 @@ public final class BridgeTestSupport {
 
     /** Imports the four simple fixture decks. */
     public static List<String> importPod(BridgeEngine engine) {
-        final List<String> handles = new ArrayList<>(4);
-        for (int i = 1; i <= 4; i++) {
-            handles.add(importDeck(engine, "import-" + i, deckResource("deck" + i + ".json")));
+        return importPod(engine, 4);
+    }
+
+    /**
+     * Imports the first {@code playerCount} simple fixture decks
+     * (deck1..deck5, then deck-targeted). Each import mints a distinct handle
+     * UUID; no handle is ever reused across seats.
+     */
+    public static List<String> importPod(BridgeEngine engine, int playerCount) {
+        final String[] pods = { "deck1.json", "deck2.json", "deck3.json", "deck4.json",
+                "deck5.json", "deck-targeted.json" };
+        if (playerCount < 1 || playerCount > pods.length) {
+            throw new IllegalArgumentException("pod size out of fixture range: " + playerCount);
+        }
+        final List<String> handles = new ArrayList<>(playerCount);
+        for (int i = 0; i < playerCount; i++) {
+            handles.add(importDeck(engine, "import-" + (i + 1), deckResource(pods[i])));
         }
         return handles;
     }
@@ -331,14 +345,22 @@ public final class BridgeTestSupport {
      * a custom starter that skips shuffle/mulligan deterministically.
      */
     public static ConstructedGame buildConstructedGame(String gameId) {
+        return buildConstructedGame(gameId, 4);
+    }
+
+    /**
+     * Builds a real N-player Commander game object from the first N fixture decks
+     * (same real-engine, real-card, real-controller shape as the 4P builder).
+     */
+    public static ConstructedGame buildConstructedGame(String gameId, int playerCount) {
         final BridgeEngine engine = new BridgeEngine();
         startEngine(engine);
-        final List<String> handles = importPod(engine);
+        final List<String> handles = importPod(engine, playerCount);
         final Map<String, String> handleToDeck = new LinkedHashMap<>();
         for (String handle : handles) {
             handleToDeck.put(handle, engine.decksForTests().get(handle).deckId);
         }
-        final List<RegisteredPlayer> players = new ArrayList<>(4);
+        final List<RegisteredPlayer> players = new ArrayList<>(handles.size());
         final BridgeSession session = new BridgeSession(gameId, handleToDeck);
         int seat = 0;
         for (String handle : handles) {
