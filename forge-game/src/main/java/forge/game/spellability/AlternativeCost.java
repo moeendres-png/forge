@@ -5,6 +5,7 @@ public enum AlternativeCost {
     BeamMeUp,
     Bestow,
     Blitz,
+    Cleave,
     Dash,
     Disturb,
     Emerge,

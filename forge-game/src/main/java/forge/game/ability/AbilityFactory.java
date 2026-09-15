@@ -313,6 +313,15 @@ public final class AbilityFactory {
         if (sa.hasParam("NonBasicSpell")) {
             sa.setBasicSpell(false);
         }
+        // WS234 systemic Cleave identity: Forge represents Cleave as a dual
+        // SpellAbility (base + cleave-cost variant with NonBasicSpell + PrecostDesc
+        // Cleave, bracket removal encoded per-card via distinct ValidTgts/Effects
+        // because brackets are heterogeneous). Mark the cleave variant with
+        // AlternativeCost.Cleave so cost identity is engine-visible (isCleave)
+        // without card-name special cases. Applies to all Cleave scripts.
+        if (sa.hasParam("PrecostDesc") && "Cleave".equals(sa.getParam("PrecostDesc"))) {
+            sa.setAlternativeCost(AlternativeCost.Cleave);
+        }
     }
 
     /**
