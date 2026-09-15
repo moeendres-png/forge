@@ -1004,4 +1004,375 @@ public class WS216GapClosureTest {
         Assert.assertFalse(ponderExiled, "declined pitch must not exile Ponder");
         session.shutdown(5000);
     }
+
+    // ---- AMOUNT_DISTRIBUTION via Master of the Wild Hunt (noncombat) ----
+
+    @Test(timeOut = 300000)
+    public void testAmountDistributionMaster() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("ws216-amount");
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Master of the Wild Hunt",
+                ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Dire Wolves", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Dire Wolves", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Runeclaw Bear", ZoneType.Battlefield);
+        fillLibraries(constructed, 7);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        DecisionFrame frame = driveTo(session, "p1", DecisionFrame.Kind.PRIORITY, null, 20);
+        submit(session, frame, pickOption(frame,
+                o -> "activate_ability".equals(o.actionType)
+                        && "Master of the Wild Hunt".equals(o.sourceCardName),
+                "Master activation"));
+        DecisionFrame targetFrame = null;
+        DecisionFrame amountFrame = null;
+        for (int i = 0; i < 30; i++) {
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked, "no frame parked awaiting Master target/amount");
+            if (parked.kind == DecisionFrame.Kind.TARGET_SELECTION
+                    && parked.actorPlayerId.equals("p1")) {
+                targetFrame = parked;
+                submit(session, parked, pickOption(parked,
+                        o -> o.label != null && o.label.contains("Runeclaw Bear"),
+                        "Master -> Bear"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.AMOUNT_DISTRIBUTION
+                    && parked.actorPlayerId.equals("p2")) {
+                amountFrame = parked;
+                break;
+            }
+            if ((parked.kind == DecisionFrame.Kind.GENERIC_CONFIRM
+                    || parked.kind == DecisionFrame.Kind.TRIGGER_PLAY)
+                    && parked.actorPlayerId.equals("p2")) {
+                // HuntedDamage optional divider: Yes proceeds to AMOUNT distribution.
+                submit(session, parked, pickOption(parked,
+                        o -> o.confirmValue != null && o.confirmValue, "divider Yes"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            throw new AssertionError("unexpected " + parked.kind + " for "
+                    + parked.actorPlayerId + " awaiting Master amount");
+        }
+        Assert.assertNotNull(targetFrame, "Master target never parked");
+        Assert.assertNotNull(amountFrame, "AMOUNT_DISTRIBUTION never parked for divider");
+        Assert.assertTrue(amountFrame.options.size() >= 2, "amount must offer choices");
+        assertNegatives(session, amountFrame);
+        // Assign all 2 to one Wolf: that Wolf dies, the other lives, Bear dies to
+        // the Wolves' 4. Proves native exact-total distribution consumes the pick.
+        DecisionFrame.Option twoToOne = null;
+        for (DecisionFrame.Option option : amountFrame.options) {
+            if (option.label != null && option.label.contains("2")) {
+                twoToOne = option;
+                break;
+            }
+        }
+        Assert.assertNotNull(twoToOne, "amount 2 option must be offered");
+        submit(session, amountFrame, twoToOne);
+        // Drain any second amount frame (remaining 0 completes, or 1+1 split).
+        for (int i = 0; i < 10; i++) {
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.kind == DecisionFrame.Kind.AMOUNT_DISTRIBUTION
+                    && parked.actorPlayerId.equals("p2")) {
+                submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            break;
+        }
+        boolean bearDead = true;
+        for (Card card : session.getGame().getPlayers().get(1)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if (card.getName().equals("Runeclaw Bear")) {
+                bearDead = false;
+            }
+        }
+        Assert.assertTrue(bearDead, "Bear must die to Wolves damage");
+        int wolvesAlive = 0;
+        for (Card card : session.getGame().getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if (card.getName().equals("Dire Wolves")) {
+                wolvesAlive++;
+            }
+        }
+        Assert.assertEquals(wolvesAlive, 1, "exactly one Wolf must survive the 2-split");
+        session.shutdown(5000);
+    }
+
+    // ---- GENERIC_SELECTION via Fleshbag Marauder sacrifice ----
+
+    @Test(timeOut = 300000)
+    public void testGenericSelectionFleshbag() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("ws216-fleshbag");
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Fleshbag Marauder", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Runeclaw Bear", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Llanowar Elves", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Runeclaw Bear", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Llanowar Elves", ZoneType.Battlefield);
+        for (int i = 0; i < 3; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Swamp", ZoneType.Battlefield);
+        }
+        fillLibraries(constructed, 7);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        for (int i = 0; i < 3; i++) {
+            tapLand(session, "p1", "Swamp");
+        }
+        DecisionFrame frame = driveTo(session, "p1", DecisionFrame.Kind.PRIORITY, null, 20);
+        submit(session, frame, pickOption(frame,
+                o -> "cast_spell".equals(o.actionType)
+                        && "Fleshbag Marauder".equals(o.sourceCardName),
+                "Fleshbag cast"));
+        DecisionFrame genericFrame = null;
+        for (int i = 0; i < 30; i++) {
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked, "no frame parked awaiting GENERIC_SELECTION");
+            if (parked.kind == DecisionFrame.Kind.GENERIC_SELECTION
+                    && parked.actorPlayerId.equals("p1")) {
+                genericFrame = parked;
+                break;
+            }
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.TRIGGER_PLAY) {
+                submit(session, parked, pickOption(parked,
+                        o -> o.confirmValue != null && o.confirmValue, "play trigger"));
+                continue;
+            }
+            throw new AssertionError("unexpected " + parked.kind + " for "
+                    + parked.actorPlayerId + " awaiting GENERIC_SELECTION");
+        }
+        Assert.assertNotNull(genericFrame, "GENERIC_SELECTION never parked for Fleshbag");
+        Assert.assertEquals(genericFrame.options.size(), 3, "Bear/Elves/Fleshbag sacrifice choice");
+        assertNegatives(session, genericFrame);
+        submit(session, genericFrame, pickOption(genericFrame,
+                o -> o.label != null && o.label.contains("Llanowar Elves"),
+                "sacrifice Elves"));
+        boolean elvesSacked = false;
+        for (int i = 0; i < 30 && !elvesSacked; i++) {
+            for (Card card : session.getGame().getPlayers().get(0)
+                    .getCardsIn(ZoneType.Graveyard)) {
+                if (card.getName().equals("Llanowar Elves")) {
+                    elvesSacked = true;
+                }
+            }
+            if (elvesSacked) {
+                break;
+            }
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.kind == DecisionFrame.Kind.GENERIC_SELECTION) {
+                // Other players' sacrifices: answer with first option explicitly.
+                submit(session, parked, parked.options.get(0));
+            } else if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+            } else if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+            } else {
+                break;
+            }
+        }
+        Assert.assertTrue(elvesSacked, "sacrificed Elves must reach graveyard");
+        Assert.assertNotNull(findBattlefield(session, 0, "Runeclaw Bear"),
+                "unsacrificed Bear must live");
+        Assert.assertNotNull(findBattlefield(session, 0, "Fleshbag Marauder"),
+                "Fleshbag must enter");
+        session.shutdown(5000);
+    }
+
+    // ---- GENERIC_CONFIRM via Snort (each player may discard hand) ----
+
+    @Test(timeOut = 300000)
+    public void testGenericConfirmSnort() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("ws216-snort");
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Snort", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Hand);
+        for (int i = 0; i < 4; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Mountain", ZoneType.Battlefield);
+        }
+        fillLibraries(constructed, 7);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        for (int i = 0; i < 4; i++) {
+            tapLand(session, "p1", "Mountain");
+        }
+        DecisionFrame frame = driveTo(session, "p1", DecisionFrame.Kind.PRIORITY, null, 20);
+        submit(session, frame, pickOption(frame,
+                o -> "cast_spell".equals(o.actionType) && "Snort".equals(o.sourceCardName),
+                "Snort cast"));
+        // First confirm belongs to p1 (caster order). Answer Yes explicitly.
+        DecisionFrame confirmFrame = null;
+        for (int i = 0; i < 20; i++) {
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked, "no frame parked awaiting GENERIC_CONFIRM");
+            if (parked.kind == DecisionFrame.Kind.GENERIC_CONFIRM
+                    && parked.actorPlayerId.equals("p1")) {
+                confirmFrame = parked;
+                break;
+            }
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            throw new AssertionError("unexpected " + parked.kind + " awaiting GENERIC_CONFIRM");
+        }
+        Assert.assertNotNull(confirmFrame, "GENERIC_CONFIRM never parked for Snort");
+        Assert.assertEquals(confirmFrame.options.size(), 2, "Yes/No must both be offered");
+        assertNegatives(session, confirmFrame);
+        submit(session, confirmFrame, pickOption(confirmFrame,
+                o -> o.confirmValue != null && o.confirmValue, "Yes discard"));
+        // Drain remaining players' confirms (answer No to keep boards stable).
+        for (int i = 0; i < 20; i++) {
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.kind == DecisionFrame.Kind.GENERIC_CONFIRM) {
+                submit(session, parked, pickOption(parked,
+                        o -> o.confirmValue != null && !o.confirmValue, "No"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            break;
+        }
+        // P1 discarded (Plains buried) and drew 5; Snort itself resolved to grave.
+        boolean plainsBuried = false;
+        for (Card card : session.getGame().getPlayers().get(0)
+                .getCardsIn(ZoneType.Graveyard)) {
+            if (card.getName().equals("Plains")) {
+                plainsBuried = true;
+            }
+        }
+        Assert.assertTrue(plainsBuried, "p1 discarded Plains must reach graveyard");
+        session.shutdown(5000);
+    }
+
+    // ---- BINARY_CHOICE via Extinction Event (odd/even) ----
+
+    @Test(timeOut = 300000)
+    public void testBinaryExtinctionEvent() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("ws216-binary");
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Extinction Event", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Runeclaw Bear", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Llanowar Elves", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Carnage Tyrant", ZoneType.Battlefield);
+        for (int i = 0; i < 4; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Swamp", ZoneType.Battlefield);
+        }
+        fillLibraries(constructed, 7);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        for (int i = 0; i < 4; i++) {
+            tapLand(session, "p1", "Swamp");
+        }
+        DecisionFrame frame = driveTo(session, "p1", DecisionFrame.Kind.PRIORITY, null, 20);
+        submit(session, frame, pickOption(frame,
+                o -> "cast_spell".equals(o.actionType)
+                        && "Extinction Event".equals(o.sourceCardName),
+                "Extinction cast"));
+        DecisionFrame binaryFrame = null;
+        for (int i = 0; i < 10; i++) {
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked, "no frame parked awaiting BINARY_CHOICE");
+            if (parked.kind == DecisionFrame.Kind.BINARY_CHOICE
+                    && parked.actorPlayerId.equals("p1")) {
+                binaryFrame = parked;
+                break;
+            }
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            throw new AssertionError("unexpected " + parked.kind + " awaiting BINARY_CHOICE");
+        }
+        Assert.assertNotNull(binaryFrame, "BINARY_CHOICE never parked for Extinction");
+        Assert.assertEquals(binaryFrame.options.size(), 2, "odd/even must both be offered");
+        assertNegatives(session, binaryFrame);
+        // Bear CMC 2 even, Elves CMC 1 odd, Tyrant CMC 6 even: choose odd exiles
+        // only Elves. Proves native consumption of the binary pick.
+        submit(session, binaryFrame, binaryFrame.options.get(0));
+        final String firstLabel = binaryFrame.options.get(0).label;
+        final boolean choseOdd = firstLabel != null && firstLabel.contains("Odd");
+        for (int i = 0; i < 30; i++) {
+            boolean elvesGone = findBattlefield(session, 0, "Llanowar Elves") == null;
+            boolean bearGone = findBattlefield(session, 0, "Runeclaw Bear") == null;
+            if ((choseOdd && elvesGone && !bearGone) || (!choseOdd && bearGone && !elvesGone)) {
+                break;
+            }
+            // If first option was Even, Bear+Tyrant die; if Odd, Elves dies.
+            // Either proves binary consumption; just drain to quiescence.
+            final DecisionFrame parked = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(parked);
+            if (parked.kind == DecisionFrame.Kind.PRIORITY
+                    && parked.status == DecisionFrame.Status.SUPPORTED) {
+                submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
+            } else if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, parked, parked.options.get(0));
+            } else {
+                break;
+            }
+        }
+        // At least one of the two parities must have executed (exile, not destroy).
+        boolean elvesExiled = false;
+        boolean bearExiled = false;
+        for (Card card : session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Exile)) {
+            if (card.getName().equals("Llanowar Elves")) {
+                elvesExiled = true;
+            }
+            if (card.getName().equals("Runeclaw Bear")) {
+                bearExiled = true;
+            }
+        }
+        Assert.assertTrue(elvesExiled != bearExiled, "exactly one parity must exile, got Elves="
+                + elvesExiled + " Bear=" + bearExiled);
+        session.shutdown(5000);
+    }
 }
