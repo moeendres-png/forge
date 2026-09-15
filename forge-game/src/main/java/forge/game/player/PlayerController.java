@@ -119,6 +119,11 @@ public abstract class PlayerController {
         throw new IllegalStateException("FORGE_CONTROLLER_AMOUNT_DISTRIBUTION_UNSUPPORTED");
     }
 
+    /** Core-owned chooser-divided allocation (CR 601.2d). Unsupported controllers fail closed. */
+    public DividedAllocationSelection chooseDividedAllocation(final DividedAllocationDecisionView decision) {
+        throw new IllegalStateException("FORGE_CONTROLLER_DIVIDED_ALLOCATION_UNSUPPORTED");
+    }
+
     /** @deprecated WS40: no production combat/noncombat caller may use this raw-map boundary. */
     public abstract Map<GameEntity, Integer> divideShield(Card effectSource, Map<GameEntity, Integer> affected, int shieldAmount);
     public abstract Map<Byte, Integer> specifyManaCombo(SpellAbility sa, ColorSet colorSet, int manaAmount, boolean different);

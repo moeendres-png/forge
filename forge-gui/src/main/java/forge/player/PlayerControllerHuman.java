@@ -2450,6 +2450,33 @@ public class PlayerControllerHuman extends PlayerController implements IGameCont
     }
 
     @Override
+    public DividedAllocationSelection chooseDividedAllocation(final DividedAllocationDecisionView decision) {
+        if (decision == null || decision.getRecipients().isEmpty()) {
+            throw new IllegalStateException("FORGE_HUMAN_DIVIDED_ALLOCATION_EMPTY_CORE_VIEW");
+        }
+        final int total = decision.getTotalAmount();
+        final CardView vSource = decision.getSource() == null ? null : CardView.get(decision.getSource());
+        final Map<Object, Integer> vTargets = new HashMap<>(decision.getRecipients().size());
+        for (DividedAllocationDecisionView.RecipientView recipient : decision.getRecipients()) {
+            vTargets.put(GameEntityView.get(recipient.getRecipient()), total);
+        }
+        final Map<Object, Integer> vResult = getGui().assignGenericAmount(vSource, vTargets, total, true,
+                decision.getAllocationLabel());
+        if (vResult == null) {
+            throw new IllegalStateException("FORGE_HUMAN_DIVIDED_ALLOCATION_NULL_GUI_RESULT");
+        }
+        final Map<GameEntity, Integer> allocations = new HashMap<>(decision.getRecipients().size());
+        for (DividedAllocationDecisionView.RecipientView recipient : decision.getRecipients()) {
+            final Integer amount = vResult.get(GameEntityView.get(recipient.getRecipient()));
+            if (amount == null) {
+                throw new IllegalStateException("FORGE_HUMAN_DIVIDED_ALLOCATION_MISSING_GUI_AMOUNT");
+            }
+            allocations.put(recipient.getRecipient(), amount);
+        }
+        return new DividedAllocationSelection(allocations);
+    }
+
+    @Override
     public boolean chooseTargetsFor(final SpellAbility currentAbility) {
         final TargetSelection select = new TargetSelection(this, currentAbility);
         boolean canFilterMustTarget = true;
@@ -2474,52 +2501,37 @@ public class PlayerControllerHuman extends PlayerController implements IGameCont
         }
 
         boolean result = select.chooseTargets(null, null, null, false, canFilterMustTarget);
-
+        if (!result) {
+            return false;
+        }
+        if (!currentAbility.isDividedAsYouChoose()) {
+            return true;
+        }
         final Iterable<GameEntity> targets = currentAbility.getTargets().getTargetEntities();
         final int size = Iterables.size(targets);
         int amount = currentAbility.getStillToDivide();
-
-        // assign divided as you choose values
-        if (result && size > 0 && amount > 0) {
-            if (currentAbility.hasParam("DividedUpTo")) {
-                amount = chooseNumber(currentAbility, localizer.getMessage("lblHowMany"), size, amount);
-            }
-            if (size == 1) {
-                currentAbility.addDividedAllocation(Iterables.get(targets, 0), amount);
-            } else if (size == amount) {
-                for (GameEntity e : targets) {
-                    currentAbility.addDividedAllocation(e, 1);
-                }
-            } else if (amount == 0) {
-                for (GameEntity e : targets) {
-                    currentAbility.addDividedAllocation(e, 0);
-                }
-            } else if (size > amount) {
-                return false;
-            } else {
-                String label = "lblDamage";
-                if (currentAbility.getApi() == ApiType.PreventDamage) {
-                    label = "lblShield";
-                } else if (currentAbility.getApi() == ApiType.PutCounter) {
-                    label = "lblCounters";
-                }
-                label = localizer.getMessage(label).toLowerCase();
-                final CardView vSource = CardView.get(currentAbility.getHostCard());
-                final Map<Object, Integer> vTargets = new HashMap<>(size);
-                for (GameEntity e : targets) {
-                    vTargets.put(GameEntityView.get(e), amount);
-                }
-                final Map<Object, Integer> vResult = getGui().assignGenericAmount(vSource, vTargets, amount, true, label);
-                for (GameEntity e : targets) {
-                    currentAbility.addDividedAllocation(e, vResult.get(GameEntityView.get(e)));
-                }
-                if (currentAbility.getStillToDivide() > 0) {
-                    return false;
-                }
-            }
+        if (size <= 0 || amount <= 0) {
+            return true;
+        }
+        // CR 601.2d announcement: DividedUpTo first chooses the effective total via the native
+        // number seam (Rules bounds size..amount), then the exact vector goes through the
+        // Core-owned divided-allocation seam with native validation before mutation.
+        if (currentAbility.hasParam("DividedUpTo")) {
+            amount = chooseNumber(currentAbility, localizer.getMessage("lblHowMany"), size, amount);
+        }
+        if (amount <= 0) {
+            return true;
+        }
+        final List<GameEntity> targetList = Lists.newArrayList(targets);
+        final DividedAllocationDecision decision = new DividedAllocationDecision(currentAbility, amount,
+                targetList, currentAbility.hasParam("DividedUpTo"));
+        try {
+            decision.resolve(this);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return false;
         }
 
-        return result;
+        return true;
     }
 
     /*
