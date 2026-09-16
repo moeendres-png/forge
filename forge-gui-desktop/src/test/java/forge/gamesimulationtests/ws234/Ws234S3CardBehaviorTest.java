@@ -69,13 +69,32 @@ public class Ws234S3CardBehaviorTest extends SimulationTest {
         return c;
     }
 
+    // WS236-S1 harness correction (test-only, family-general, no production
+    // semantics touched, no manual outcomes): the engine queues cast triggers
+    // into the simultaneous-entry list (CR 603.3b) and only the engine's own
+    // addAllTriggeredAbilitiesToStack() orders them onto the stack, exactly as
+    // priority passing would. The legacy resolveStack + checkStateEffects loop
+    // stranded them (strict Kaervek proved 20->20 under it). Guards are
+    // fail-closed: guard exhaustion or stranded entries fail the test. The
+    // loop still exits on game-over (pre-existing harness behavior: empty-deck
+    // fixtures may deck a drawing player, e.g. Syphon Mind); game-over is not
+    // treated as success, only the test's own assertions claim behavior.
     private void drainStack(Game game) {
         int guard = 0;
-        while (!game.getStack().isEmpty() && !game.isGameOver() && guard < 50) {
-            game.getStack().resolveStack();
+        while ((!game.getStack().isEmpty()
+                || game.getStack().hasSimultaneousStackEntries())
+                && !game.isGameOver() && guard < 100) {
+            game.getStack().addAllTriggeredAbilitiesToStack();
+            if (!game.getStack().isEmpty()) {
+                game.getStack().resolveStack();
+            }
             game.getAction().checkStateEffects(true);
             guard++;
         }
+        assertTrue(guard < 100, "drain must terminate (guard exhausted)");
+        game.getStack().addAllTriggeredAbilitiesToStack();
+        assertFalse(game.getStack().hasSimultaneousStackEntries(),
+                "no stranded simultaneous entries may remain after drain");
     }
 
     // WS234 harness note: SpellCast/ETB/dies/draw triggers via AITest direct
@@ -83,6 +102,11 @@ public class Ws234S3CardBehaviorTest extends SimulationTest {
     // for Ishai/Shriekmaw/Butcher/Warstorm and adjudicator UNKNOWN for Veyran/
     // Harmonic). Trigger-heavy cards are proven via bridge; simulation keeps
     // non-trigger behavior. Disabled entries stay NOT_RUN/PARTIAL, never PASS.
+    // WS236-S1 addendum: the drain above now performs the engine-owned
+    // simultaneous ordering step, so engine-queued cast triggers resolve in
+    // this seam (strict Kaervek reprobed in Ws236S1KaervekDrainTest). Disabled
+    // entries stay NOT_RUN for their own documented reasons (Bolt-target
+    // confound, drawCards harness gap, etc.).
     @Test(timeOut = 60000, enabled = false)
     public void testCard01IshaiTrigger() {
         Game game = initAndCreateGame();
