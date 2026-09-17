@@ -69,6 +69,15 @@ public class WsR8OverloadFamilyTest extends SimulationTest {
         return false;
     }
 
+    private SpellAbility findBase(Card blast) {
+        for (SpellAbility sa : blast.getSpellAbilities()) {
+            if (!sa.isAlternativeCost(AlternativeCost.Overload)) {
+                return sa;
+            }
+        }
+        return null;
+    }
+
     private SpellAbility findOverload(Card blast) {
         for (SpellAbility sa : blast.getSpellAbilities()) {
             if (sa.isAlternativeCost(AlternativeCost.Overload)) {
@@ -120,8 +129,9 @@ public class WsR8OverloadFamilyTest extends SimulationTest {
 
         assertEquals(blast.getSpellAbilities().size(), 2,
                 "Vandalblast must offer exactly base plus overload SpellAbility");
-        SpellAbility base = blast.getFirstSpellAbility();
+        SpellAbility base = findBase(blast);
         SpellAbility overload = findOverload(blast);
+        assertNotNull(base, "base SpellAbility must exist natively");
         assertNotNull(overload, "overload SpellAbility must exist natively");
         assertNotSame(overload, base, "overload must be a distinct ability");
 
@@ -160,7 +170,8 @@ public class WsR8OverloadFamilyTest extends SimulationTest {
         int p2LifeBefore = p2.getLife();
 
         Card blast = hand("Vandalblast", p1);
-        SpellAbility base = blast.getFirstSpellAbility();
+        SpellAbility base = findBase(blast);
+        assertNotNull(base, "base SpellAbility must exist natively");
         base.setActivatingPlayer(p1);
         assertTrue(PlaySpellAbility.playSpellAbility(p1.getController(), p1, base),
                 "base Vandalblast must cast");
@@ -249,7 +260,8 @@ public class WsR8OverloadFamilyTest extends SimulationTest {
         // No artifacts on any battlefield: the targeted base spell cannot be
         // cast, while the overload variant structurally requires no targets.
         Card blast = hand("Vandalblast", p1);
-        SpellAbility base = blast.getFirstSpellAbility();
+        SpellAbility base = findBase(blast);
+        assertNotNull(base, "base SpellAbility must exist natively");
         base.setActivatingPlayer(p1);
         assertFalse(PlaySpellAbility.playSpellAbility(p1.getController(), p1, base),
                 "base Vandalblast with no legal target must fail closed");
