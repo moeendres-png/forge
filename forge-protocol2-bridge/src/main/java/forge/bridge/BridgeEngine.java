@@ -33,9 +33,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * described in capability notes while the global action flags stay false.
  */
 public final class BridgeEngine {
-    /** Production-supported technical cardinality: exactly 2..5 players. */
+    /** Production-supported technical cardinality: exactly 2..6 players (R16). */
     public static final int MIN_PLAYERS = 2;
-    public static final int MAX_PLAYERS = 5;
+    public static final int MAX_PLAYERS = 6;
 
     private volatile boolean started;
     private volatile boolean shutDown;
@@ -382,7 +382,7 @@ public final class BridgeEngine {
         return BridgeProtocol.ok(request.requestId, payload, 0);
     }
 
-    // ---- game creation: two to five real players, real Commander game ----
+    // ---- game creation: two to six real players, real Commander game ----
 
     private String createGameAlias(BridgeProtocol.Request request) {
         if (BridgeProtocol.optObject(request.payload, "request") != null) {
@@ -430,7 +430,7 @@ public final class BridgeEngine {
         final List<String> handles = stringList(gameRequest, "deck_handles");
         if (handles.size() < MIN_PLAYERS || handles.size() > MAX_PLAYERS) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.PLAYER_COUNT_UNSUPPORTED,
-                    "this bridge qualifies two to five players; got " + handles.size(), 0);
+                    "this bridge qualifies two to six players; got " + handles.size(), 0);
         }
         final List<ImportedDeck> pod = new ArrayList<>(handles.size());
         for (String handle : handles) {

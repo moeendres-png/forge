@@ -147,6 +147,12 @@ public class WS233CardinalityProcessTest {
         qualifyFreshProcess(5);
     }
 
+    // R16: sixth seat via the deck-targeted fixture (six distinct handles).
+    @Test(timeOut = 900000)
+    public void testFreshProcessSixPlayers() throws Exception {
+        qualifyFreshProcess(6);
+    }
+
     private static void qualifyFreshProcess(int playerCount) throws Exception {
         final String tag = "ws233p" + playerCount;
         final String lastSeat = "p" + playerCount;
@@ -170,11 +176,11 @@ public class WS233CardinalityProcessTest {
             assertOk(caps);
             final JsonObject capabilities = caps.get("payload").getAsJsonObject()
                     .getAsJsonObject("capabilities");
-            Assert.assertEquals(capabilities.get("max_players").getAsInt(), 5);
+            Assert.assertEquals(capabilities.get("max_players").getAsInt(), 6);
             Assert.assertEquals(capabilities.get("min_players").getAsInt(), 2);
 
             final String[] pods = { "deck1.json", "deck2.json", "deck3.json", "deck4.json",
-                    "deck5.json" };
+                    "deck5.json", "deck-targeted.json" };
             final List<String> handles = new ArrayList<>(playerCount);
             for (int i = 0; i < playerCount; i++) {
                 final String deck = BridgeTestSupport.deckResource(pods[i]);

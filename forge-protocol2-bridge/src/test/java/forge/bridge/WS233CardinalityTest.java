@@ -62,21 +62,27 @@ public class WS233CardinalityTest {
         BridgeTestSupport.assertError(one, BridgeErrors.PLAYER_COUNT_UNSUPPORTED);
         Assert.assertNull(engine.sessionsForTests().get("ws233-neg-1"));
 
-        // 6P: must fail closed, never truncate to five.
+        // R16: contract widened 2-5 to 2-6 (engine proven 6-capable);
+        // the fail-closed boundary moves to 7P (never truncate to six).
+        final String seventh = BridgeTestSupport.importDeck(engine, "import-7",
+                BridgeTestSupport.deckResource("deck-targeted.json"));
         final StringBuilder decks = new StringBuilder();
-        for (int i = 0; i < six.size(); i++) {
+        final List<String> seven = new ArrayList<>(six);
+        seven.add(seventh);
+        Assert.assertEquals(new HashSet<>(seven).size(), 7, "handles must be distinct");
+        for (int i = 0; i < seven.size(); i++) {
             if (i > 0) {
                 decks.append(',');
             }
-            decks.append('"').append(six.get(i)).append('"');
+            decks.append('"').append(seven.get(i)).append('"');
         }
-        final JsonObject sixP = BridgeTestSupport.rpc(engine,
-                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"neg6\","
+        final JsonObject sevenP = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\",\"request_id\":\"neg7\","
                         + "\"message_type\":\"create_commander_game\",\"payload\":{\"request\":{"
-                        + "\"game_id\":\"ws233-neg-6\",\"format\":\"commander\","
+                        + "\"game_id\":\"ws233-neg-7\",\"format\":\"commander\","
                         + "\"deck_handles\":[" + decks + "]}}}");
-        BridgeTestSupport.assertError(sixP, BridgeErrors.PLAYER_COUNT_UNSUPPORTED);
-        Assert.assertNull(engine.sessionsForTests().get("ws233-neg-6"));
+        BridgeTestSupport.assertError(sevenP, BridgeErrors.PLAYER_COUNT_UNSUPPORTED);
+        Assert.assertNull(engine.sessionsForTests().get("ws233-neg-7"));
 
         // Unknown-handle semantics preserved at a legal count.
         final List<String> four = BridgeTestSupport.importPod(engine, 4);
