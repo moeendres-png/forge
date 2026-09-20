@@ -232,6 +232,41 @@ public class WsR11JeskaBridgeFamilyTest {
         }
     }
 
+    // Cast Jeska, then HOLD the first p1 priority after she resolves
+    // (never pass it: later phases illegalize sorcery-speed loyalty
+    // activations). Returns that unpassed frame for immediate ability use.
+    private static DecisionFrame castJeskaAndHold(BridgeSession session) {
+        for (int i = 0; i < 60; i++) {
+            DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f);
+            if (findBf(session, 0, "Jeska, Thrice Reborn") != null
+                    && f.actorPlayerId.equals("p1")
+                    && f.kind == DecisionFrame.Kind.PRIORITY
+                    && f.status == DecisionFrame.Status.SUPPORTED) {
+                return f;
+            }
+            if (f.actorPlayerId.equals("p1") && f.kind == DecisionFrame.Kind.PRIORITY
+                    && f.status == DecisionFrame.Status.SUPPORTED) {
+                boolean hasJeska = false;
+                for (DecisionFrame.Option o : f.options) {
+                    if ("cast_spell".equals(o.actionType)
+                            && "Jeska, Thrice Reborn".equals(o.sourceCardName)) {
+                        hasJeska = true;
+                    }
+                }
+                if (hasJeska) {
+                    submit(session, f, pickOption(f,
+                            o -> "cast_spell".equals(o.actionType)
+                                    && "Jeska, Thrice Reborn".equals(o.sourceCardName),
+                            "Jeska cast"));
+                    continue;
+                }
+            }
+            answerCommon(session, f);
+        }
+        throw new AssertionError("never held Jeska priority");
+    }
+
     private static Card castJeska(BridgeSession session) {
         for (int i = 0; i < 30; i++) {
             DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
@@ -272,24 +307,22 @@ public class WsR11JeskaBridgeFamilyTest {
         session.shutdown(5000);
     }
 
-    // DISABLED (blocker R11a-1): Jeska loyalty abilities classify
-    // COMPLEX_COST (CostPutCounter/CostRemoveCounter unrepresented), so any
-    // priority frame offering them parks UNSUPPORTED and the [0] activation
-    // is unreachable via bridge. Needs a loyalty-cost DecisionFrame surface
-    // (production bridge feature + requal). Sim seam cannot drive the
-    // required combat deterministically. Never PASS by assumption.
-    @Test(timeOut = 300000, enabled = false)
+    // R12: enabled by the loyalty-cost surface (from-source counter costs
+    // payable through BridgeCostDecisionMaker; classifier allowlisted).
+    @Test(timeOut = 300000)
     public void testJeskaZeroAbilityTriplesDamage() {
         final BridgeTestSupport.ConstructedGame constructed = jeskaGame("wsr11-jeska-triple", true);
         final BridgeSession session = constructed.session;
         castCommanders(session);
-        castJeska(session);
         int p2Life = life(1, session);
-        // Activate [0]: target Bear (explicit pick).
-        DecisionFrame frame = driveTo(session, "p1", DecisionFrame.Kind.PRIORITY, 30);
-        submit(session, frame, pickOption(frame,
+        // Activate [0] on the HELD post-resolution priority (labels carry
+        // the ability text; the [0] targets a creature).
+        DecisionFrame held = castJeskaAndHold(session);
+        // [0] is the (0) activation; ultimate is (-X). Labels carry cost text.
+        submit(session, held, pickOption(held,
                 o -> "activate_ability".equals(o.actionType)
-                        && "Jeska, Thrice Reborn".equals(o.sourceCardName),
+                        && "Jeska, Thrice Reborn".equals(o.sourceCardName)
+                        && o.label != null && o.label.contains("(0)"),
                 "Jeska [0]"));
         for (int i = 0; i < 20; i++) {
             DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
@@ -333,30 +366,22 @@ public class WsR11JeskaBridgeFamilyTest {
         session.shutdown(5000);
     }
 
-    // DISABLED (blocker R11a-1, same loyalty-cost surface gap as above).
-    @Test(timeOut = 300000, enabled = false)
+    // R12: enabled by the loyalty-cost surface (X via framed X_ANNOUNCE).
+    @Test(timeOut = 300000)
     public void testJeskaUltimateXDamage() {
         final BridgeTestSupport.ConstructedGame constructed = jeskaGame("wsr11-jeska-ult", false);
         final BridgeSession session = constructed.session;
         castCommanders(session);
-        Card jeska = castJeska(session);
+        DecisionFrame held = castJeskaAndHold(session);
+        Card jeska = findBf(session, 0, "Jeska, Thrice Reborn");
+        Assert.assertNotNull(jeska, "Jeska must enter");
         Assert.assertEquals(loyalty(jeska), 2, "precondition: 2 loyalty");
         int p2Life = life(1, session);
-        // Ultimate is the non-[0] loyalty activation; X announced, up to 3 targets.
-        DecisionFrame frame = driveTo(session, "p1", DecisionFrame.Kind.PRIORITY, 30);
-        boolean ultOffered = false;
-        for (DecisionFrame.Option o : frame.options) {
-            if ("activate_ability".equals(o.actionType)
-                    && "Jeska, Thrice Reborn".equals(o.sourceCardName)
-                    && o.label != null && !o.label.contains("target creature")) {
-                ultOffered = true;
-            }
-        }
-        Assert.assertTrue(ultOffered, "ultimate activation must be offered");
-        submit(session, frame, pickOption(frame,
+        // Ultimate is the (-X) activation (labels carry only cost text).
+        submit(session, held, pickOption(held,
                 o -> "activate_ability".equals(o.actionType)
                         && "Jeska, Thrice Reborn".equals(o.sourceCardName)
-                        && o.label != null && !o.label.contains("target creature"),
+                        && o.label != null && o.label.contains("(-X)"),
                 "Jeska ultimate"));
         for (int i = 0; i < 30; i++) {
             DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
@@ -365,18 +390,37 @@ public class WsR11JeskaBridgeFamilyTest {
                 submitValue(session, f, 2);
             } else if (f.kind == DecisionFrame.Kind.TARGET_SELECTION
                     && f.actorPlayerId.equals("p1")) {
-                submit(session, f, pickOption(f,
-                        o -> o.label != null && o.label.contains("player p2"),
-                        "ultimate -> p2"));
+                // Up-to-three targets: prefer the player, fall back to an
+                // explicit creature pick (recorded); exactly one target total.
+                boolean picked = false;
+                for (DecisionFrame.Option o : f.options) {
+                    if (o.label != null && o.label.contains("player p2")) {
+                        submit(session, f, o);
+                        picked = true;
+                        break;
+                    }
+                }
+                if (!picked) {
+                    submit(session, f, pickOption(f,
+                            o -> o.label != null && o.label.contains("Rograkh, Son of Rohgahh"),
+                            "ultimate -> Rograkh"));
+                }
                 break;
             } else {
                 answerCommon(session, f);
             }
         }
         drain(session, 30);
+        // Player targeting verified (p2 preferred and hit); Rograkh alive
+        // proves no friendly fire; Jeska paid 2 loyalty so she dies to
+        // SBA (704.5i) — itself proof of the payment.
         Assert.assertEquals(life(1, session), p2Life - 2, "ultimate X=2 must deal 2 to p2");
-        Assert.assertEquals(loyalty(findBf(session, 0, "Jeska, Thrice Reborn")), 0,
-                "ultimate must remove 2 loyalty");
+        Assert.assertNotNull(findBf(session, 0, "Rograkh, Son of Rohgahh"),
+                "Rograkh must survive (no friendly fire)");
+        Assert.assertNull(findBf(session, 0, "Jeska, Thrice Reborn"),
+                "Jeska must leave the battlefield after paying 2 loyalty");
+        Assert.assertTrue(inZone(session, 0, ZoneType.Graveyard, "Jeska, Thrice Reborn"),
+                "spent Jeska must die to SBA (704.5i) into the graveyard");
         session.shutdown(5000);
     }
 

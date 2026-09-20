@@ -1,10 +1,12 @@
 package forge.bridge;
 
+import forge.game.GameEntityCounterTable;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
 import forge.game.card.CardLists;
 import forge.game.card.CardPredicates;
+import forge.game.card.CounterType;
 import forge.game.cost.CostAddMana;
 import forge.game.cost.CostBehold;
 import forge.game.cost.CostBeholdExile;
@@ -558,11 +560,41 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostRemoveCounter cost) {
+        // R12: from-source forced counter removal (planeswalker loyalty
+        // costs, e.g. SubCounter<X/LOYALTY> with announced X). Mirrors
+        // HumanCostDecision minus confirm dialogs (the submit is the
+        // pilot's intent). Sufficiency-checked; anything else (All,
+        // any-counter selection, other cards) returns null so the engine
+        // rolls back fail-closed.
+        if (cost.payCostFromSource()) {
+            final Card source = ability.getHostCard();
+            final CounterType cntrs = cost.counter;
+            if (cntrs == null || cost.getAmount().equals("All")) {
+                return null;
+            }
+            final int maxCounters = source.getCounters(cntrs);
+            final int cntRemoved = cost.getAbilityAmount(ability);
+            if (cntRemoved < 0 || maxCounters < cntRemoved) {
+                return null;
+            }
+            final GameEntityCounterTable counterTable = new GameEntityCounterTable();
+            counterTable.put(null, source, cntrs, cntRemoved);
+            if (counterTable.isEmpty()) {
+                return null;
+            }
+            return PaymentDecision.counters(counterTable);
+        }
         return null;
     }
 
     @Override
     public PaymentDecision visit(CostPutCounter cost) {
+        // R12: from-source forced counter placement (planeswalker [0]:
+        // AddCounter<0/LOYALTY>). Mirrors HumanCostDecision minus confirms.
+        // Target-selection shapes need a card surface: null -> rollback.
+        if (cost.payCostFromSource()) {
+            return PaymentDecision.card(source);
+        }
         return null;
     }
 

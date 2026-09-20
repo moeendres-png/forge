@@ -303,7 +303,10 @@ public final class ExternalPlayerController extends PlayerController {
      * (MANA_PAYMENT frames), choice mana outputs (COLOR_CHOICE/MANA_PAYMENT
      * frames via the Core-owned ManaEffect paths), single- and multi-target
      * selection (TARGET_SELECTION frames) and sacrifice/discard/exile/pay-life
-     * costs (COST_SELECTION frames) are now representable. WS217: chooser-divided
+     * costs (COST_SELECTION frames) are now representable. R12: from-source
+     * forced loyalty-counter costs (AddCounter/SubCounter, X via X_ANNOUNCE)
+     * resolve through BridgeCostDecisionMaker; other counter shapes still
+     * fail closed at payment with rollback. WS217: chooser-divided
      * allocation travels through the native Core-owned divided-allocation seam
      * (DIVIDED_ALLOCATION frames, CR 601.2d) with native validation, so it no
      * longer blocks offering. AnnounceType, optional costs and the remaining
@@ -348,6 +351,17 @@ public final class ExternalPlayerController extends PlayerController {
                     continue;
                 }
                 if (part instanceof forge.game.cost.CostPayLife) {
+                    continue;
+                }
+                // R12: loyalty-cost shapes (planeswalker AddCounter /
+                // SubCounter). From-source forced payments resolve through
+                // BridgeCostDecisionMaker; anything else fails there with
+                // rollback (audited), never silently. X arrives only via
+                // framed X_ANNOUNCE.
+                if (part instanceof forge.game.cost.CostPutCounter) {
+                    continue;
+                }
+                if (part instanceof forge.game.cost.CostRemoveCounter) {
                     continue;
                 }
                 return "COMPLEX_COST:" + part.getClass().getSimpleName();
