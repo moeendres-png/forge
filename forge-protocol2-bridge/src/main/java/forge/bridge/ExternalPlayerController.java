@@ -667,9 +667,13 @@ public final class ExternalPlayerController extends PlayerController {
         final java.util.Set<SpellAbility> tried =
                 Collections.newSetFromMap(new IdentityHashMap<SpellAbility, Boolean>());
         for (int guard = 0; guard < 24; guard++) {
-            final java.util.List<Mana> spent = new java.util.ArrayList<>();
             try {
-                if (player.getManaPool().payManaCostFromPool(beingPaid, sa, false, spent)
+                // R13: record spent mana on the SA itself, mirroring the AI
+                // path (ComputerUtilMana passes sa.getPayingMana()).
+                // Spent-triggers (TriggersWhenSpent) and mana-effect hooks
+                // read getPayingMana(); a throwaway list silences them.
+                if (player.getManaPool().payManaCostFromPool(beingPaid, sa, false,
+                        sa.getPayingMana())
                         && beingPaid.isPaid()) {
                     return true;
                 }
@@ -2867,7 +2871,79 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public ImmutablePair<CardCollection, CardCollection> arrangeForScry(CardCollection topN) {
-        throw unsupported("arrangeForScry", "scry arrangement is not represented");
+        // R13: scry arrangement via bottom-subset framing (GENERIC_SELECTION).
+        // Every bottom-subset is one authoritative option in canonical
+        // encounter order (no order invented by the bridge); 2^N subsets
+        // with the usual 128-combination completeness cap. Always framed,
+        // even binary scry-1: scry is discretionary and never defaulted.
+        final List<Card> cards = new ArrayList<>();
+        if (topN != null) {
+            for (Card c : topN) {
+                if (c != null) {
+                    cards.add(c);
+                }
+            }
+        }
+        if (cards.isEmpty()) {
+            return ImmutablePair.of(new CardCollection(), new CardCollection());
+        }
+        final List<List<Card>> subsets;
+        try {
+            subsets = enumerateSubsets(cards, 0, cards.size());
+        } catch (Throwable t) {
+            throw unsupported("arrangeForScry", "subset enumeration failed");
+        }
+        if (subsets.isEmpty() || subsets.size() > 128) {
+            throw unsupported("arrangeForScry", "cannot offer complete selection");
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size());
+        for (List<Card> bottom : subsets) {
+            final java.util.Set<Card> bottomSet =
+                    Collections.newSetFromMap(new IdentityHashMap<Card, Boolean>());
+            bottomSet.addAll(bottom);
+            final StringBuilder label = new StringBuilder("Scry bottom [");
+            for (Card c : bottom) {
+                try {
+                    label.append(c.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append("] top [");
+            for (Card c : cards) {
+                if (!bottomSet.contains(c)) {
+                    try {
+                        label.append(c.getName()).append(';');
+                    } catch (Throwable t) {
+                        label.append("?;");
+                    }
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption("scry_arrange", label.toString(), null,
+                    new ArrayList<>(bottom), "CARD_LIST"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.GENERIC_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final List<Card> chosen = (List<Card>) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("scry option without native payload");
+        }
+        final java.util.Set<Card> chosenSet =
+                Collections.newSetFromMap(new IdentityHashMap<Card, Boolean>());
+        chosenSet.addAll(chosen);
+        final CardCollection toBottom = new CardCollection();
+        final CardCollection toTop = new CardCollection();
+        for (Card c : cards) {
+            if (chosenSet.contains(c)) {
+                toBottom.add(c);
+            } else {
+                toTop.add(c);
+            }
+        }
+        return ImmutablePair.of(toTop, toBottom);
     }
 
     @Override
