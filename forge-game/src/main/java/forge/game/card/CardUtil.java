@@ -387,6 +387,35 @@ public final class CardUtil {
         final List<Card> targeted = Lists.newArrayList(ability.getTargets().getTargetCards());
         choices.removeAll(targeted);
 
+        // General spell-stack targeting (CR 115): abilities declaring TargetType target
+        // stack objects independent of TgtZone. Include host cards of targetable stack
+        // spells as proxies so the engine's own canTargetSpellAbility authority is
+        // consulted. No card names, no provider filtering, no fallback.
+        if (ability.hasParam("TargetType")) {
+            for (final forge.game.spellability.SpellAbilityStackInstance si : game.getStack()) {
+                final forge.game.spellability.SpellAbility stackSA = si.getSpellAbility();
+                if (stackSA == null || stackSA.getHostCard() == null) {
+                    continue;
+                }
+                if (!ability.canTargetSpellAbility(stackSA)) {
+                    continue;
+                }
+                final Card host = stackSA.getHostCard();
+                if (host.getZone() == null || !host.getZone().is(ZoneType.Stack)) {
+                    continue;
+                }
+                // Mirror the existing self-target exclusion for stack abilities.
+                // Use current zone (not LKI) for stack checks.
+                if (host.equals(activatingCard) && activatingCard.getZone() != null
+                        && activatingCard.getZone().is(ZoneType.Stack)) {
+                    continue;
+                }
+                if (!choices.contains(host)) {
+                    choices.add(host);
+                }
+            }
+        }
+
         return choices;
     }
 }

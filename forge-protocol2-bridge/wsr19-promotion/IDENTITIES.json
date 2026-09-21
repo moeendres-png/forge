@@ -1,0 +1,127 @@
+{
+ "engines": {
+  "forge_reactor_revision": "2.0.15-SNAPSHOT (pom versionCode+snapshotName, unchanged R9-R18)",
+  "mage_source_candidate": "db134b9737e951367d65ef5806ad986319cc73ab (5-commit descendant of cfc36f44; origin/mage verified)",
+  "mage_source_predecessor": "cfc36f445f917f101fa2ed588770e043f53bc44c",
+  "xmage_maven_pin": "1.4.61 (Lab engine-bridge/pom.xml; identical all sides)"
+ },
+ "forge_branches": {
+  "r6/forge-s3-partial-family-20260917": {
+   "head": "862162ca1fb09cb3e7e54edb5cecad3ddc616dca",
+   "tree": "ddc575100c4486c923c3d2b9b6f83da085c413f8"
+  },
+  "ws231/forge-post-ws227-admission-rescreen-20260915": {
+   "head": "1cbb7cdc3f5",
+   "tree": "a5f352296cb1d5c231b9895ded1fbbdb0f48a947"
+  },
+  "ws233/forge-s3-mechanic-partials-20260915": {
+   "head": "1cbb7cdc3f5",
+   "note": "holds WS231 seal commit",
+   "tree": "a5f352296cb"
+  },
+  "ws233/forge-variable-player-provider-cardinality-20260915": {
+   "head": "e6e5083c7a2477043d96acbd4322bccb1ab5d468",
+   "tree": "c06cab05c520533e6577a8a7b8582a8d723a665d"
+  },
+  "ws234/forge-s3-mechanic-partials-20260915": {
+   "head": "9a1e3fe9497",
+   "tree": "d1cb6ce47db"
+  },
+  "ws236-s1/forge-trigger-drain-family-20260916": {
+   "head": "07c0eec5992",
+   "tree": "c63b0641fa3"
+  },
+  "ws236/forge-f4-spellcast-discriminator-20260916": {
+   "head": "1f1393021c4",
+   "tree": "ad4a637b334"
+  },
+  "wsr10/forge-s3-partial-batch2-20260920": {
+   "head": "1e68c5cad66",
+   "tree": "200ce29c722"
+  },
+  "wsr11/forge-s3-finale-20260920": {
+   "head": "fafbbf1d050",
+   "tree": "8a2ba32c621"
+  },
+  "wsr12/forge-loyalty-cost-surface-20260920": {
+   "head": "adab6bb1e9a",
+   "tree": "fc02cfc15ff"
+  },
+  "wsr13/forge-choicemana-scry-surface-20260920": {
+   "head": "520f7d85039",
+   "tree": "4e3f6b48ed9"
+  },
+  "wsr14/forge-admission-rescreen-20260920": {
+   "head": "b8deae929db",
+   "tree": "085714b558d"
+  },
+  "wsr15/forge-multiplayer-conformance-20260920": {
+   "head": "4476a043aa0",
+   "tree": "ad93690e9ac"
+  },
+  "wsr16/forge-six-player-20260920": {
+   "head": "7af7b322bcc",
+   "tree": "a7d0fc84a48"
+  },
+  "wsr17/forge-ci-qualification-20260920": {
+   "head": "f7a8c6c702a",
+   "tree": "252f5bf4c1a"
+  },
+  "wsr18/forge-promotion-packet-20260921": {
+   "head": "9c41bff280910c143ab16134f4a8539108d1f220",
+   "note": "post-packet head (packet sealed at this commit); base of wsr19 refresh",
+   "tree": "8db82593fe9c479b0ac0607cf7def7a72652880f"
+  },
+  "wsr19/forge-promotion-refresh-20260921": {
+   "head": "UNSEALED (this workstream appends)",
+   "note": "refresh workstream; seals on commit",
+   "tree": "UNSEALED"
+  },
+  "wsr8/forge-s3-mechanism-closure-20260917": {
+   "head": "ca655ecda3e",
+   "tree": "3b91711a558"
+  },
+  "wsr9/forge-s3-partial-batch-20260919": {
+   "head": "c48931ab4e0",
+   "tree": "e0f72b9eb05"
+  }
+ },
+ "forge_master": "8a41f4a18e800732dea7feb09d72e639e0b358ab / tree c8c28c02044ee2b137bf733c09b12169ced69cf1 (reverified identical to R18 record)",
+ "lab_branches": {
+  "cpl/ci-cardinality-lane-20260921": {
+   "head": "0526a798f7f1e9947426b8f199e3f7dc2aa112bd",
+   "note": "NEW R20 CI lane: 2/3/5/6 bounded smokes + 7P fail-closed probe in workflow; lane tests 6/7 green; suite delta 24->19 FAILED with 0 new failures",
+   "tree": "656108c1d102699572369e17815951187d1857e3"
+  },
+  "cpl/prepare-behavior-qualification-20260919": {
+   "head": "c63698d1fe2df5660d071c2caf6c6b7e2296c1dd",
+   "note": "reverified identical to R18 record",
+   "tree": "1e1e7875ed1a77ef90d0fc02479fdabcd7e4b4bb"
+  },
+  "cpl/xmage-six-player-20260921": {
+   "head": "107db18976c76ead4f328d7cdec0de7de8a4eb1d",
+   "note": "NEW R19 Lab-6P: gates 2-6, Java bridge 155/155, Python 761, live 6P smoke 55 + full gate 7284 PASS (winner seat 2, replay MATCH)",
+   "tree": "821aee7673a4198685cec08e2ebfa931f8e3ec70"
+  },
+  "cpl/xmage-successor-integration-20260919": {
+   "head": "faffab8493c45469adf61824a582cf1ba7637fa0",
+   "note": "reverified identical to R18 record; live 2/3/4/5P gates PASS, semantic MATCH",
+   "tree": "1f272b45aea5d36a4473c0f26310ff334d8a7358"
+  }
+ },
+ "lab_main": "aebcfda37d61eb435dde6cd11792ef80019dcd10 / tree bf003afc0c0b71535094b6b96e3b1184d6dd0f1f (origin/main reverified unmoved; local main has PR-#168 merge b483263e, not canonical)",
+ "merge_impact": {
+  "forge_tip_vs_master": "306 files, +45842/-250 (evidence-heavy; production: bridge controller/maker/gate + tests)",
+  "lab_successor_vs_main": "90 files, +58749/-383",
+  "provenance": "R18-sealed numbers carried, NOT recomputed in R19 (no merges occurred; Lab chain extended by R19/R20 branches, so lab_successor_vs_main figures are stale-label, not current)"
+ },
+ "refresh": {
+  "base_packet": "wsr18-promotion @ 9c41bff280910c143ab16134f4a8539108d1f220",
+  "date": "2026-09-21",
+  "forge_r19": "NO Forge R19 branch exists (remote heads checked); R19 is Lab-side six-player; R20 is Lab-side CI lane",
+  "method": "every SHA above freshly reverified via git rev-parse at refresh time; 17/18 Forge branches byte-identical to R18 seal; wsr18 legitimately advanced pre->post-packet; ws231 tree filled (was absent in R18)",
+  "verdict": "INPUT-ONLY refresh; selects nothing, freezes nothing"
+ },
+ "repin_impact": "NONE (no pin changes anywhere in R9-R20; forge revision 2.0.15-SNAPSHOT and xmage 1.4.61 reverified constant; mage candidate db134b97 carried, no new mage workstream)",
+ "schema": "promotion-identities/1"
+}

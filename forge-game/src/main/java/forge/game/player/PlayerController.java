@@ -16,6 +16,8 @@ import forge.game.ability.AbilityUtils;
 import forge.game.ability.effects.RollDiceEffect;
 import forge.game.card.*;
 import forge.game.combat.Combat;
+import forge.game.combat.CombatDamageDecisionView;
+import forge.game.combat.CombatDamageSelection;
 import forge.game.cost.*;
 import forge.game.keyword.KeywordInterface;
 import forge.game.mana.Mana;
@@ -107,7 +109,22 @@ public abstract class PlayerController {
     public abstract List<PaperCard> sideboard(final Deck deck, GameType gameType, String message);
     public abstract List<PaperCard> chooseCardsYouWonToAddToDeck(List<PaperCard> losses);
 
-    public abstract Map<Card, Integer> assignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining, int damageDealt, GameEntity defender, boolean overrideOrder);
+    /** Core-owned incremental combat-damage choice. Unsupported controllers fail closed. */
+    public CombatDamageSelection chooseCombatDamage(final CombatDamageDecisionView decision) {
+        throw new IllegalStateException("FORGE_CONTROLLER_COMBAT_DAMAGE_DECISION_UNSUPPORTED");
+    }
+
+    /** Core-owned noncombat amount distribution. Unsupported controllers fail closed. */
+    public AmountDistributionSelection chooseAmountDistribution(final AmountDistributionDecisionView decision) {
+        throw new IllegalStateException("FORGE_CONTROLLER_AMOUNT_DISTRIBUTION_UNSUPPORTED");
+    }
+
+    /** Core-owned chooser-divided allocation (CR 601.2d). Unsupported controllers fail closed. */
+    public DividedAllocationSelection chooseDividedAllocation(final DividedAllocationDecisionView decision) {
+        throw new IllegalStateException("FORGE_CONTROLLER_DIVIDED_ALLOCATION_UNSUPPORTED");
+    }
+
+    /** @deprecated WS40: no production combat/noncombat caller may use this raw-map boundary. */
     public abstract Map<GameEntity, Integer> divideShield(Card effectSource, Map<GameEntity, Integer> affected, int shieldAmount);
     public abstract Map<Byte, Integer> specifyManaCombo(SpellAbility sa, ColorSet colorSet, int manaAmount, boolean different);
 
@@ -372,6 +389,30 @@ public abstract class PlayerController {
 
     public boolean isGuiPlayer() {
         return false;
+    }
+
+    /**
+     * Engine-native concession legality (CR 104.3a: a player may concede at any time).
+     * Intentionally not priority-gated: available whenever the player is still in the
+     * game and the game itself is not over. Rules Core alone owns this decision;
+     * provider transport must never fabricate it.
+     */
+    public boolean canConcede() {
+        return player != null && player.isInGame() && !getGame().isGameOver();
+    }
+
+    /**
+     * Engine-native authoritative concession action (CR 104.3a) with native
+     * multiplayer leave-game cleanup (CR 800.4 via GameAction concede and
+     * Game.onPlayerLost). Provider may transport this action but must never
+     * fabricate it; orchestration direct-call of Player.concede() bypasses this seam
+     * and is not the solution.
+     */
+    public void concede() {
+        if (!canConcede()) {
+            throw new IllegalStateException("FORGE_CONCESSION_NOT_LEGAL");
+        }
+        getGame().getAction().concede(player);
     }
 
     public boolean canPlayUnlimitedLands() {

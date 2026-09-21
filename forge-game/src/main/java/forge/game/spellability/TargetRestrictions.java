@@ -527,6 +527,17 @@ public class TargetRestrictions {
             // Stack Zone targets are considered later
             return true;
         }
+        // General spell-stack candidacy (CR 115): abilities declaring TargetType
+        // target stack objects independent of TgtZone. Consult the engine's own
+        // canTargetSpellAbility authority so Force-of-Will-style Counter spells
+        // (TargetType Spell) see the opposing stack spell.
+        if (sa.hasParam("TargetType")) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                if (sa.canTargetSpellAbility(si.getSpellAbility())) {
+                    return true;
+                }
+            }
+        }
         for (final Card c : game.getCardsIn(this.tgtZone)) {
             if (!c.isValid(this.validTgts, sa.getActivatingPlayer(), srcCard, sa)) {
                 continue;
@@ -553,7 +564,7 @@ public class TargetRestrictions {
      */
     public final int getNumCandidates(final SpellAbility sa) {
         int num = 0;
-        if (this.tgtZone.contains(ZoneType.Stack)) {
+        if (this.tgtZone.contains(ZoneType.Stack) || sa.hasParam("TargetType")) {
             for (final SpellAbilityStackInstance si : sa.getHostCard().getGame().getStack()) {
                 SpellAbility abilityOnStack = si.getSpellAbility();
                 if (sa.canTargetSpellAbility(abilityOnStack)) {
@@ -586,6 +597,25 @@ public class TargetRestrictions {
         for (final Card c : game.getCardsIn(this.tgtZone)) {
             if (sa.canTarget(c)) {
                 candidates.add(c);
+            }
+        }
+
+        // General spell-stack candidacy: for abilities declaring TargetType (stack
+        // objects), include host cards of targetable stack spells as candidate
+        // proxies. SpellAbility.canTarget unfolds them to SpellAbilities; this only
+        // enumerates what the engine itself deems targetable via canTargetSpellAbility.
+        if (sa.hasParam("TargetType")) {
+            for (final SpellAbilityStackInstance si : game.getStack()) {
+                SpellAbility abilityOnStack = si.getSpellAbility();
+                if (sa.equals(abilityOnStack)) {
+                    continue;
+                }
+                if (sa.canTargetSpellAbility(abilityOnStack)) {
+                    Card host = abilityOnStack.getHostCard();
+                    if (host != null && !candidates.contains(host)) {
+                        candidates.add(host);
+                    }
+                }
             }
         }
 

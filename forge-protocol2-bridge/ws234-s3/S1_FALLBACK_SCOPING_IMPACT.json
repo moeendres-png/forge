@@ -1,0 +1,1 @@
+{"fallback_reachability":0,"method":"full bridge 161/161 PASS includes HeadlessGuiFailClosedTest + BridgeEngineTest fallback gates; WS234 touches no fallback paths (Cleave marker + Aftermath script only)","s1_whole_boundary":"PASS retained (30/30 families, whole-boundary fail-closed, stock-remote NOT_REACHABLE all retained via 161/161)","verdict":"NO_REGRESSION"}

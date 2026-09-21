@@ -1,0 +1,169 @@
+{
+  "spec_format": "ws216-lab-successor-spec/1",
+  "consumer": "Commander-Lab requalification runner",
+  "source_lock": {
+    "repository": "moeendres-png/forge",
+    "branch": "ws216/forge-ws202-gap-closure-20260915",
+    "audit_base_sha": "cd5eaa3c55427df42194f8ebaec938a59d2b594d",
+    "audit_base_tree": "f3f01acb8cbb5534ca9e81a256740999dd6668b4",
+    "candidate_head": "171efdc846aeb7d4c7dfc4fdf203d628f47f99fd",
+    "candidate_tree": "47fb1943742f089b255294b8164045cbcb3877ce",
+    "rules_core_ancestor": "aa5c00aa32dfd40e213f223f8fd400c43daabb24",
+    "protocol_version": "2.0.0"
+  },
+  "how_to_requalify": {
+    "in_process_ws202": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS202ExecutableSurfaceTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -o",
+    "separate_process_ws202": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS202SeparateProcessTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -o",
+    "in_process_ws216": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS216GapClosureTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -o",
+    "separate_process_ws216": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS216SeparateProcessTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -o",
+    "full_module": "mvn test -pl forge-protocol2-bridge -am -o",
+    "offline": true,
+    "note": "Pipe tests spawn their own child BridgeMain JVMs with FORGE_ENGINE_SHA bound; no display, no network. WS216 projection adds library_size and battlefield_details (additive, redacted via view gates)."
+  },
+  "global_gates": {
+    "rules_authority": "Forge Rules-Core alone determines legality, costs, mana, stack, priority, targets, combat, triggers, layers, SBAs, zones, copy/control and Rules randomness. The bridge never decides.",
+    "no_second_engine": "PASS: all option sets derive from native controller callbacks and Core-owned enumerations; divided allocation has no second model and stays BLOCKED for behavior.",
+    "no_ai_authority": "PASS: every seat pinned to ExternalPlayerController; forge-ai never consulted.",
+    "no_gui_defaults": "PASS: HeadlessGuiFailClosedTest pins choice-bearing GUI entries to throw.",
+    "no_requested_option_filtering": "PASS: per-family exact counts (Expel 11, static 2, hidden subsets, Fleshbag 3, Snort 2, Extinction 2, order 2, etc.) plus wrong-actor/stale/unknown negatives in-process and over pipe.",
+    "principal_scoping": "PASS: actor-only options, foe hands <hidden>, outsider legal_actions empty, pending_decision null for non-actors, WRONG_ACTOR on read and submit, event export fails closed.",
+    "rng": "PASS with single-flight caveat (WS202 twins still green).",
+    "replay": "NOT CLAIMED: export_replay fails closed by design.",
+    "behavior_credit": 0,
+    "credit_basis": "name-only diff vs audit base outside forge-protocol2-bridge/ is empty; no Forge Rules-Core production edits except additive projection."
+  },
+  "families": [
+    {
+      "family": "NUMBER_CHOICE small-range enumeration",
+      "verdict": "PASS",
+      "in_process": "WS216GapClosureTest.testNumberChoiceSmallRangeExpel (Expel 0..10, 11 options, choose 2 kills Bear/Tyrant spares Elves)",
+      "separate_process": "covered in-process; pipe free-input X still via WS202 Fireball/Serpent",
+      "call_path": "ChooseNumberEffect -> chooseNumber(sa,title,min,max) -> parkIntRange enumerated",
+      "fail_closed_path": "enumerated value-bearing submit is MALFORMED_REQUEST; unknown ids UNKNOWN_OPTION; below/above have no identity",
+      "requalification_burden": "rerun WS216GapClosureTest number test"
+    },
+    {
+      "family": "COMBAT_ORDER",
+      "verdict": "BLOCKED",
+      "in_process": "WS216GapClosureTest.testCombatOrderUnreachableLegacyOff (flag false, no park, COMBAT_DAMAGE 2/1/4 to 36; synthetic 5-combatant overflow throws)",
+      "separate_process": "N/A (obsolete DAO, do not revive)",
+      "call_path": "Combat.orderBlockersForDamageAssignment gated by legacyOrderCombatants (default false, bridge never sets)",
+      "fail_closed_path": ">4 combatants fail closed (synthetic bound proof only)",
+      "requalification_burden": "rerun WS216 combat-order test plus WS202 E02 and pipe combat"
+    },
+    {
+      "family": "STATIC_CHOICE",
+      "verdict": "PASS",
+      "in_process": "WS216GapClosureTest.testStaticChoiceEnumeratedReducers (Goblin plus Helm, choose Goblin, Divination resolves, pool spent)",
+      "separate_process": "in-process only; binary static_confirm shares the same Kind",
+      "call_path": "CostAdjustment -> chooseSingleStaticAbility -> parkSingleChoice STATIC_CHOICE",
+      "fail_closed_path": "empty set throws; wrong/stale/unknown negatives",
+      "requalification_burden": "rerun WS216 static test"
+    },
+    {
+      "family": "HIDDEN_ZONE_SELECTION",
+      "verdict": "PASS",
+      "in_process": "WS216GapClosureTest.testHiddenZoneSelectionFaithlessLooting (effect discard, entitled names, outsider redacted, graveyard)",
+      "separate_process": "WS216SeparateProcessTest.testPipeHiddenZoneSelection (Faithless over pipe, WRONG_ACTOR on submit)",
+      "call_path": "DiscardEffect TgtChoose/YouChoose -> chooseCardsToDiscardFrom -> HIDDEN_ZONE_SELECTION with visibleToChooser redaction",
+      "fail_closed_path": ">128 combinations throw; wrong/stale/unknown fail closed",
+      "requalification_burden": "rerun both hidden tests"
+    },
+    {
+      "family": "Divided allocation fail-closed correctness",
+      "verdict": "PASS",
+      "in_process": "WS216GapClosureTest.testDividedFailClosed (Arc PRIORITY UNSUPPORTED TARGETING plus direct chooseTargetsFor throws)",
+      "separate_process": "N/A (offering-stage block is in-process; pipe would also block identically)",
+      "call_path": "chooseTargetsFor rejects isDividedAsYouChoose; PRIORITY classifier blocks TARGETING",
+      "fail_closed_path": "zero-option UNSUPPORTED plus loud throw, no mutation",
+      "requalification_burden": "rerun WS216 divided test"
+    },
+    {
+      "family": "Divided allocation actual behavior support",
+      "verdict": "BLOCKED",
+      "in_process": "intentionally unsupported; no fixture executes divided damage",
+      "separate_process": "intentionally unsupported",
+      "call_path": "none (no native controller surface)",
+      "fail_closed_path": "see fail-closed correctness PASS",
+      "requalification_burden": "Lab must not claim behavior without a native controller surface"
+    },
+    {
+      "family": "MANA_PAYMENT Decline submit",
+      "verdict": "PASS",
+      "in_process": "WS216GapClosureTest.testManaPaymentDeclinePropaganda (Decline on live tax, attacker removed, Islands untapped, life 40)",
+      "separate_process": "WS202 pipe Propaganda tax pays (complementary); decline proven in-process on live path",
+      "call_path": "payManaCost/payCombatCost -> payFromPoolWithTaps with Decline option",
+      "requalification_burden": "rerun WS216 mana-decline test"
+    },
+    {
+      "family": "COST_SELECTION Decline submit",
+      "verdict": "PASS",
+      "in_process": "WS216GapClosureTest.testCostSelectionDeclineForcePitch (Decline on live Frog/Ponder/Decline frame, neither exiled)",
+      "separate_process": "N/A",
+      "call_path": "BridgeCostDecisionMaker.frameCostCards with cancelAllowed plus frameCostConfirm",
+      "requalification_burden": "rerun WS216 cost-decline test"
+    },
+    {
+      "family": "ORDER_CHOICE over pipe",
+      "verdict": "PASS",
+      "in_process": "WS202 BoneDancer ordered graveyard plus WS216 in-process E02 companion",
+      "separate_process": "WS216SeparateProcessTest.testPipeOrderChoice (Tyrant plus Bone Dancer double block, 2 permutations, life 36)",
+      "call_path": "orderMoveToZoneList mirrors Human defaults else full permutations up to 4",
+      "requalification_burden": "rerun WS202 ordered-graveyard plus WS216 pipe order"
+    },
+    {
+      "family": "COLOR_CHOICE over pipe",
+      "verdict": "PASS",
+      "in_process": "WS202 Birds green-first plus Lotus combo",
+      "separate_process": "WS216SeparateProcessTest.testPipeColorChoice (City of Brass any-color, green, pool G 1)",
+      "call_path": "chooseColor over Core ColorSet",
+      "requalification_burden": "rerun WS202 choice-mana plus WS216 pipe color"
+    },
+    {
+      "family": "GENERIC_CONFIRM plus GENERIC_SELECTION plus BINARY plus AMOUNT over pipe",
+      "verdict": "PASS",
+      "in_process": "WS216GapClosureTest amount (Master), generic-selection (Fleshbag), generic-confirm (Snort), binary (Extinction)",
+      "separate_process": "WS216SeparateProcessTest pipe generic-selection, generic-confirm, binary, amount (each fresh JVM)",
+      "call_path": "frameEffectCards GENERIC_SELECTION; confirmAction GENERIC_CONFIRM; chooseBinary BINARY_CHOICE; AmountDistributionDecision AMOUNT_DISTRIBUTION",
+      "requalification_burden": "rerun all four WS216 in-process plus four pipe tests"
+    },
+    {
+      "family": "Scenario bootstrap malformed over pipe",
+      "verdict": "PASS",
+      "in_process": "WS202 bootstrap proof (stack/decision injection rejected at parse)",
+      "separate_process": "WS216SeparateProcessTest.testPipeMalformedScenario (stack [x] over real pipe is game_creation_failed)",
+      "call_path": "ScenarioBootstrap.parse validates; BridgeEngine.createCommanderGame rejects",
+      "requalification_burden": "rerun WS202 bootstrap plus WS216 pipe malformed"
+    },
+    {
+      "family": "SEARCH_SELECTION semantic outcome over pipe",
+      "verdict": "PASS",
+      "in_process": "WS202 F01 (Forest tapped, library shrinks)",
+      "separate_process": "WS216SeparateProcessTest.testPipeSearchOutcome (Plains arrives, library_size shrinks, tapped true via additive projection)",
+      "call_path": "chooseSingleCardForZoneChange SEARCH_SELECTION",
+      "requalification_burden": "rerun F01 plus WS216 pipe search"
+    },
+    {
+      "family": "REPLACEMENT semantic outcome over pipe",
+      "verdict": "PASS",
+      "in_process": "WS202 A04 (Scales-first, 8 counters 8/8)",
+      "separate_process": "WS216SeparateProcessTest.testPipeReplacementOutcome (Serpent enters with +1/+1 8, 8/8 via additive projection)",
+      "call_path": "replacement orders/confirms park through controller",
+      "requalification_burden": "rerun A04 plus WS216 pipe replacement"
+    },
+    {
+      "family": "COMMANDER_MOVE taxed recast over pipe",
+      "verdict": "PASS",
+      "in_process": "WS202 G02 (move plus taxed recast, cast count 2, pool spent)",
+      "separate_process": "WS216SeparateProcessTest.testPipeCommanderTaxRecast (first cast W, Murder to command, taxed recast W+2, pool 0, cast count 2)",
+      "call_path": "SBA commander choice parks COMMANDER_MOVE; recast via native commander tax",
+      "requalification_burden": "rerun G02 plus WS216 pipe commander-tax"
+    }
+  ],
+  "out_of_scope_claims": {
+    "full107": "NOT_RUN",
+    "architecture_freeze": "NOT_CLAIMED",
+    "production_provider": "NOT_SELECTED",
+    "replay": "NOT CLAIMED"
+  }
+}

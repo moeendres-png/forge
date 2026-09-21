@@ -18,6 +18,8 @@ import forge.game.ability.effects.CharmEffect;
 import forge.game.ability.effects.RollDiceEffect;
 import forge.game.card.*;
 import forge.game.combat.Combat;
+import forge.game.combat.CombatDamageDecisionView;
+import forge.game.combat.CombatDamageSelection;
 import forge.game.cost.*;
 import forge.game.keyword.Keyword;
 import forge.game.keyword.KeywordInterface;
@@ -216,9 +218,83 @@ public class PlayerControllerAi extends PlayerController {
     }
 
     @Override
-    public Map<Card, Integer> assignCombatDamage(Card attacker, CardCollectionView blockers, CardCollectionView remaining, int damageDealt, GameEntity defender, boolean overrideOrder) {
-        return ComputerUtilCombat.distributeAIDamage(player, attacker, blockers, remaining, damageDealt, defender, overrideOrder);
+    public CombatDamageSelection chooseCombatDamage(final CombatDamageDecisionView decision) {
+        if (decision == null || decision.getSources().isEmpty()) {
+            throw new IllegalStateException("FORGE_AI_COMBAT_DAMAGE_EMPTY_CORE_VIEW");
+        }
+        CombatDamageDecisionView.SourceView bestSource = null;
+        int bestSourceScore = Integer.MIN_VALUE;
+        for (CombatDamageDecisionView.SourceView source : decision.getSources()) {
+            int score = source.getRemainingDamage();
+            if (source.getRecipients().stream().anyMatch(CombatDamageDecisionView.RecipientView::isDefender)) {
+                score += 100000;
+            }
+            if (score > bestSourceScore) {
+                bestSource = source;
+                bestSourceScore = score;
+            }
+        }
+        if (bestSource == null) {
+            throw new IllegalStateException("FORGE_AI_COMBAT_DAMAGE_NO_TACTICAL_SOURCE");
+        }
+
+        CombatDamageDecisionView.RecipientView bestRecipient = null;
+        int bestRecipientScore = Integer.MIN_VALUE;
+        for (CombatDamageDecisionView.RecipientView recipient : bestSource.getRecipients()) {
+            int score;
+            if (recipient.isDefender()) {
+                score = 1000000;
+            } else if (recipient.getRecipient() instanceof Card card) {
+                score = ComputerUtilCard.evaluateCreature(card);
+                final int lethal = recipient.getLethalDamageRemaining();
+                if (lethal > 0 && lethal <= bestSource.getRemainingDamage()) {
+                    score += 100000;
+                }
+            } else {
+                score = 0;
+            }
+            if (score > bestRecipientScore) {
+                bestRecipient = recipient;
+                bestRecipientScore = score;
+            }
+        }
+        if (bestRecipient == null) {
+            throw new IllegalStateException("FORGE_AI_COMBAT_DAMAGE_NO_TACTICAL_RECIPIENT");
+        }
+
+        int amount;
+        if (bestRecipient.isDefender()) {
+            amount = bestRecipient.getMaxDamage();
+        } else if (bestRecipient.getLethalDamageRemaining() > 0) {
+            amount = Math.max(bestRecipient.getMinDamage(),
+                    Math.min(bestRecipient.getMaxDamage(), bestRecipient.getLethalDamageRemaining()));
+        } else {
+            amount = bestRecipient.getMinDamage();
+        }
+        return new CombatDamageSelection(bestSource.getSource(), bestRecipient.getRecipient(), amount);
     }
+
+    @Override
+    public AmountDistributionSelection chooseAmountDistribution(final AmountDistributionDecisionView decision) {
+        if (decision == null || decision.getRecipients().isEmpty()) {
+            throw new IllegalStateException("FORGE_AI_AMOUNT_DISTRIBUTION_EMPTY_CORE_VIEW");
+        }
+        AmountDistributionDecisionView.RecipientView best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (AmountDistributionDecisionView.RecipientView recipient : decision.getRecipients()) {
+            final int score = recipient.getRecipient() instanceof Card card
+                    ? ComputerUtilCard.evaluateCreature(card) : 0;
+            if (score > bestScore) {
+                best = recipient;
+                bestScore = score;
+            }
+        }
+        if (best == null) {
+            throw new IllegalStateException("FORGE_AI_AMOUNT_DISTRIBUTION_NO_TACTICAL_RECIPIENT");
+        }
+        return new AmountDistributionSelection(best.getRecipient(), best.getMaxAmount());
+    }
+
 
     @Override
     public Map<GameEntity, Integer> divideShield(Card effectSource, Map<GameEntity, Integer> affected, int shieldAmount) {
