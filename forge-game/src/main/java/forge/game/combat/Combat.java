@@ -702,7 +702,8 @@ public class Combat {
         }
     }
 
-    private boolean assignBlockersDamage(boolean firstStrikeDamage) {
+    private boolean assignBlockersDamage(boolean firstStrikeDamage, Map<Player, CombatDamageDecision> decisions,
+            Map<Card, Map<GameEntity, Integer>> staged) {
         // Assign damage by Blockers
         final CardCollection blockers = getAllBlockers();
         boolean assignedDamage = false;
@@ -743,22 +744,19 @@ public class Combat {
                     assigningPlayer = attackingPlayer;
 
                 assignedDamage = true;
-                Map<Card, Integer> map = assigningPlayer.getController().assignCombatDamage(blocker, attackers, null, damage, defender, divideCombatDamageAsChoose || assigningPlayer != blocker.getController() || !this.legacyOrderCombatants);
-                for (Entry<Card, Integer> dt : map.entrySet()) {
-                    // Butcher Orgg
-                    if (dt.getKey() == null && dt.getValue() > 0) {
-                        damageMap.get().put(blocker, defender, dt.getValue());
-                    } else {
-                        dt.getKey().addAssignedDamage(dt.getValue(), blocker);
-                        damageMap.get().put(blocker, dt.getKey(), dt.getValue());
-                    }
-                }
+                final CombatDamageDecision decision = decisions.computeIfAbsent(assigningPlayer,
+                        p -> new CombatDamageDecision(p, firstStrikeDamage, staged));
+                decision.addSource(blocker, attackers, defender, damage, false, true, false,
+                        divideCombatDamageAsChoose && defender != null, divideCombatDamageAsChoose,
+                        this.legacyOrderCombatants && !divideCombatDamageAsChoose
+                                && assigningPlayer == blocker.getController());
             }
         }
         return assignedDamage;
     }
 
-    private boolean assignAttackersDamage(boolean firstStrikeDamage) {
+    private boolean assignAttackersDamage(boolean firstStrikeDamage, Map<Player, CombatDamageDecision> decisions,
+            Map<Card, Map<GameEntity, Integer>> staged) {
         // Assign damage by Attackers
         CardCollection orderedBlockers = null;
         final CardCollection attackers = getAttackers();
@@ -845,8 +843,10 @@ public class Combat {
             }
 
             assignedDamage = true;
-            // If the Attacker is unblocked, or it's a trampler and has 0 blockers, deal damage to defender
+            boolean tramplePlaneswalker = false;
+            // Special trample-to-planeswalker mode: the planeswalker becomes the lethal-before-spill recipient.
             if (defender instanceof Card && !((Card) defender).isBattle() && attacker.hasKeyword("Trample:Planeswalker")) {
+                tramplePlaneswalker = true;
                 if (orderedBlockers == null || orderedBlockers.isEmpty()) {
                     orderedBlockers = new CardCollection((Card) defender);
                 } else {
@@ -854,9 +854,13 @@ public class Combat {
                 }
                 defender = getDefenderPlayerByAttacker(attacker);
             }
+
+            final CombatDamageDecision decision = decisions.computeIfAbsent(assigningPlayer,
+                    p -> new CombatDamageDecision(p, firstStrikeDamage, staged));
             if (assignToPlayer) {
                 attackers.remove(attacker);
-                damageMap.get().put(attacker, defender, damageDealt);
+                decision.addSource(attacker, Collections.emptyList(), defender, damageDealt, true, false,
+                        false, true, true, false);
             }
             else if (orderedBlockers == null || orderedBlockers.isEmpty()) {
                 attackers.remove(attacker);
@@ -864,40 +868,26 @@ public class Combat {
                     final SpellAbility emptySA = new SpellAbility.EmptySa(ApiType.Cleanup, attacker);
                     Card chosen = attacker.getController().getController().chooseCardsForEffect(getDefendersCreatures(),
                             emptySA, Localizer.getInstance().getMessage("lblChooseCreature"), 1, 1, false, null).get(0);
-                    damageMap.get().put(attacker, chosen, damageDealt);
-                } else if (trampler || !band.isBlocked()) { // this is called after declare blockers, no worries 'bout nulls in isBlocked
+                    decision.addSource(attacker, Collections.singletonList(chosen), null, damageDealt, true,
+                            false, false, false, true, false);
+                } else if (trampler || !band.isBlocked()) {
                     if (defender == null) {
                         defender = getDefenderPlayerByAttacker(attacker);
                         System.err.println("[COMBAT] defender is null, getDefenderPlayerByAttacker(attacker) result: " + defender);
                     }
-                    // this will fail if defender is null, and it doesn't allow null values..
-                    damageMap.get().put(attacker, defender, damageDealt);
-                } // No damage happens if blocked but no blockers left
+                    decision.addSource(attacker, Collections.emptyList(), defender, damageDealt, true,
+                            band.isBlocked(), trampler, true, false, false);
+                } // A blocked nontrampler with no blockers assigns no combat damage.
             } else {
-                Map<Card, Integer> map = assigningPlayer.getController().assignCombatDamage(attacker, orderedBlockers, attackers,
-                        damageDealt, defender, divideCombatDamageAsChoose || getAttackingPlayer() != assigningPlayer || !this.legacyOrderCombatants);
-
                 attackers.remove(attacker);
-                // player wants to assign another first
-                if (map == null) {
-                    // add to end
-                    attackers.add(attacker);
-                    continue;
-                }
-
-                for (Entry<Card, Integer> dt : map.entrySet()) {
-                    if (dt.getKey() == null) {
-                        if (dt.getValue() > 0) {
-                            if (defender instanceof Card) {
-                                ((Card) defender).addAssignedDamage(dt.getValue(), attacker);
-                            }
-                            damageMap.get().put(attacker, defender, dt.getValue());
-                        }
-                    } else {
-                        dt.getKey().addAssignedDamage(dt.getValue(), attacker);
-                        damageMap.get().put(attacker, dt.getKey(), dt.getValue());
-                    }
-                }
+                final boolean blockedForAssignment = !divideCombatDamageAsChoose
+                        && (band.isBlocked() || tramplePlaneswalker);
+                final boolean maySpill = divideCombatDamageAsChoose || trampler || tramplePlaneswalker;
+                final boolean legacyOrder = this.legacyOrderCombatants && !divideCombatDamageAsChoose
+                        && getAttackingPlayer() == assigningPlayer;
+                decision.addSource(attacker, orderedBlockers, defender, damageDealt, true,
+                        blockedForAssignment, trampler || tramplePlaneswalker, maySpill,
+                        divideCombatDamageAsChoose, legacyOrder);
             } // if !hasFirstStrike ...
         } // for
         return assignedDamage;
@@ -916,10 +906,30 @@ public class Combat {
     }
 
     public final boolean assignCombatDamage(boolean firstStrikeDamage) {
-        boolean assignedDamage = assignAttackersDamage(firstStrikeDamage);
-        assignedDamage |= assignBlockersDamage(firstStrikeDamage);
+        final Map<Card, Map<GameEntity, Integer>> staged = new LinkedHashMap<>();
+        final Map<Player, CombatDamageDecision> decisions = new LinkedHashMap<>();
+        boolean assignedDamage = assignAttackersDamage(firstStrikeDamage, decisions, staged);
+        assignedDamage |= assignBlockersDamage(firstStrikeDamage, decisions, staged);
+
+        for (CombatDamageDecision decision : decisions.values()) {
+            if (decision.hasSources()) {
+                decision.resolve(decision.getAssigningPlayer().getController());
+            }
+        }
+        CombatDamageAssignmentValidator.validateAll(this, decisions.values(), staged);
+
+        // Canonical state-mutation boundary: nothing above this line writes damageMap or assignedDamage.
+        for (Map.Entry<Card, Map<GameEntity, Integer>> sourceEntry : staged.entrySet()) {
+            final Card source = sourceEntry.getKey();
+            for (Map.Entry<GameEntity, Integer> assignment : sourceEntry.getValue().entrySet()) {
+                if (assignment.getKey() instanceof Card card) {
+                    card.addAssignedDamage(assignment.getValue(), source);
+                }
+                damageMap.get().put(source, assignment.getKey(), assignment.getValue());
+            }
+        }
+
         if (!firstStrikeDamage) {
-            // Clear first strike damage list since it doesn't matter anymore
             combatantsThatDealtFirstStrikeDamage.get().clear();
         }
         return assignedDamage;

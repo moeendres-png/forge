@@ -1,0 +1,273 @@
+{
+  "seal_format": "ws216-evidence-seal/1",
+  "workstream": "WS216 Forge WS202 Decision-Gap Closure",
+  "status_note": "This seal describes observed runtime reality only. WS202 sealed evidence is preserved unchanged; this seal adds WS216 runtime qualification.",
+  "SOURCE_LOCK": {
+    "repository": "moeendres-png/forge",
+    "branch": "ws216/forge-ws202-gap-closure-20260915",
+    "audit_base_sha": "cd5eaa3c55427df42194f8ebaec938a59d2b594d",
+    "audit_base_tree": "f3f01acb8cbb5534ca9e81a256740999dd6668b4",
+    "candidate_head": "171efdc846aeb7d4c7dfc4fdf203d628f47f99fd",
+    "candidate_tree": "47fb1943742f089b255294b8164045cbcb3877ce",
+    "working_tree": "clean",
+    "mutation_surface": "forge-protocol2-bridge/** only; Commander-Lab untouched; no Forge upstream repin"
+  },
+  "INPUT_AUTHORITY_MATRIX": {
+    "ws202_evidence_seal": "forge-protocol2-bridge/ws202-evidence-seal.json (24 families: 19 PASS, 5 UNKNOWN)",
+    "ws202_lab_successor_spec": "forge-protocol2-bridge/ws202-lab-successor-spec.json (call paths and requalification burdens)",
+    "rules_authority": "Forge Rules/Core alone generates legality and candidate domains; bridge serializes/projects/validates/submits only",
+    "current_magic_authority": "CR 510 combat uses incremental CombatDamageDecision; legacy damage-assignment order is obsolete unless hasOrderCombatants (default false, bridge never sets)"
+  },
+  "UNKNOWN_FAMILY_IMPACT": {
+    "NUMBER_CHOICE_small_range": {
+      "callback": "chooseNumber(sa,title,min,max) and chooseNumber(sa,title,values,player) via ChooseNumberEffect",
+      "bridge_framing": "parkIntRange enumerates up to 128 values else validated free input; enumerated frames carry intValue options",
+      "reachability": "production-reachable via Expel the Interlopers 0..10 (actual card, 11 options)",
+      "systemic_fix": "none needed; framing already correct",
+      "verdict": "PASS after WS216 fixture"
+    },
+    "COMBAT_ORDER": {
+      "callback": "orderBlockers/orderBlocker/orderAttackers via Combat.orderBlockersForDamageAssignment",
+      "bridge_framing": "frameCardOrder complete permutations up to 4, >4 fails closed",
+      "reachability": "NOT production-reachable: gated by GameRules.hasOrderCombatants (LEGACY_ORDER_COMBATANTS default false, HostedMatch/Quest set from prefs, BridgeEngine never sets); current CR 510 uses CombatDamageDecision (COMBAT_DAMAGE PASS preserved)",
+      "systemic_fix": "none; do NOT revive DAO",
+      "verdict": "BLOCKED (obsolete DAO, honest unreachability proof)"
+    },
+    "STATIC_CHOICE": {
+      "callback": "chooseSingleStaticAbility via CostAdjustment reduceAbilities plus confirmStaticApplication binary",
+      "bridge_framing": "parkSingleChoice STATIC_CHOICE enumerated plus parkBinary static_confirm",
+      "reachability": "production-reachable via dual reducers Goblin Electromancer plus Helm of Awakening reducing Divination",
+      "systemic_fix": "none needed",
+      "verdict": "PASS after WS216 fixture"
+    },
+    "HIDDEN_ZONE_SELECTION": {
+      "callback": "chooseCardsToDiscardFrom via DiscardEffect TgtChoose/YouChoose (effect discard, not cost path)",
+      "bridge_framing": "subset framing with per-card entitlement redaction (<hidden> unless visibleToChooser), actor-scoped",
+      "reachability": "production-reachable via Faithless Looting draw-2 discard-2 effect discard",
+      "systemic_fix": "none needed",
+      "verdict": "PASS after WS216 fixture with principal scoping"
+    },
+    "DIVIDED_ALLOCATION": {
+      "callback": "chooseTargetsFor with isDividedAsYouChoose or DividedUpTo via TargetRestrictions",
+      "bridge_framing": "chooseTargetsFor rejects divided loudly; PRIORITY classifier blocks TARGETING with UNSUPPORTED",
+      "reachability": "production-reachable as fail-closed (Arc Lightning 2R divided 3); actual behavior has no native controller surface (engine resolves GUI-direct)",
+      "systemic_fix": "none; no second allocation model; no card-name hacks",
+      "verdict_fail_closed": "PASS",
+      "verdict_actual": "BLOCKED"
+    }
+  },
+  "NUMBER_CHOICE": {
+    "verdict": "PASS",
+    "fixture": "Expel the Interlopers 0..10 (11 enumerated options, freeInput false)",
+    "engine_bounds": "min 0 max 10 from ChooseNumberEffect Min/Max SVar",
+    "bridge_frame": "NUMBER_CHOICE with 11 intValue options, complete set",
+    "external_choice": 2,
+    "native_consumption": "DestroyAll powerGEX with X=ChosenNumber",
+    "observable_effect": "Runeclaw Bear (2) and Carnage Tyrant (7) dead, Llanowar Elves (1) lives",
+    "negatives": "WRONG_ACTOR, STALE_REVISION, UNKNOWN_OPTION, MALFORMED_REQUEST on value-bearing submit to enumerated frame, below/above have no identity",
+    "distinct_choices": "2 and 3 both offered"
+  },
+  "COMBAT_ORDER": {
+    "verdict": "BLOCKED",
+    "production_flag": "hasOrderCombatants false (BridgeEngine never sets; LEGACY_ORDER_COMBATANTS default false)",
+    "modern_path": "COMBAT_DAMAGE incremental triples (2 to Bear, 1 to Elves, 4 to player p1, life 36) with no COMBAT_ORDER park",
+    "audit": "no COMBAT_ORDER frame_parked in production game; zone_order_unneeded for simultaneous graveyard when unordered",
+    "overflow_bound": "5 combatants via direct orderBlockers throws BridgeUnsupportedDecision (too many combatants), synthetic fail-closed only",
+    "combat_damage_preserved": "PASS (E02 and pipe combat unchanged)"
+  },
+  "STATIC_CHOICE": {
+    "verdict": "PASS",
+    "fixture": "Goblin Electromancer plus Helm of Awakening reducing Divination 2U",
+    "engine_domain": "CostAdjustment reduceAbilities list of 2 StaticAbility",
+    "bridge_frame": "STATIC_CHOICE with 2 options labeled by host card names",
+    "external_choice": "Goblin Electromancer first (explicit, not index 0)",
+    "native_consumption": "CostAdjustment applies reducers, generic 2 to 0, U from pool",
+    "observable_effect": "Divination in graveyard, pool U 0",
+    "negatives": "WRONG_ACTOR, STALE_REVISION, UNKNOWN_OPTION"
+  },
+  "HIDDEN_ZONE_SELECTION": {
+    "verdict": "PASS",
+    "fixture": "Faithless Looting R draw-2 discard-2 effect discard (TgtChoose, not cost path)",
+    "engine_domain": "DiscardEffect validCards from hand, min/max 2, visibleToChooser validCards",
+    "bridge_frame": "HIDDEN_ZONE_SELECTION with subset options, labels show names to entitled chooser only",
+    "entitled_view": "p1 legal_actions non-empty, labels with names",
+    "outsider_view": "p2 legal_actions empty, no optionIds, hand all <hidden>, pending_decision null, labels do not leak via state",
+    "source_metadata": "no option identities leak to outsiders",
+    "event_transcript": "audit internal only; state hand redacted; stack text redacted via view gates",
+    "wrong_principal": "WRONG_ACTOR on read (via get_legal_actions) and submit",
+    "stale": "STALE_REVISION and consumed-option UNKNOWN_OPTION",
+    "native_consumption": "chosen subset to graveyard"
+  },
+  "DIVIDED_FAIL_CLOSED_CORRECTNESS": {
+    "verdict": "PASS",
+    "fixture": "Arc Lightning 2R divided 3 (DividedAsYouChoose)",
+    "offering_stage": "PRIORITY UNSUPPORTED with reason TARGETING, zero options, no partial offer",
+    "target_stage": "direct chooseTargetsFor on real Arc ability throws BridgeUnsupportedDecision (divided allocation)",
+    "no_mutation": "p2 life unchanged, battlefield unchanged, Arc remains in hand",
+    "negatives": "UNKNOWN_OPTION on UNSUPPORTED, WRONG_ACTOR without leaking reason"
+  },
+  "DIVIDED_ACTUAL_BEHAVIOR_SUPPORT": {
+    "verdict": "BLOCKED",
+    "reason": "no native controller surface for chooser-divided allocation; engine resolves GUI-direct; bridge must not duplicate legality",
+    "second_engine": "none introduced",
+    "card_hacks": "none"
+  },
+  "DECLINE_SUBMISSION": {
+    "MANA_PAYMENT_DECLINE_SUBMIT": {
+      "verdict": "PASS",
+      "fixture": "Propaganda tax on Bear attacking p1 (2 Islands available)",
+      "bridge_frame": "MANA_PAYMENT with tap offers plus explicit Decline",
+      "external_choice": "Decline",
+      "native_rollback": "attacker removed from combat via CombatUtil.checkPropagandaEffects false path, untapped via cancel, Islands untapped, life 40, no damage",
+      "negatives": "WRONG_ACTOR, STALE_REVISION, UNKNOWN_OPTION on live frame"
+    },
+    "COST_SELECTION_DECLINE_SUBMIT": {
+      "verdict": "PASS",
+      "fixture": "Force of Will pitch (Elves plus Fog on stack, Frog plus Ponder in hand)",
+      "bridge_frame": "COST_SELECTION exile with 3 options (Frog, Ponder, Decline) after pay-life Yes and Elves target",
+      "external_choice": "Decline",
+      "native_rollback": "neither Frog nor Ponder exiled; declined Force never counters",
+      "negatives": "WRONG_ACTOR, STALE_REVISION, UNKNOWN_OPTION"
+    }
+  },
+  "PIPE_ORDER_CHOICE": {
+    "verdict": "PASS",
+    "fixture": "Carnage Tyrant plus Bone Dancer (NeedsOrderedGraveyard) double-blocked by Bear plus Elves over pipe",
+    "bridge_frame": "ORDER_CHOICE with 2 permutations for p1",
+    "external_choice": "Bear then Elves",
+    "native_consumption": "graveyard order chosen, life 36",
+    "principal_scoping": "p2 sees no options while p1 owns frame",
+    "process": "fresh child JVM"
+  },
+  "PIPE_COLOR_CHOICE": {
+    "verdict": "PASS",
+    "fixture": "City of Brass land (no summoning sickness) any-color output over pipe",
+    "bridge_frame": "COLOR_CHOICE with >=5 colors",
+    "external_choice": "green",
+    "native_consumption": "pool G 1",
+    "principal_scoping": "outsider sees no options",
+    "process": "fresh child JVM",
+    "note": "Birds would be sick on turn-1 hook placement; City is the production-reachable pipe path"
+  },
+  "PIPE_GENERIC_CONFIRM_SELECTION": {
+    "verdict": "PASS",
+    "GENERIC_SELECTION": {
+      "fixture": "Fleshbag Marauder 2B cast, each player sacrifices",
+      "bridge_frame": "GENERIC_SELECTION with 3 options (Bear, Elves, Fleshbag) for p1",
+      "external_choice": "Llanowar Elves",
+      "native_consumption": "Elves in graveyard, Bear and Fleshbag live",
+      "principal_scoping": "outsider sees no options"
+    },
+    "GENERIC_CONFIRM": {
+      "fixture": "Snort 3R each player may discard hand",
+      "bridge_frame": "GENERIC_CONFIRM Yes/No for p1 (plus p2-p4 answered No)",
+      "external_choice": "Yes for p1",
+      "native_consumption": "p1 discards (Plains buried) and draws; others unchanged",
+      "principal_scoping": "outsider sees no options"
+    },
+    "BINARY_CHOICE": {
+      "fixture": "Extinction Event 3B odd/even",
+      "bridge_frame": "BINARY_CHOICE odd/even for p1",
+      "external_choice": "first option (odd or even, either proves consumption)",
+      "native_consumption": "exactly one parity exiled (Elves xor Bear)",
+      "principal_scoping": "outsider sees no options"
+    },
+    "AMOUNT_DISTRIBUTION": {
+      "fixture": "Master of the Wild Hunt tap with 2 Dire Wolves vs Bear",
+      "bridge_frame": "AMOUNT_DISTRIBUTION for p2 divider (plus preceding GENERIC_CONFIRM Yes)",
+      "external_choice": "amount 2 to one Wolf",
+      "native_consumption": "Bear dead to Wolves 4, exactly one Wolf survives 2-split",
+      "principal_scoping": "p1 sees no options while p2 owns amount frame"
+    },
+    "process": "each a fresh child JVM"
+  },
+  "PIPE_MALFORMED_SCENARIO": {
+    "verdict": "PASS",
+    "fixture": "create_commander_game with neutral_initial_state.stack [x] over real pipe",
+    "native_rejection": "ScenarioBootstrap.parse throws IllegalArgumentException (must not inject stack)",
+    "wire_result": "game_creation_failed with stack in message, no game created",
+    "process": "fresh child JVM"
+  },
+  "PIPE_SEARCH_OUTCOME": {
+    "verdict": "PASS",
+    "fixture": "Rampant Growth with Forest plus Mountain, find Plains over pipe",
+    "bridge_frame": "SEARCH_SELECTION with Plains option",
+    "semantic_outcome": "Plains in battlefield, library_size shrinks, battlefield_details tapped true",
+    "projection_fix": "additive library_size (public count) plus battlefield_details (tapped, counters, power/toughness with redaction gates)",
+    "principal_scoping": "outsider sees no options while p1 owns frame",
+    "process": "fresh child JVM"
+  },
+  "PIPE_REPLACEMENT_OUTCOME": {
+    "verdict": "PASS",
+    "fixture": "Stonecoil Serpent X=3 with Doubling Season plus Hardened Scales over pipe",
+    "bridge_frame": "X_ANNOUNCE free input 3 plus REPLACEMENT_ORDER 2 options (Scales first)",
+    "semantic_outcome": "Serpent in battlefield with +1/+1 counters 8, power 8 toughness 8 via battlefield_details",
+    "projection_fix": "same additive battlefield_details",
+    "process": "fresh child JVM"
+  },
+  "PIPE_COMMANDER_TAX_RECAST": {
+    "verdict": "PASS",
+    "fixture": "Isamaru from command zone (W), Murder to command, taxed recast ({W}+{2}) over pipe",
+    "movement": "COMMANDER_MOVE Yes executes to command zone",
+    "recast": "taxed recast executes, pool W 0, commander_cast_count 2 (first plus recast), battlefield contains Isamaru",
+    "process": "fresh child JVM with multi-turn drive to p1 MAIN recastTurn"
+  },
+  "PRINCIPAL_SCOPING": {
+    "verdict": "PASS",
+    "entitled_sees_frame": "actor-only legal_actions non-empty with names where entitled",
+    "outsiders_redacted": "outsider legal_actions empty, no optionIds, hands <hidden>, pending_decision null, state hash null for non-actors",
+    "wrong_actor_submit": "WRONG_ACTOR over pipe (hidden test) and in-process (all families)",
+    "stale": "STALE_REVISION in-process and over pipe discipline",
+    "hidden_mandatory": "HIDDEN_ZONE_SELECTION in-process plus pipe with wrong-actor read and submit proofs"
+  },
+  "PROCESS_ISOLATION": {
+    "verdict": "PASS",
+    "in_process": "WS216GapClosureTest 11 tests share JVM but each builds a fresh constructed game (no global MyRandom refactor)",
+    "separate_process": "WS216SeparateProcessTest 11 tests each boot own child BridgeMain JVM with FORGE_ENGINE_SHA bound; no display, no network",
+    "twin_determinism_preserved": "WS202 seed twins still green inside full regression"
+  },
+  "REGRESSION": {
+    "verdict": "PASS",
+    "command": "mvn test -pl forge-protocol2-bridge -am -o -Dcheckstyle.skip=true (full) plus single-test without skip for checkstyle",
+    "tests": 121,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "checkstyle_violations": 0,
+    "note": "WS202 seal reported 163 with -q across reactor; current TestSuite 121 counts bridge TestNG methods plus invocationCount (25+13+25+2+10+22+11+11 methods with one x3). All WS202 suites (ExecutableSurface 25 methods/27 invocations, SeparateProcess 13, Engine, Protocol, Headless, etc.) remain green; raw count rises only via legitimate WS216 additions."
+  },
+  "VALIDATION": {
+    "WS216GapClosureTest": "11/11 PASS in-process actual-card evidence",
+    "WS216SeparateProcessTest": "11/11 PASS separate-process actual-card evidence, each fresh JVM",
+    "FULL_MODULE": "121/121 PASS, 0 failures/errors/skips"
+  },
+  "FINAL_FAMILY_MATRIX": {
+    "total": 5,
+    "pass": 3,
+    "fail": 0,
+    "blocked": 2,
+    "unknown": 0,
+    "detail": {
+      "NUMBER_CHOICE": "PASS",
+      "COMBAT_ORDER": "BLOCKED (legacy DAO obsolete)",
+      "STATIC_CHOICE": "PASS",
+      "HIDDEN_ZONE_SELECTION": "PASS",
+      "DIVIDED_ACTUAL_BEHAVIOR_SUPPORT": "BLOCKED (DIVIDED_FAIL_CLOSED_CORRECTNESS PASS separately)"
+    }
+  },
+  "LAB_SUCCESSOR_SPEC": "forge-protocol2-bridge/ws216-lab-successor-spec.json",
+  "FINAL_HANDOFF": {
+    "source_lock": "moeendres-png/forge ws216/forge-ws202-gap-closure-20260915 audit cd5eaa3c55427df42194f8ebaec938a59d2b594d candidate 171efdc846aeb7d4c7dfc4fdf203d628f47f99fd",
+    "behavior_credit": 0,
+    "freeze": "NOT_CLAIMED",
+    "provider": "NOT_SELECTED",
+    "push": "NO raw push; canonical safe_push only after dry-run"
+  },
+  "gates": {
+    "global_behavior_credit_change": 0,
+    "full107": "NOT_RUN",
+    "architecture_freeze": "NOT_CLAIMED",
+    "production_provider": "NOT_SELECTED",
+    "raw_git_push_used": "NO"
+  }
+}

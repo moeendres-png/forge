@@ -1,0 +1,257 @@
+{
+  "spec_format": "ws202-lab-successor-spec/1",
+  "consumer": "Commander-Lab requalification runner",
+  "source_lock": {
+    "repository": "moeendres-png/forge",
+    "branch": "ws202/forge-ws90-executable-surface-20260914",
+    "audit_base_sha": "7360737b7f1f3580eb51b7aca49bd1c0e72d9bff",
+    "audit_base_tree": "378cec5d90d847aeb38d69165f7eff97a0c4d146",
+    "rules_core_ancestor": "aa5c00aa32dfd40e213f223f8fd400c43daabb24",
+    "candidate_head": "34bc83a20e8bb3714e626e1698e358281c5b689a",
+    "candidate_tree": "c5d1de0d8542eed1fd5fe0d29439c1db4fdd7cd2",
+    "protocol_version": "2.0.0"
+  },
+  "how_to_requalify": {
+    "in_process": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS202ExecutableSurfaceTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -o",
+    "separate_process": "mvn test -pl forge-protocol2-bridge -am -Dtest='WS202SeparateProcessTest' -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -o",
+    "full_module": "mvn test -pl forge-protocol2-bridge -am -o",
+    "offline": true,
+    "note": "Pipe tests spawn their own child BridgeMain JVMs with FORGE_ENGINE_SHA bound; no display, no network."
+  },
+  "global_gates": {
+    "rules_authority": "Forge Rules-Core alone determines legality, costs, mana, stack, priority, targets, combat, triggers, layers, SBAs, zones, copy/control and Rules randomness. The bridge never decides.",
+    "no_second_engine": "PASS: all option sets derive from native controller callbacks and Core-owned enumerations (TargetRestrictions, getAllPossibleAbilities, ManaPool).",
+    "no_ai_authority": "PASS: testAllControllersExternalNoAi pins every seat to ExternalPlayerController; forge-ai is never consulted.",
+    "no_gui_defaults": "PASS: HeadlessGuiFailClosedTest pins all 8 choice-bearing GUI entries to throw; no GUI default reaches a decision.",
+    "no_requested_option_filtering": "PASS: per-family exact option counts (modes 7, routes 2, targets 2, exile 3, orders 2) plus wrong-actor/stale/unknown negatives on every key frame, in-process and over the pipe.",
+    "principal_scoping": "PASS: actor-only options (WRONG_ACTOR over pipe), foe hands all <hidden>, outsider legal_actions empty, R9 next-decision withholding, event export fails closed.",
+    "rng": "PASS with single-flight caveat: per-session MyRandom seed binding, same-seed twins equal in-process and over the pipe, distinct-seed controls differ. Concurrent seeded games in one process are not deterministic by engine design.",
+    "replay": "NOT CLAIMED: export_replay fails closed by design (replay_supported=false).",
+    "behavior_credit": 0,
+    "credit_basis": "name-only diff vs audit base outside forge-protocol2-bridge/ is empty; no Forge Rules-Core production edits."
+  },
+  "families": [
+    {
+      "family": "PRIORITY pass",
+      "verdict": "PASS",
+      "in_process": "every drive passes native priorities to execution",
+      "separate_process": "every pipe game passes priorities; pass_priority carries revision",
+      "call_path": "ExternalPlayerController.chooseSpellAbilityToPlay -> parkFrame(PRIORITY)",
+      "fail_closed_path": "pass_priority on non-priority frame returns UNSUPPORTED_DECISION",
+      "requalification_burden": "rerun both suites"
+    },
+    {
+      "family": "MULLIGAN keep",
+      "verdict": "PASS",
+      "in_process": "BridgeEngineTest keep/ship plus tuck rejection",
+      "separate_process": "keepsAndStarter resolves 4 keeps in all 13 pipe games",
+      "call_path": "mulliganKeepHand -> parkFrame(MULLIGAN); resolve_mulligan requires explicit keep boolean",
+      "fail_closed_path": "London-tuck selection aborts (UNSUPPORTED_DECISION) in-process and over pipe",
+      "requalification_burden": "rerun both suites"
+    },
+    {
+      "family": "STARTING_PLAYER choice",
+      "verdict": "PASS",
+      "in_process": "testStartingPlayerExternalChoice (BridgeEngineTest)",
+      "separate_process": "p1 chosen in all 13 pipe games; outsider cannot read the frame",
+      "call_path": "chooseStartingPlayer offers engine turn order, no preset seat",
+      "fail_closed_path": "starting_player_seat injection rejected at creation",
+      "requalification_burden": "rerun both suites"
+    },
+    {
+      "family": "MANA_PAYMENT pool plus mid-payment taps",
+      "verdict": "PASS",
+      "in_process": "testE01PropagandaAttack (Island taps mid-declaration, 38/38)",
+      "separate_process": "testPipePropagandaTax (same execution over the pipe)",
+      "call_path": "payManaCost/payManaCostForActivatedAbility -> payFromPoolWithTaps; pool ties frame chooseManaFromPool",
+      "fail_closed_path": "pool-and-taps-insufficient declines and the engine rolls back; Decline submit path exists but no committed test submits Decline (UNKNOWN execution)",
+      "requalification_burden": "rerun E01 in-process plus pipe tax game"
+    },
+    {
+      "family": "COST_SELECTION sacrifice/discard/exile/pay-life",
+      "verdict": "PASS",
+      "in_process": "testDiscardTormentingVoice, testForcePitchAlternateCost (exile 3 options incl Decline), testSpecifyManaComboFraming",
+      "separate_process": "testPipeCounterPitch (Frog exile executes), testPipeDiscardHidden",
+      "call_path": "BridgeCostDecisionMaker visits park COST_SELECTION through the payer controller",
+      "fail_closed_path": "unrepresentable cost sets audit cost_unrepresentable and decline; Decline submit execution UNKNOWN (offered, never submitted)",
+      "requalification_burden": "rerun discard/Force in-process plus both pipe games"
+    },
+    {
+      "family": "TARGET_SELECTION including stack-spell targets",
+      "verdict": "PASS",
+      "in_process": "testForcePitchAlternateCost pins the Elves stack SpellAbility on the resolving Force (getFirstTargetedSpell); forced lone targets resolve without a frame (Murder flow)",
+      "separate_process": "testPipeCounterPitch (Elves countered, Frog exiled, 39); pipe stack text names the Elves target",
+      "call_path": "chooseTargetsFor/chooseNewTargetsFor over TargetRestrictions.getAllCandidates plus canTarget; stack-zone Cards map to their stack SpellAbility exactly like Human TargetSelection",
+      "fail_closed_path": ">9 candidates, >512 combinations, divided allocation, and unresolvable stack instances fail closed",
+      "requalification_burden": "rerun Force in-process plus pipe counter game"
+    },
+    {
+      "family": "MODE_SELECTION",
+      "verdict": "PASS",
+      "in_process": "testD06CasualtiesModes (7 subsets over 3 legal modes), testModesBorosCharm",
+      "separate_process": "testPipeCharmModesTargets (damage mode executes to 36)",
+      "call_path": "chooseModeForAbility over CharmEffect.makePossibleOptions (603.3c pruning is engine-owned)",
+      "fail_closed_path": "no legal modes removes the ability from the stack natively",
+      "requalification_burden": "rerun D06/Charm in-process plus pipe charm game"
+    },
+    {
+      "family": "X_ANNOUNCE validated free input",
+      "verdict": "PASS",
+      "in_process": "testA04SerpentReplacementOrdering and testC03FireballMultiTarget (freeInput, X=3/5 execute)",
+      "separate_process": "testPipeFireballX and testPipeSerpentReplacement; Fireball also proves out-of-range submit fails UNKNOWN_OPTION over the pipe",
+      "call_path": "parkIntRange free-input sentinel plus submit-time native range check",
+      "fail_closed_path": "missing/non-integer/out-of-range values fail closed (MALFORMED_REQUEST/UNKNOWN_OPTION)",
+      "requalification_burden": "rerun A04/C03 in-process plus both pipe games"
+    },
+    {
+      "family": "COMBAT_DECLARE_ATTACKERS/BLOCKERS plus COMBAT_DAMAGE",
+      "verdict": "PASS",
+      "in_process": "testE02TrampleDamageDivision (2/1/4 to 36, both blockers dead)",
+      "separate_process": "testPipeCombatDamage (identical execution over the pipe)",
+      "call_path": "declareAttackers/declareBlockers over Core combat views; damage via CombatDamageDecisionView",
+      "fail_closed_path": "COMBAT_ORDER framing exists for multi-blocker ordering but no fixture parks it (UNKNOWN runtime)",
+      "requalification_burden": "rerun E02 in-process plus pipe combat game"
+    },
+    {
+      "family": "ORDER_CHOICE zone ordering",
+      "verdict": "PASS",
+      "in_process": "testOrderMoveToZoneListBounds (bypass identity, >4 library fail-closed, singleton passthrough) and testOrderedGraveyardFramesChoice (BoneDancer 2-permutation frame executes); testE02TrampleDamageDivision audits the Human-faithful no-decision path",
+      "separate_process": "UNKNOWN (no pipe fixture orders a graveyard; E02 pipe game exercises the no-decision path implicitly)",
+      "call_path": "orderMoveToZoneList mirrors Human graveyard defaults, else full permutations up to 4",
+      "fail_closed_path": ">4 cards to order fails closed with explicit unsupported",
+      "requalification_burden": "rerun the two ORDER tests in-process"
+    },
+    {
+      "family": "TRIGGER_ORDER plus TRIGGER_PLAY",
+      "verdict": "PASS",
+      "in_process": "testB01TriggerOrdering (#0-then-#1, 42/41/41/41) and testJ02DelinaAttackTrigger",
+      "separate_process": "testPipeTriggerOrder (identical execution over the pipe)",
+      "call_path": "orderSimultaneousSa parks complete permutations; trigger confirms park natively",
+      "fail_closed_path": "orderAndPlaySimultaneousSa plays every ordered ability through the real pipeline",
+      "requalification_burden": "rerun B01/J02 in-process plus pipe trigger game"
+    },
+    {
+      "family": "REPLACEMENT_ORDER plus REPLACEMENT_CONFIRM",
+      "verdict": "PASS",
+      "in_process": "testA04SerpentReplacementOrdering (Scales-first, 8 counters 8/8) and H01 Clone entry confirms",
+      "separate_process": "testPipeSerpentReplacement (order executes, Serpent enters), testPipeCloneEntry/testPipeHumilityLayers (confirm path)",
+      "call_path": "replacement confirms and orders park through the controller; counter/PT execution is in-process only (pipe projects names)",
+      "fail_closed_path": "unrepresentable replacement sets fail closed",
+      "requalification_burden": "rerun A04/H01 in-process plus pipe serpent/clone/humility games"
+    },
+    {
+      "family": "COPY_CHOICE",
+      "verdict": "PASS",
+      "in_process": "H01a/b/c (Bear copy enters and endures)",
+      "separate_process": "testPipeCloneEntry and testPipeHumilityLayers (copy enters, survives Humility and concession)",
+      "call_path": "copy choices park natively; lone candidates resolve forced",
+      "fail_closed_path": "no copyable legal choice removes the path natively",
+      "requalification_burden": "rerun H01a/b/c in-process plus both pipe games; H01b historic flake adjudicated TRANSIENT-HISTORICAL (3/3 plus pipe green, no rewording)"
+    },
+    {
+      "family": "SEARCH_SELECTION",
+      "verdict": "PASS",
+      "in_process": "testF01RampantGrowthSearch (Forest arrives tapped, library shrinks; outsider sees no optionIds)",
+      "separate_process": "testPipeRampantSearch (Plains found and enters; outsider legal_actions empty while p1 owns the frame)",
+      "call_path": "search framing over engine candidate set; labels name cards to the entitled searcher only",
+      "fail_closed_path": "library-shrink and tapped-arrival are asserted in-process only (pipe projects names, library is always empty)",
+      "requalification_burden": "rerun F01 in-process plus pipe search game"
+    },
+    {
+      "family": "COMMANDER_MOVE plus concession",
+      "verdict": "PASS",
+      "in_process": "testG02CommanderMovementAndTax (move executes, taxed recast executes) and testG04Concession",
+      "separate_process": "testPipeCommanderMoveConcede (Isamaru to command zone, p3 concede executes to hasLost); testPipeHumilityLayers (second concede)",
+      "call_path": "SBA commander choice parks COMMANDER_MOVE; concede rides a PRIORITY concede option through generic submit",
+      "fail_closed_path": "concede message endpoint stays unsupported; only the framed option concedes",
+      "requalification_burden": "rerun G02/G04 in-process plus both pipe games"
+    },
+    {
+      "family": "Seed binding plus twins",
+      "verdict": "PASS",
+      "in_process": "testSeedTwinsDeterministic (424242 twins equal, 777 differs, seed echoed)",
+      "separate_process": "testPipeSeedTwins (same across child games)",
+      "call_path": "create_commander_game seed binds per-session MyRandom; single-flight required for twin determinism",
+      "fail_closed_path": "non-integer seed is MALFORMED_REQUEST",
+      "requalification_burden": "rerun both twin tests"
+    },
+    {
+      "family": "Scenario bootstrap",
+      "verdict": "PASS",
+      "in_process": "testBootstrapStateProof (placements, attach, tapped, hands, stack rejection)",
+      "separate_process": "all 12 scenario pipe games establish boards through neutral_initial_state",
+      "call_path": "ScenarioBootstrap.parse validates; apply moves library identities through native zone APIs in the start hook",
+      "fail_closed_path": "stack/outcome/decision injection rejected at parse; malformed scenario over the pipe is UNKNOWN (proven in-process only)",
+      "requalification_burden": "rerun bootstrap proof plus any pipe game"
+    },
+    {
+      "family": "COLOR_CHOICE choice mana",
+      "verdict": "PASS",
+      "in_process": "testChoiceManaFundsCast (Birds green-first funds Elves)",
+      "separate_process": "UNKNOWN (pipe driver handles COLOR_CHOICE; no pipe fixture parks it)",
+      "call_path": "choice-mana outputs frame through Core ManaEffect paths",
+      "fail_closed_path": "unrepresentable outputs fail closed",
+      "requalification_burden": "rerun choice-mana test in-process"
+    },
+    {
+      "family": "TRIGGER/COPY-adjacent confirms (GENERIC_CONFIRM, GENERIC_SELECTION, BINARY_CHOICE, AMOUNT_DISTRIBUTION)",
+      "verdict": "PASS",
+      "in_process": "testJ02DelinaAttackTrigger",
+      "separate_process": "UNKNOWN (no pipe fixture reaches them)",
+      "call_path": "native controller callbacks with complete option sets",
+      "fail_closed_path": "unrepresentable sets fail closed",
+      "requalification_burden": "rerun J02 in-process"
+    },
+    {
+      "family": "NUMBER_CHOICE small-range enumeration",
+      "verdict": "UNKNOWN",
+      "in_process": "no WS202 fixture parks it (large ranges use validated free input)",
+      "separate_process": "UNKNOWN",
+      "call_path": "parkIntRange enumerates up to 128 values, else free input",
+      "fail_closed_path": "CODE_DERIVED only, never runtime-verified",
+      "requalification_burden": "Lab must supply a fixture (e.g. delve count) before claiming"
+    },
+    {
+      "family": "COMBAT_ORDER",
+      "verdict": "UNKNOWN",
+      "in_process": "framing exists (orderBlockers/orderBlocker/orderAttackers); no fixture parks it",
+      "separate_process": "UNKNOWN",
+      "call_path": "frameCardOrder complete permutations up to 4 combatants",
+      "fail_closed_path": ">4 combatants fail closed (CODE_DERIVED, never runtime-verified)",
+      "requalification_burden": "Lab must supply a multi-blocker fixture before claiming"
+    },
+    {
+      "family": "STATIC_CHOICE",
+      "verdict": "UNKNOWN",
+      "in_process": "framing exists; no fixture parks it",
+      "separate_process": "UNKNOWN",
+      "call_path": "parkBinary/parkSingleChoice STATIC paths",
+      "fail_closed_path": "CODE_DERIVED only",
+      "requalification_burden": "Lab must supply a fixture before claiming"
+    },
+    {
+      "family": "HIDDEN_ZONE_SELECTION",
+      "verdict": "UNKNOWN",
+      "in_process": "framing with per-card entitlement redaction exists; discard fixtures take the cost-decision path instead",
+      "separate_process": "UNKNOWN (foe-hand opacity proven via COST path instead)",
+      "call_path": "chooseCardsToDiscardFrom labels <hidden> unless visibleToChooser",
+      "fail_closed_path": "CODE_DERIVED only",
+      "requalification_burden": "Lab must supply a fixture before claiming"
+    },
+    {
+      "family": "Divided allocation",
+      "verdict": "UNKNOWN",
+      "in_process": "fail-closed by design; no fixture reaches it",
+      "separate_process": "UNKNOWN",
+      "call_path": "chooseTargetsFor rejects divided spells loudly",
+      "fail_closed_path": "fail-closed path itself is CODE_DERIVED, never runtime-verified",
+      "requalification_burden": "Lab must supply a divided spell fixture and expect UNSUPPORTED_DECISION"
+    }
+  ],
+  "out_of_scope_claims": {
+    "full107": "NOT_RUN",
+    "architecture_freeze": "NOT_CLAIMED",
+    "production_provider": "NOT_SELECTED",
+    "xmage_findings": "WS207/WS212/WS214 do not alter Forge authority and were not consulted"
+  }
+}
