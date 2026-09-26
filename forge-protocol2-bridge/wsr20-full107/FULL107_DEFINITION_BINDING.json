@@ -1,0 +1,13 @@
+{
+ "frozen_source": "origin/ws47/successor-contract-v1.0.5-freeze@5a2e4f46",
+ "schema_version": "full107-denominator-mapping-1.0.0",
+ "materialization": "commander-lab.semantic-fixture-materialization/1.0.5",
+ "mapping_rule": "DIRECT requires a sealed fixture-corresponding run; mapping awards no PASS/FAIL (Phase C executes and classifies)",
+ "counts": {
+  "DIRECT": 15,
+  "NOT_RUN_BLOCKED": 25,
+  "SUPPORTING": 13,
+  "UNKNOWN": 54
+ },
+ "entry_count": 107
+}
