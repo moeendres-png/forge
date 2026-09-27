@@ -1701,14 +1701,75 @@ public class WS202ExecutableSurfaceTest {
             }
         }
         Assert.assertTrue(bypassAudited, "no-decision path must be audited");
-        // Library destination with five cards: genuine order decision, too many
-        // permutations to offer completely -> fail closed, nothing parked.
+        // Library destination with five cards: genuine order decision. WSR24
+        // completeness bound: 5 cards enumerate 120 permutations, within the
+        // 128-combination cap, so every order is one authoritative ORDER_CHOICE
+        // option (never a truncated set). Framed on a fresh unlaunched session
+        // (no game thread to orphan): parking blocks for an answer, so it runs
+        // off-thread and is aborted via shutdown afterwards.
+        final BridgeTestSupport.ConstructedGame framing =
+                BridgeTestSupport.buildConstructedGame("ws202-order-bounds-frame");
+        for (int i = 0; i < 5; i++) {
+            BridgeTestSupport.addCard(framing.game, 0, "Memnite", ZoneType.Battlefield);
+        }
+        final ExternalPlayerController framingController =
+                (ExternalPlayerController) framing.game.getPlayers().get(0).getController();
+        final List<Card> frameFive = new ArrayList<>(framing.game.getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield));
+        Assert.assertEquals(frameFive.size(), 5);
+        final forge.game.card.CardCollection frameFiveView =
+                new forge.game.card.CardCollection(frameFive);
+        final Thread parker = new Thread(() -> {
+            try {
+                framingController.orderMoveToZoneList(frameFiveView, ZoneType.Library, null);
+            } catch (Throwable ignored) {
+                // Aborted via shutdown below; any other throw fails the join check.
+            }
+        });
+        parker.setDaemon(true);
+        parker.start();
+        DecisionFrame ordered = null;
+        final long orderDeadline = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < orderDeadline) {
+            final DecisionFrame cur = framing.session.getCurrentFrame();
+            if (cur != null && cur.kind == DecisionFrame.Kind.ORDER_CHOICE
+                    && cur.status == DecisionFrame.Status.SUPPORTED) {
+                ordered = cur;
+                break;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        Assert.assertNotNull(ordered, "five-card ordering must park ORDER_CHOICE");
+        Assert.assertEquals(ordered.options.size(), 120,
+                "all 120 permutations must be offered completely");
+        Assert.assertEquals(ordered.actorPlayerId, "p1");
+        // Six DISTINCT cards (720 permutations) exceed the completeness bound:
+        // fail closed synchronously, nothing parked. Must run while the session
+        // is live and use distinct objects (a duplicated reference would dedupe
+        // to five and park instead of throwing).
+        BridgeTestSupport.addCard(framing.game, 0, "Memnite", ZoneType.Battlefield);
+        final List<Card> sixCards = new ArrayList<>(framing.game.getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield));
+        Assert.assertEquals(sixCards.size(), 6);
+        final forge.game.card.CardCollection sixView = new forge.game.card.CardCollection(sixCards);
         try {
-            controller.orderMoveToZoneList(fiveView, ZoneType.Library, null);
-            throw new AssertionError("five-card library ordering must fail closed");
+            framingController.orderMoveToZoneList(sixView, ZoneType.Library, null);
+            throw new AssertionError("six-card library ordering must fail closed");
         } catch (BridgeUnsupportedDecision expected) {
             Assert.assertTrue(expected.getMessage().contains("orderMoveToZoneList"));
         }
+        framing.session.shutdown(5000);
+        try {
+            parker.join(15000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        Assert.assertFalse(parker.isAlive(), "parker must be released by shutdown");
         // Singleton: no discretion, input returned.
         final forge.game.card.CardCollection one =
                 new forge.game.card.CardCollection(five.subList(0, 1));
