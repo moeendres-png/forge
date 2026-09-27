@@ -770,9 +770,82 @@ public class WsR24Pb07MechanicProbesTest {
     }
 
     // ------------------------------------------------------------------
-    // Makeshift Mannequin: reanimate with counter.
+    // Gratuitous Violence: damage doubling through real combat.
     // ------------------------------------------------------------------
 
+    @Test(timeOut = 300000)
+    public void testGratuitousViolenceDoublesDamage() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-gratuitous", 4);
+        final BridgeSession session = constructed.session;
+        for (int i = 0; i < 5; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Mountain", ZoneType.Battlefield);
+        }
+        BridgeTestSupport.addCard(constructed.game, 0, "Gratuitous Violence",
+                ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Battlefield);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        castFromHand(session, "p1", "Gratuitous Violence");
+
+        // Advance to combat and attack p2 with Memnite (1 power).
+        boolean attacked = false;
+        for (int i = 0; i < 40 && !attacked; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS)) {
+                DecisionFrame.Option attack = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null && o.label.contains("Memnite")
+                            && o.label.contains("p2")) {
+                        attack = o;
+                        break;
+                    }
+                }
+                Assert.assertNotNull(attack, "Memnite attack on p2 must be offered");
+                logOptions("gratuitous-attack", frame);
+                submit(session, frame, attack);
+                attacked = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(attacked, "attack declaration must park");
+        // p2 controls no creatures, so the engine forces no-blocks with no
+        // frame; answer one explicitly if it ever parks, then resolve.
+        for (int i = 0; i < 10; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 5000);
+            if (frame == null) {
+                break;
+            }
+            if (frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS
+                    && frame.status == DecisionFrame.Status.SUPPORTED) {
+                DecisionFrame.Option noBlock = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null && o.label.contains("No block")) {
+                        noBlock = o;
+                        break;
+                    }
+                }
+                if (noBlock != null) {
+                    submit(session, frame, noBlock);
+                    break;
+                }
+            }
+            answerCommon(session, frame);
+        }
+        drainToResolution(session);
+        final int p2Life = constructed.game.getPlayers().get(1).getLife();
+        System.err.println("[wsr24-probe] p2 life=" + p2Life);
+        Assert.assertEquals(p2Life, 38, "1-power attacker must deal 2 under doubling");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Makeshift Mannequin: reanimate with counter.
+    // ------------------------------------------------------------------
     @Test(timeOut = 300000)
     public void testMakeshiftMannequinReanimate() {
         final BridgeTestSupport.ConstructedGame constructed =
