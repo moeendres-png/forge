@@ -888,4 +888,234 @@ public class WsR24Pb07MechanicProbesTest {
         Assert.assertTrue(counters > 0, "mannequin counter must be present");
         session.shutdown(5000);
     }
+
+    // ------------------------------------------------------------------
+    // Narset, Parter of Veils: opponent extra draws are prevented.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testNarsetPreventsExtraDraw() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-narset", 4);
+        final BridgeSession session = constructed.session;
+        // Narset is HARDCAST (not placed): engine resolution sets proper
+        // last-known-zone bookkeeping, which zone-gated statics (CantDraw)
+        // require. Direct battlefield placement leaves LKI stale.
+        BridgeTestSupport.addCard(constructed.game, 0, "Island", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Island", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Narset, Parter of Veils",
+                ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 1, "Island", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Opt", ZoneType.Hand);
+        fillLibraries(constructed, 8);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        castFromHand(session, "p1", "Narset, Parter of Veils");
+        boolean narsetLanded = false;
+        for (int i = 0; i < 30 && !narsetLanded; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frame.kind == DecisionFrame.Kind.PRIORITY) {
+                for (Card c : constructed.game.getPlayers().get(0)
+                        .getCardsIn(ZoneType.Battlefield)) {
+                    if ("Narset, Parter of Veils".equals(c.getName())) {
+                        narsetLanded = true;
+                    }
+                }
+                if (narsetLanded) {
+                    break;
+                }
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(narsetLanded, "Narset must resolve to the battlefield");
+
+        // Advance to p2's main phase (draw step already passed: library stable).
+        boolean p2Main = false;
+        for (int i = 0; i < 60 && !p2Main; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            final String turnPlayer;
+            try {
+                turnPlayer = session.playerIdOf(
+                        session.getGame().getPhaseHandler().getPlayerTurn());
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+            if (turnPlayer.equals("p2") && BridgeTestSupport.isMainPhase(session)
+                    && frameMatches(frame, "p2", DecisionFrame.Kind.PRIORITY)) {
+                p2Main = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(p2Main, "never reached p2 main phase");
+        final int libBefore = constructed.game.getPlayers().get(1)
+                .getZone(ZoneType.Library).getCards().size();
+        // Privileged static diagnostics (characterization only).
+        try {
+            final forge.game.player.Player p2diag =
+                    constructed.game.getPlayers().get(1);
+            System.err.println("[wsr24-probe] narset drawnThisTurn="
+                    + p2diag.getNumDrawnThisTurn() + " clamp1="
+                    + forge.game.staticability.StaticAbilityCantDraw.canDrawAmount(
+                            p2diag, 1));
+            for (final forge.game.card.Card ca : constructed.game.getCardsIn(
+                    forge.game.zone.ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+                for (final forge.game.staticability.StaticAbility stAb
+                        : ca.getStaticAbilities()) {
+                    if (stAb.getParam("Mode") != null
+                            && stAb.getParam("Mode").contains("CantDraw")) {
+                        System.err.println("[wsr24-probe] narset static on "
+                                + ca.getName() + " conditions="
+                                + stAb.checkConditions(forge.game.staticability
+                                        .StaticAbilityMode.CantDraw)
+                                + " modes=" + stAb.getMode()
+                                + " suppressed=" + stAb.isSuppressed()
+                                + " zonesCheck=" + stAb.zonesCheck()
+                                + " inPlay=" + ca.isInPlay()
+                                + " controller=" + ca.getController());
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[wsr24-probe] narset diag failed: " + t);
+        }
+
+        castFromHand(session, "p2", "Opt");
+        // Scry resolves normally (look is unaffected); only the draw is cut.
+        boolean scryed = false;
+        for (int i = 0; i < 30 && !scryed; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p2", DecisionFrame.Kind.GENERIC_SELECTION)) {
+                submit(session, frame, frame.options.get(0));
+                scryed = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(scryed, "Opt scry must resolve under Narset");
+        drainToResolution(session);
+        final int handAfter = constructed.game.getPlayers().get(1)
+                .getZone(ZoneType.Hand).getCards().size();
+        final int libAfter = constructed.game.getPlayers().get(1)
+                .getZone(ZoneType.Library).getCards().size();
+        boolean optYard = false;
+        for (Card c : constructed.game.getPlayers().get(1)
+                .getZone(ZoneType.Graveyard).getCards()) {
+            if ("Opt".equals(c.getName())) {
+                optYard = true;
+            }
+        }
+        System.err.println("[wsr24-probe] narset hand=" + handAfter + " lib=" + libBefore
+                + "->" + libAfter + " optYard=" + optYard);
+        Assert.assertTrue(optYard, "Opt must resolve to graveyard");
+        Assert.assertEquals(handAfter, 1,
+                "extra draw prevented: only the turn-draw Plains remains");
+        Assert.assertEquals(libAfter, libBefore, "library must not shrink by a draw");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Esior, Wardwing Familiar: flying evasion through real combat.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testEsiorFlyingEvasion() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-esior", 4);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Island", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Esior, Wardwing Familiar",
+                ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Battlefield);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        castFromHand(session, "p1", "Esior, Wardwing Familiar");
+        Card esior = null;
+        for (int i = 0; i < 30 && esior == null; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frame.kind == DecisionFrame.Kind.PRIORITY) {
+                for (Card c : constructed.game.getPlayers().get(0)
+                        .getCardsIn(ZoneType.Battlefield)) {
+                    if ("Esior, Wardwing Familiar".equals(c.getName())) {
+                        esior = c;
+                    }
+                }
+                if (esior != null) {
+                    break;
+                }
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertNotNull(esior, "Esior must resolve to the battlefield");
+        boolean flying = false;
+        try {
+            flying = esior.hasKeyword("Flying");
+        } catch (Throwable t) {
+            flying = false;
+        }
+        Assert.assertTrue(flying, "Esior must fly");
+
+        boolean attacked = false;
+        // Esior is summoning-sick on the cast turn: keep passing (answering
+        // everything) until a later turn's declaration offers it.
+        for (int i = 0; i < 160 && !attacked; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS)) {
+                DecisionFrame.Option attack = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null && o.label.contains("Esior")
+                            && o.label.contains("p2")) {
+                        attack = o;
+                        break;
+                    }
+                }
+                Assert.assertNotNull(attack, "Esior attack on p2 must be offered");
+                submit(session, frame, attack);
+                attacked = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(attacked, "attack declaration must park");
+        // Ground-only defenders cannot block a flyer: tolerate a No-block
+        // frame or none at all, then resolve.
+        for (int i = 0; i < 10; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 5000);
+            if (frame == null) {
+                break;
+            }
+            if (frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS
+                    && frame.status == DecisionFrame.Status.SUPPORTED) {
+                DecisionFrame.Option noBlock = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null && o.label.contains("No block")) {
+                        noBlock = o;
+                        break;
+                    }
+                }
+                if (noBlock != null) {
+                    submit(session, frame, noBlock);
+                    break;
+                }
+            }
+            answerCommon(session, frame);
+        }
+        drainToResolution(session);
+        final int p2Life = constructed.game.getPlayers().get(1).getLife();
+        System.err.println("[wsr24-probe] esior p2 life=" + p2Life);
+        Assert.assertEquals(p2Life, 39, "flyer must deal 1 through ground defenders");
+        session.shutdown(5000);
+    }
 }
