@@ -76,6 +76,9 @@ public class WsR24Pb05BuildIdentityTest {
             Assert.assertTrue(dirty.equals("true") || dirty.equals("false"),
                     "dirty flag: " + dirty);
             Assert.assertEquals(VersionInfo.buildGitSource(), "build:bridge.properties:git");
+            final String tree = VersionInfo.buildGitTree();
+            Assert.assertNotNull(tree, "clean git build must record the source tree");
+            Assert.assertTrue(tree.matches("[0-9a-f]{40}"), "build tree shape");
         } else {
             Assert.assertEquals(dirty, "unknown");
             Assert.assertEquals(VersionInfo.buildGitSource(), "unavailable");

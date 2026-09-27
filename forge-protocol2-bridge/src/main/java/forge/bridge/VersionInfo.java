@@ -11,15 +11,14 @@ import java.util.Properties;
  * then the legacy build-filtered {@code bridge.properties} value) keeps its
  * historical precedence for compatibility, but the version payload now also
  * carries the build-derived source identity ({@code engine.git_commit} /
- * {@code engine.git_dirty}, materialized by the git-commit-id plugin at build
- * time). Merely changing an environment variable can therefore no longer
+ * {@code engine.git_tree} / {@code engine.git_dirty}, materialized from
+ * native git at build time via maven-antrun, worktree-correct). Merely changing an environment variable can therefore no longer
  * silently forge the binding: any divergence between the claim and the built
  * source is visible in every {@code get_provider_version} response via
  * {@link #buildGitCommit()} and {@link #claimMatchesBuild()}. Tarball builds
  * without .git record no build identity (honest {@code unknown}, never
  * faked); the usability gate still fails closed on missing identity.
  */
-public final class VersionInfo {
 public final class VersionInfo {
     public static final String PROVIDER = "forge";
     public static final String RELEASE = "2.0.14";
@@ -110,6 +109,18 @@ public final class VersionInfo {
     /** Where the build identity came from, for payload transparency. */
     public static String buildGitSource() {
         return buildGitCommit() == null ? "unavailable" : "build:bridge.properties:git";
+    }
+
+    /**
+     * Build-derived source tree, or null when the build recorded none. Binds
+     * the exact built bytes (commit alone is ambiguous under dirtiness).
+     */
+    public static String buildGitTree() {
+        final String value = buildProperty("engine.git_tree", null);
+        if (value == null || !value.matches("[0-9a-f]{40}")) {
+            return null;
+        }
+        return value;
     }
 
     /**

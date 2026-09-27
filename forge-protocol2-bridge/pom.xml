@@ -22,9 +22,9 @@
              comes from the FORGE_ENGINE_SHA environment variable; this property
              only records what was visible at build time and must never be
              hand-edited into a conflicting pin.
-             WSR24 (PB-05): additionally, the git-commit-id plugin materializes
-             the exact build source (commit + dirty flag) into bridge.properties
-             as engine.git_commit/engine.git_dirty. That build-derived identity
+             WSR24 (PB-05): additionally, native git materializes
+             the exact build source (commit + tree + dirty flag) into bridge.properties
+             as engine.git_commit/engine.git_tree/engine.git_dirty. That build-derived identity
              cannot be altered at runtime by changing environment variables; the
              version payload always carries it alongside the operator claim so
              divergence is visible, never silent. Tarball builds without .git
@@ -70,31 +70,81 @@
         </resources>
         <plugins>
             <!-- WSR24 (PB-05): materialize the exact build source into filtered
-                 resources. Never hand-edited; absent .git yields unavailable
-                 values (fail-soft here, fail-closed at the usability gate). -->
+                 resources using native git (worktree-correct, unlike JGit
+                 based readers which misattribute linked-worktree HEAD).
+                 Missing git fails soft here (properties stay unfiltered
+                 placeholders, read as unavailable); the usability gate still
+                 fails closed on missing identity. -->
             <plugin>
-                <groupId>io.github.git-commit-id</groupId>
-                <artifactId>git-commit-id-maven-plugin</artifactId>
-                <version>9.0.1</version>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <!-- Export so resource filtering sees git.commit.id.full,
+                         git.tree.full and git.dirty below. -->
+                    <exportAntProperties>true</exportAntProperties>
+                </configuration>
                 <executions>
                     <execution>
-                        <id>get-the-git-infos</id>
+                        <id>record-build-source</id>
                         <goals>
-                            <goal>revision</goal>
+                            <goal>run</goal>
                         </goals>
                         <phase>initialize</phase>
+                        <configuration>
+                            <target>
+                                <exec executable="git" dir="${project.basedir}"
+                                        failifexecutionfails="false"
+                                        resultproperty="git.head.exit"
+                                        outputproperty="git.head.raw">
+                                    <arg value="rev-parse"/>
+                                    <arg value="HEAD"/>
+                                </exec>
+                                <exec executable="git" dir="${project.basedir}"
+                                        failifexecutionfails="false"
+                                        resultproperty="git.tree.exit"
+                                        outputproperty="git.tree.raw">
+                                    <arg value="rev-parse"/>
+                                    <arg value="HEAD^{tree}"/>
+                                </exec>
+                                <exec executable="git" dir="${project.basedir}"
+                                        failifexecutionfails="false"
+                                        resultproperty="git.status.exit"
+                                        outputproperty="git.status.raw">
+                                    <arg value="status"/>
+                                    <arg value="--porcelain"/>
+                                </exec>
+                                <condition property="git.commit.id.full"
+                                        value="${git.head.raw}">
+                                    <matches pattern="^[0-9a-f]{40}\s*$"
+                                            string="${git.head.raw}"/>
+                                </condition>
+                                <condition property="git.tree.full"
+                                        value="${git.tree.raw}">
+                                    <matches pattern="^[0-9a-f]{40}\s*$"
+                                            string="${git.tree.raw}"/>
+                                </condition>
+                                <condition property="git.dirty" value="true">
+                                    <and>
+                                        <isset property="git.commit.id.full"/>
+                                        <isset property="git.status.raw"/>
+                                        <not>
+                                            <equals arg1="${git.status.raw}" arg2=""/>
+                                        </not>
+                                    </and>
+                                </condition>
+                                <condition property="git.dirty" value="false">
+                                    <and>
+                                        <isset property="git.commit.id.full"/>
+                                        <not>
+                                            <isset property="git.dirty"/>
+                                        </not>
+                                    </and>
+                                </condition>
+                            </target>
+                        </configuration>
                     </execution>
                 </executions>
-                <configuration>
-                    <failOnNoGitDir>false</failOnNoGitDir>
-                    <failOnUnableToExtractRepoInfo>false</failOnUnableToExtractRepoInfo>
-                    <generateGitPropertiesFile>false</generateGitPropertiesFile>
-                    <includeOnlyProperties>
-                        <includeOnlyProperty>^git.commit.id.full$</includeOnlyProperty>
-                        <includeOnlyProperty>^git.dirty$</includeOnlyProperty>
-                    </includeOnlyProperties>
-                    <commitIdGenerationMode>full</commitIdGenerationMode>
-                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

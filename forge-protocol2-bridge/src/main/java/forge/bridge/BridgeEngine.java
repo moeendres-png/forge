@@ -291,6 +291,8 @@ public final class BridgeEngine {
         // (and require engine_commit_verified) instead of trusting the claim.
         final String built = VersionInfo.buildGitCommit();
         payload.addProperty("engine_build_commit", built == null ? "unknown" : built);
+        final String builtTree = VersionInfo.buildGitTree();
+        payload.addProperty("engine_build_tree", builtTree == null ? "unknown" : builtTree);
         payload.addProperty("engine_build_dirty", VersionInfo.buildGitDirty());
         payload.addProperty("engine_build_source", VersionInfo.buildGitSource());
         payload.addProperty("engine_commit_verified", VersionInfo.claimMatchesBuild());
