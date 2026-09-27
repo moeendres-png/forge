@@ -285,6 +285,15 @@ public final class BridgeEngine {
         payload.addProperty("release", VersionInfo.RELEASE);
         payload.addProperty("engine_commit", VersionInfo.engineCommit());
         payload.addProperty("engine_commit_source", VersionInfo.engineCommitSource());
+        // WSR24 (PB-05): build-derived identity rides every version payload so
+        // an operator-supplied claim can never silently diverge from the built
+        // source. Consumers compare engine_commit against engine_build_commit
+        // (and require engine_commit_verified) instead of trusting the claim.
+        final String built = VersionInfo.buildGitCommit();
+        payload.addProperty("engine_build_commit", built == null ? "unknown" : built);
+        payload.addProperty("engine_build_dirty", VersionInfo.buildGitDirty());
+        payload.addProperty("engine_build_source", VersionInfo.buildGitSource());
+        payload.addProperty("engine_commit_verified", VersionInfo.claimMatchesBuild());
         payload.addProperty("protocol_version", BridgeProtocol.PROTOCOL_VERSION);
         payload.addProperty("bridge_name", VersionInfo.BRIDGE_NAME);
         payload.addProperty("bridge_version", VersionInfo.BRIDGE_VERSION);
