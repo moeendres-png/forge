@@ -32,21 +32,31 @@ Date: 2026-09-27
 
 ## PB-07 extension (autonomous continuation 2026-09-27)
 
-- Mechanic probes `WsR24Pb07MechanicProbesTest` 6/6 green: Dig (delve+pick+bottom-5
-  full runtime), Vandalblast (normal+overload execute), Shriekmaw (hardcast+evoke),
-  Find (front returns both; aftermath unoffered), Collar (equip+keywords),
-  Mannequin (reanimate+counter).
+- Mechanic probes `WsR24Pb07MechanicProbesTest` 9/9 green: Dig (delve+pick+bottom-5
+  full runtime), Vandalblast (normal+overload execute), Shriekmaw
+  (hardcast+evoke), Find (front returns both; aftermath unoffered),
+  Collar (equip+keywords), Mannequin (reanimate+counter),
+  Gratuitous Violence (1-power deals exactly 2 through real combat),
+  Narset (hardcast; CantDraw active; Opt extra draw prevented),
+  Esior (hardcast; Flying verified; turn-2 evasion deals 1).
+- Harness lessons pinned: lone legal targets/blocks force without frames;
+  submits settle asynchronously (answer-tracking drain); pre-placed permanents
+  carry stale LKI (zone-gated statics need real ETB).
 - Systemic bridge fixes: `exileDelved` (engine-declared delve exile performed
   natively instead of declining payment) and `orderMoveToZoneList` cap 4->5
   (120 permutations within the 128 completeness bound; 6+ still fail closed).
   `WS202ExecutableSurfaceTest#testOrderMoveToZoneListBounds` evolved to the new
   bound (5-complete/6-closed, unlaunched framing session).
-- Aftermath (Finality) pinned as ENGINE_GAP: engine grant index surfaces the
-  card but enumerates zero abilities; bridge correctly offers nothing.
-  No defect, no privacy impact: out of campaign scope, recorded for consumers.
-- PB07 register: 17 runtime-qualified / 8 runtime-touched / 3 construction-only
-  / 1 documented engine gap. Global PB-07 closure NOT claimed (PARTIAL).
-- Full bridge suite 268/268 green after the payment/ordering changes.
+- Aftermath (Finality) pinned as ENGINE_GAP: `getAllPossibleAbilities`
+  enumerates current-state abilities only; the RightSplit aftermath SA is never
+  added, so the bridge has nothing to offer. Engine Rules authority: documented
+  for a dedicated engine workstream, not invented here.
+- PB07 register: 20 runtime-qualified / 8 runtime-touched / 0 construction-only
+  / 1 documented engine gap (maximum Forge-local; global closure NOT claimed).
+- Full bridge suite 271/271 green (JDK 21) after all changes; touched surfaces
+  43/43 green on JDK 17; project checkstyle validation green.
+- Branch HEAD `e38a74a4126` == remote; PR #4 open (CI Java lanes queued at
+  handoff, link audit green); no master merge (governance boundary).
 
 ## PB-06 layer-trace status
 
