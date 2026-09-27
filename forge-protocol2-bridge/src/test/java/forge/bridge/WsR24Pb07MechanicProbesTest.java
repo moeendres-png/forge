@@ -1,6 +1,5 @@
 package forge.bridge;
 
-import com.google.gson.JsonObject;
 import forge.game.card.Card;
 import forge.game.zone.ZoneType;
 import org.testng.Assert;
