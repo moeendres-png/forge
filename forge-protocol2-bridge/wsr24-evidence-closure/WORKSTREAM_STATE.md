@@ -30,6 +30,24 @@ Date: 2026-09-27
 3. PB-08 clean-process replay twin Forge-local proof.
 4. PB-07 actual-card denominator Forge preparation (read denominator from Lab read-only, never invent).
 
+## PB-07 extension (autonomous continuation 2026-09-27)
+
+- Mechanic probes `WsR24Pb07MechanicProbesTest` 6/6 green: Dig (delve+pick+bottom-5
+  full runtime), Vandalblast (normal+overload execute), Shriekmaw (hardcast+evoke),
+  Find (front returns both; aftermath unoffered), Collar (equip+keywords),
+  Mannequin (reanimate+counter).
+- Systemic bridge fixes: `exileDelved` (engine-declared delve exile performed
+  natively instead of declining payment) and `orderMoveToZoneList` cap 4->5
+  (120 permutations within the 128 completeness bound; 6+ still fail closed).
+  `WS202ExecutableSurfaceTest#testOrderMoveToZoneListBounds` evolved to the new
+  bound (5-complete/6-closed, unlaunched framing session).
+- Aftermath (Finality) pinned as ENGINE_GAP: engine grant index surfaces the
+  card but enumerates zero abilities; bridge correctly offers nothing.
+  No defect, no privacy impact: out of campaign scope, recorded for consumers.
+- PB07 register: 17 runtime-qualified / 8 runtime-touched / 3 construction-only
+  / 1 documented engine gap. Global PB-07 closure NOT claimed (PARTIAL).
+- Full bridge suite 268/268 green after the payment/ordering changes.
+
 ## PB-06 layer-trace status
 
-Pending — see `PB06_LAYER_TRACE.md` (to be written after trace).
+Complete — see `PB06_LAYER_TRACE.md` (6/6 PASS, `PB06_EVIDENCE.json`).

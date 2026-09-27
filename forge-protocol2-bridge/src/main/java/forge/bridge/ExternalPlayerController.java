@@ -3010,7 +3010,7 @@ public final class ExternalPlayerController extends PlayerController {
         // ReorderZone effects in unordered-graveyard games (its default path):
         // no discretion exists there, so the input order returns untouched with
         // no frame. Anything else over 2+ cards is a genuine order decision and
-        // parks ORDER_CHOICE over the complete permutation set (>4 fails closed).
+        // parks ORDER_CHOICE over the complete permutation set (>5 fails closed).
         final List<Card> legal = new ArrayList<>();
         if (cards != null) {
             for (Card card : cards) {
