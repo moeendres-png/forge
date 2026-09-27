@@ -502,10 +502,18 @@ public final class StateProjection {
         return zones;
     }
 
+    /**
+     * WSR24 (HIDDEN_12): hand visibility follows the engine's own authority —
+     * the owner, plus the engine-declared controlling player (Mindslaver
+     * shape, mirroring the {@code mindSlaveMaster} branch of
+     * {@link CardView#canBeShownTo}). Anyone else receives count-preserving
+     * {@code "<hidden>"} placeholders. The bridge exposes engine truth; it
+     * invents no visibility of its own.
+     */
     private static JsonArray handZone(Player player, Player observer) {
         final JsonArray hand = new JsonArray();
         final List<String> names = zoneNames(player, ZoneType.Hand);
-        if (observer != null && observer.equals(player)) {
+        if (observer != null && (observer.equals(player) || isControlling(observer, player))) {
             for (String name : names) {
                 hand.add(name);
             }
@@ -515,6 +523,18 @@ public final class StateProjection {
             }
         }
         return hand;
+    }
+
+    private static boolean isControlling(Player observer, Player player) {
+        return require("hand.control", () -> {
+            final Player master;
+            try {
+                master = player.getControllingPlayer();
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("hand.control", t);
+            }
+            return master != null && observer.equals(master);
+        });
     }
 
     private static JsonArray battlefieldZone(Player player, PlayerView observerView) {
