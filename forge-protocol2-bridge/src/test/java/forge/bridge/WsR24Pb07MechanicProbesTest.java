@@ -660,22 +660,50 @@ public class WsR24Pb07MechanicProbesTest {
             answerCommon(session, frame);
         }
         System.err.println("[wsr24-probe] aftermath offered: " + aftermathSeen);
-        // Engine-side diagnosis (privileged read, characterization only): does
-        // the engine surface Finality through its external-zone grant index?
+        // Pinned boundary characterization (not a bridge filter defect): the
+        // engine's grant index contains the aftermath card, but its ability
+        // enumeration yields zero abilities, so the bridge has nothing to
+        // offer and correctly offers nothing instead of inventing Rules.
+        // Aftermath-half enumeration needs dedicated engine work (out of
+        // scope: no defect, no privacy impact, no card-name hack applies).
+        boolean inGrantIndex = false;
+        int abilityCount = -1;
         try {
             final forge.game.player.Player p1 =
                     constructed.game.getPlayers().get(0);
-            boolean inGrantIndex = false;
             for (Card c : p1.getCardsActivatableInExternalZones(true)) {
                 if (c != null && c.getName() != null
                         && c.getName().contains("Finality")) {
                     inGrantIndex = true;
+                    System.err.println("[wsr24-probe] grant card=" + c.getName()
+                            + " zone=" + c.getZone().getZoneType()
+                            + " split=" + c.isSplitCard());
+                    final java.util.List<forge.game.spellability.SpellAbility> abilities =
+                            c.getAllPossibleAbilities(p1, true);
+                    abilityCount = abilities.size();
+                    System.err.println("[wsr24-probe] abilities=" + abilities.size());
+                    for (forge.game.spellability.SpellAbility sa : abilities) {
+                        String blocker = null;
+                        try {
+                            blocker = ExternalPlayerController.classifyComplex(sa);
+                        } catch (Throwable t) {
+                            blocker = "classifier-threw:" + t;
+                        }
+                        System.err.println("[wsr24-probe] ability spell=" + sa.isSpell()
+                                + " announce=" + sa.hasParam("AnnounceType")
+                                + " optional=" + forge.game.GameActionUtil
+                                        .getOptionalCostValues(sa)
+                                + " blocker=" + blocker);
+                    }
                 }
             }
-            System.err.println("[wsr24-probe] aftermath in grant index: " + inGrantIndex);
         } catch (Throwable t) {
             System.err.println("[wsr24-probe] grant index unreadable: " + t);
         }
+        Assert.assertFalse(aftermathSeen, "aftermath stays unoffered on this boundary");
+        Assert.assertTrue(inGrantIndex, "engine grant index must surface the card");
+        Assert.assertEquals(abilityCount, 0,
+                "engine enumerates zero aftermath abilities: ENGINE_GAP, not a bridge filter");
         session.shutdown(5000);
     }
 
