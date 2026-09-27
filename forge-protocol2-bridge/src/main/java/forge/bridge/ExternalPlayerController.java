@@ -599,8 +599,8 @@ public final class ExternalPlayerController extends PlayerController {
             return true;
         }
         try {
-            // Offering/Emerge/Convoke/Delve need dedicated selections; fail closed
-            // rather than paying incorrectly. Pilot pre-floats all other mana.
+            // Offering/Emerge need dedicated selections; fail closed rather
+            // than paying incorrectly. Pilot pre-floats all other mana.
             if (sa != null && (sa.isOffering() || sa.isEmerge())) {
                 return false;
             }
@@ -620,7 +620,7 @@ public final class ExternalPlayerController extends PlayerController {
             final CardCollection delvePlaceholder = new CardCollection();
             forge.game.cost.CostAdjustment.adjust(beingPaid, sa, player, delvePlaceholder, false,
                     effect);
-            if (!delvePlaceholder.isEmpty()) {
+            if (!delvePlaceholder.isEmpty() && !exileDelved(sa, delvePlaceholder)) {
                 return false;
             }
             ManaConversionMatrix useMatrix = matrix;
@@ -646,6 +646,52 @@ public final class ExternalPlayerController extends PlayerController {
             details.put("reason", "insufficient floating mana and no further taps taken");
             session.audit("mana_payment_declined", details);
             return false;
+        } catch (BridgeUnsupportedDecision e) {
+            session.setLastExecutionError(e.getMessage());
+            throw e;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * WSR24: performs the engine-declared delve exile natively. CostAdjustment
+     * selected the exact graveyard cards through the framed chooseCardsToDelve
+     * dialogue and already reduced the generic cost; the only remaining step
+     * the engine would take with a null placeholder is the zone move plus its
+     * change-of-zone triggers. Uses the native GameAction exile path and the
+     * same host bookkeeping the engine applies. Any failure declines payment
+     * (rolled back by the engine), never partially pays.
+     */
+    private boolean exileDelved(SpellAbility sa, CardCollection delved) {
+        try {
+            final forge.game.Game game = player.getGame();
+            final Card host = sa == null ? null : sa.getHostCard();
+            if (game == null || host == null) {
+                return false;
+            }
+            final forge.game.card.CardZoneTable table = new forge.game.card.CardZoneTable();
+            for (Card c : delved) {
+                if (c == null) {
+                    return false;
+                }
+                host.addDelved(c);
+                final Card d = game.getAction().exile(c, null, null);
+                if (d == null) {
+                    return false;
+                }
+                host.addExiledCard(d);
+                d.setExiledWith(host);
+                d.setExiledBy(host.getController());
+                d.setExiledSA(sa);
+                table.put(ZoneType.Graveyard, d.getZone().getZoneType(), d);
+            }
+            table.triggerChangesZoneAll(game, sa);
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("count", Integer.toString(delved.size()));
+            session.audit("delve_paid", details);
+            return true;
         } catch (BridgeUnsupportedDecision e) {
             session.setLastExecutionError(e.getMessage());
             throw e;
@@ -2998,9 +3044,13 @@ public final class ExternalPlayerController extends PlayerController {
                 return cards;
             }
         }
-        if (legal.size() > 4) {
+        if (legal.size() > 5) {
             throw unsupported("orderMoveToZoneList", "too many cards to order completely");
         }
+        // WSR24 completeness bound: 5 cards enumerate 120 permutations, still
+        // within the 128-combination completeness cap, so every order is one
+        // authoritative option (never a truncated set). Six or more (720+)
+        // still fail closed.
         final Card subject;
         try {
             subject = source == null ? null : source.getHostCard();
