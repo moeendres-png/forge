@@ -7423,6 +7423,30 @@ public class Card extends GameEntity implements Comparable<Card>, IHasSVars, ITr
             }
         }
 
+        // Split cards: the half that is not the current state may still be a
+        // legal spell in this zone. Aftermath halves are cast from the
+        // graveyard (Keyword AFTERMATH + the Spell.Aftermath stack-sa gate),
+        // Fuse halves from the hand, and so on. Add the alternate state's
+        // spells here and let the playability filter below decide: ability
+        // enumeration must not encode zone legality, and the card's own
+        // restrictions remain the single authority on where a half may be cast.
+        if (isSplitCard() && !isFaceDown()) {
+            final CardState alternate = getAlternateState();
+            if (alternate != null && alternate != currentState) {
+                for (SpellAbility sa : alternate.getSpellAbilities()) {
+                    if (!(sa.isSpell() || sa.isLandAbility()) || abilities.contains(sa)) {
+                        continue;
+                    }
+                    abilities.add(sa);
+                    final List<SpellAbility> altCost = GameActionUtil.getAlternativeCosts(sa, player, false);
+                    abilities.addAll(altCost);
+                    if (unhiddenAltCost != null) {
+                        unhiddenAltCost.putAll(sa, altCost);
+                    }
+                }
+            }
+        }
+
         if (isInPlay() && !isPhasedOut() && player.canCastSorcery()) {
             if (getCurrentStateName() == CardStateName.RightSplit || getCurrentStateName() == CardStateName.EmptyRoom) {
                 abilities.add(getUnlockAbility(CardStateName.LeftSplit));
