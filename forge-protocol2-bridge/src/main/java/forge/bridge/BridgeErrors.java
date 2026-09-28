@@ -22,6 +22,13 @@ public final class BridgeErrors {
     public static final String EXECUTION_FAILED = "execution_failed";
     public static final String SUBMIT_TIMEOUT = "submit_timeout";
     public static final String DECK_IMPORT_FAILED = "deck_import_failed";
+    /**
+     * The deck was well formed but the Rules Core rejected its legality. Kept
+     * distinct from DECK_IMPORT_FAILED so a consumer can tell "I could not read
+     * this deck" from "the engine read it and refused it as illegal Commander
+     * deck", which is the distinction AF03 exists to observe.
+     */
+    public static final String DECK_NOT_LEGAL = "deck_not_legal";
     public static final String GAME_CREATION_FAILED = "game_creation_failed";
     public static final String SEED_UNSUPPORTED = "seed_unsupported";
     public static final String PLAYER_COUNT_UNSUPPORTED = "player_count_unsupported";

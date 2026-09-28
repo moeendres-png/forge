@@ -7,6 +7,7 @@ import forge.StaticData;
 import forge.card.CardDb;
 import forge.deck.CardPool;
 import forge.deck.Deck;
+import forge.deck.DeckFormat;
 import forge.deck.DeckSection;
 import forge.game.Game;
 import forge.game.GameRules;
@@ -364,6 +365,27 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.DECK_IMPORT_FAILED,
                     "unresolvable card names: " + String.join(", ", unresolved), 0);
         }
+
+        // Commander legality is decided by the Rules Core, not by this bridge.
+        //
+        // The bridge resolved card names and checked the count and the total size,
+        // but never asked the engine whether the deck was a legal Commander deck.
+        // That let a real non-Commander card serve as commander, and let a deck
+        // whose colour identity violates its commander's pass, because the
+        // validation already present in forge-core was simply never called.
+        //
+        // DeckFormat.getDeckConformanceProblem is the engine's own validator: it
+        // applies the commander predicate, the colour-identity requirement, the
+        // partner check and the rest of the Commander format rules. Reusing it
+        // keeps legality in one authoritative place and makes a Lab-side
+        // reimplementation unnecessary. A Lab pre-filter would be exactly the
+        // second source of legality this project forbids.
+        final String conformance = DeckFormat.Commander.getDeckConformanceProblem(forgeDeck);
+        if (conformance != null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.DECK_NOT_LEGAL,
+                    "deck is not a legal Commander deck: " + conformance, 0);
+        }
+
         String deckHash = BridgeProtocol.optString(deckJson, "deck_hash", null);
         if (deckHash == null || !deckHash.matches("[0-9a-f]{64}")) {
             final List<String> canonical = new ArrayList<>(commanders);
