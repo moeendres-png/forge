@@ -844,6 +844,484 @@ public class WsR24Pb07MechanicProbesTest {
     }
 
     // ------------------------------------------------------------------
+    // Ishai: opponent spell triggers a +1/+1 counter (Memnite is free).
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testIshaiCounterOnOpponentSpell() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-ishai", 4);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Ishai, Ojutai Dragonspeaker",
+                ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Memnite", ZoneType.Hand);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        boolean p2Main = false;
+        for (int i = 0; i < 60 && !p2Main; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            String turnPlayer = "?";
+            try {
+                turnPlayer = session.playerIdOf(
+                        session.getGame().getPhaseHandler().getPlayerTurn());
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+            if (turnPlayer.equals("p2") && BridgeTestSupport.isMainPhase(session)
+                    && frameMatches(frame, "p2", DecisionFrame.Kind.PRIORITY)) {
+                p2Main = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(p2Main, "never reached p2 main phase");
+        castFromHand(session, "p2", "Memnite");
+        drainToResolution(session);
+        Card ishai = null;
+        for (Card c : constructed.game.getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if ("Ishai, Ojutai Dragonspeaker".equals(c.getName())) {
+                ishai = c;
+            }
+        }
+        Assert.assertNotNull(ishai, "Ishai must hold the battlefield");
+        int counters = 0;
+        final StringBuilder counterNames = new StringBuilder();
+        try {
+            for (forge.game.card.CounterType type : ishai.getCounters().elementSet()) {
+                if (type != null) {
+                    final int n = ishai.getCounters(type);
+                    counters += n;
+                    counterNames.append(type.getName()).append('x').append(n).append(';');
+                }
+            }
+        } catch (Throwable t) {
+            Assert.fail("counter read failed: " + t);
+        }
+        System.err.println("[wsr24-probe] ishai counters=" + counters
+                + " [" + counterNames + "]");
+        Assert.assertEquals(counters, 1, "opponent spell must grow Ishai once");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Wash Away via cleave: counter a hand-cast spell in response.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testWashAwayCleaveCountersHandCast() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-wash", 4);
+        final BridgeSession session = constructed.session;
+        for (int i = 0; i < 3; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Island", ZoneType.Battlefield);
+        }
+        BridgeTestSupport.addCard(constructed.game, 0, "Wash Away", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 1, "Memnite", ZoneType.Hand);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        boolean p2Main = false;
+        for (int i = 0; i < 60 && !p2Main; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            String turnPlayer = "?";
+            try {
+                turnPlayer = session.playerIdOf(
+                        session.getGame().getPhaseHandler().getPlayerTurn());
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+            if (turnPlayer.equals("p2") && BridgeTestSupport.isMainPhase(session)
+                    && frameMatches(frame, "p2", DecisionFrame.Kind.PRIORITY)) {
+                p2Main = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(p2Main, "never reached p2 main phase");
+        castFromHand(session, "p2", "Memnite");
+        // Respond before Memnite resolves: the {U} base mode cannot touch a
+        // hand-cast spell, so the {1}{U}{U} cleave variant must be taken.
+        boolean responded = false;
+        for (int i = 0; i < 30 && !responded; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.PRIORITY)) {
+                DecisionFrame.Option cleave = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if ("cast_spell".equals(o.actionType)
+                            && "Wash Away".equals(o.sourceCardName)
+                            && o.label != null && o.label.contains("{1}{U}{U}")) {
+                        cleave = o;
+                        break;
+                    }
+                }
+                if (cleave != null) {
+                    logOptions("wash-cleave", frame);
+                    submit(session, frame, cleave);
+                    settleMana(session);
+                    responded = true;
+                    break;
+                }
+                throw new AssertionError("Wash Away must be offered in response");
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(responded, "cleave response must be cast");
+        // Memnite is the lone spell on the stack: the engine forces the sole
+        // legal target with no frame, so drain straight to resolution.
+        drainToResolution(session);
+        boolean memniteYard = false;
+        for (Card c : constructed.game.getPlayers().get(1)
+                .getZone(ZoneType.Graveyard).getCards()) {
+            if ("Memnite".equals(c.getName())) {
+                memniteYard = true;
+            }
+        }
+        boolean memniteBf = false;
+        for (Card c : constructed.game.getPlayers().get(1)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if ("Memnite".equals(c.getName())) {
+                memniteBf = true;
+            }
+        }
+        System.err.println("[wsr24-probe] wash memniteYard=" + memniteYard
+                + " memniteBf=" + memniteBf);
+        Assert.assertTrue(memniteYard, "countered Memnite must be in graveyard");
+        Assert.assertFalse(memniteBf, "countered Memnite must never land");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Psychosis Crawler: card draw drains every opponent.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testPsychosisCrawlerDrainsOnDraw() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-crawler", 4);
+        final BridgeSession session = constructed.session;
+        for (int i = 0; i < 5; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Battlefield);
+        }
+        BridgeTestSupport.addCard(constructed.game, 0, "Island", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Psychosis Crawler", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Opt", ZoneType.Hand);
+        fillLibraries(constructed, 8);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        castFromHand(session, "p1", "Psychosis Crawler");
+        // The Crawler must resolve BEFORE Opt is cast: otherwise Opt resolves
+        // first (LIFO) while the trigger source is still on the stack.
+        boolean crawlerLanded = false;
+        for (int i = 0; i < 30 && !crawlerLanded; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frame.kind == DecisionFrame.Kind.PRIORITY) {
+                for (Card c : constructed.game.getPlayers().get(0)
+                        .getCardsIn(ZoneType.Battlefield)) {
+                    if ("Psychosis Crawler".equals(c.getName())) {
+                        crawlerLanded = true;
+                    }
+                }
+                if (crawlerLanded) {
+                    break;
+                }
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(crawlerLanded, "Crawler must resolve first");
+        castFromHand(session, "p1", "Opt");
+        boolean scryed = false;
+        for (int i = 0; i < 30 && !scryed; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.GENERIC_SELECTION)) {
+                submit(session, frame, frame.options.get(0));
+                scryed = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(scryed, "Opt scry must resolve");
+        drainToResolution(session);
+        final int p1Life = constructed.game.getPlayers().get(0).getLife();
+        final int p2Life = constructed.game.getPlayers().get(1).getLife();
+        final int p3Life = constructed.game.getPlayers().get(2).getLife();
+        final int p4Life = constructed.game.getPlayers().get(3).getLife();
+        System.err.println("[wsr24-probe] crawler lives=" + p1Life + "/" + p2Life
+                + "/" + p3Life + "/" + p4Life);
+        Assert.assertEquals(p1Life, 40, "controller untouched");
+        Assert.assertEquals(p2Life, 39, "draw must drain p2");
+        Assert.assertEquals(p3Life, 39, "draw must drain p3");
+        Assert.assertEquals(p4Life, 39, "draw must drain p4");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Kaervek: opponent spell burns any target for its mana value.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testKaervekBurnsManaValue() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-kaervek", 4);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Kaervek the Merciless",
+                ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Forest", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Plains", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Hand);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        boolean p2Main = false;
+        for (int i = 0; i < 60 && !p2Main; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            String turnPlayer = "?";
+            try {
+                turnPlayer = session.playerIdOf(
+                        session.getGame().getPhaseHandler().getPlayerTurn());
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+            if (turnPlayer.equals("p2") && BridgeTestSupport.isMainPhase(session)
+                    && frameMatches(frame, "p2", DecisionFrame.Kind.PRIORITY)) {
+                p2Main = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(p2Main, "never reached p2 main phase");
+        castFromHand(session, "p2", "Grizzly Bears");
+        boolean burned = false;
+        for (int i = 0; i < 40 && !burned; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.TARGET_SELECTION)) {
+                logOptions("kaervek-target", frame);
+                DecisionFrame.Option victim = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null && o.label.contains("p2")) {
+                        victim = o;
+                        break;
+                    }
+                }
+                Assert.assertNotNull(victim, "p2 must be targetable");
+                submit(session, frame, victim);
+                burned = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(burned, "Kaervek trigger target must be chosen");
+        drainToResolution(session);
+        final int p2Life = constructed.game.getPlayers().get(1).getLife();
+        System.err.println("[wsr24-probe] kaervek p2 life=" + p2Life);
+        Assert.assertEquals(p2Life, 38, "MV-2 spell must burn p2 for 2");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Warstorm Surge: entering creature hits any target for its power.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testWarstormSurgeHitsForPower() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-surge", 4);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Warstorm Surge",
+                ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Hand);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        castFromHand(session, "p1", "Memnite");
+        boolean shot = false;
+        for (int i = 0; i < 40 && !shot; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.TARGET_SELECTION)) {
+                logOptions("surge-target", frame);
+                DecisionFrame.Option victim = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null && o.label.contains("p2")) {
+                        victim = o;
+                        break;
+                    }
+                }
+                Assert.assertNotNull(victim, "p2 must be targetable");
+                submit(session, frame, victim);
+                shot = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(shot, "Surge trigger target must be chosen");
+        drainToResolution(session);
+        final int p2Life = constructed.game.getPlayers().get(1).getLife();
+        System.err.println("[wsr24-probe] surge p2 life=" + p2Life);
+        Assert.assertEquals(p2Life, 39, "1-power entry must hit p2 for 1");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Burn Down the House, Devils mode: three hasty tokens.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testBurnDownTheHouseDevils() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-burn", 4);
+        final BridgeSession session = constructed.session;
+        for (int i = 0; i < 5; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Mountain", ZoneType.Battlefield);
+        }
+        BridgeTestSupport.addCard(constructed.game, 0, "Burn Down the House",
+                ZoneType.Hand);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        castFromHand(session, "p1", "Burn Down the House");
+        boolean moded = false;
+        for (int i = 0; i < 30 && !moded; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.MODE_SELECTION)) {
+                logOptions("burn-mode", frame);
+                DecisionFrame.Option devils = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null
+                            && o.label.toLowerCase(java.util.Locale.ROOT)
+                                    .contains("devil")) {
+                        devils = o;
+                        break;
+                    }
+                }
+                Assert.assertNotNull(devils, "Devils mode must be offered");
+                submit(session, frame, devils);
+                moded = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(moded, "modal choice must park");
+        drainToResolution(session);
+        int devils = 0;
+        for (Card c : constructed.game.getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if (c.getName() != null
+                    && c.getName().toLowerCase(java.util.Locale.ROOT)
+                            .contains("devil")) {
+                devils++;
+            }
+        }
+        System.err.println("[wsr24-probe] devils=" + devils);
+        Assert.assertEquals(devils, 3, "Devils mode must create three tokens");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
+    // Butcher of Malakir: own death forces every opponent to sacrifice.
+    // ------------------------------------------------------------------
+
+    @Test(timeOut = 300000)
+    public void testButcherForcesSacrifice() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-butcher", 4);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Butcher of Malakir",
+                ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Mountain", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Lightning Bolt", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 2, "Ornithopter", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 3, "Phyrexian Walker",
+                ZoneType.Battlefield);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        boolean p2Main = false;
+        for (int i = 0; i < 60 && !p2Main; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            String turnPlayer = "?";
+            try {
+                turnPlayer = session.playerIdOf(
+                        session.getGame().getPhaseHandler().getPlayerTurn());
+            } catch (Throwable t) {
+                throw new AssertionError(t);
+            }
+            if (turnPlayer.equals("p2") && BridgeTestSupport.isMainPhase(session)
+                    && frameMatches(frame, "p2", DecisionFrame.Kind.PRIORITY)) {
+                p2Main = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(p2Main, "never reached p2 main phase");
+        castFromHand(session, "p2", "Lightning Bolt");
+        // Bolt targets p1's Memnite (unique name on the board).
+        boolean bolted = false;
+        for (int i = 0; i < 30 && !bolted; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p2", DecisionFrame.Kind.TARGET_SELECTION)) {
+                logOptions("butcher-bolt", frame);
+                DecisionFrame.Option victim = null;
+                for (DecisionFrame.Option o : frame.options) {
+                    if (o.label != null && o.label.contains("Memnite")) {
+                        victim = o;
+                        break;
+                    }
+                }
+                Assert.assertNotNull(victim, "p1 Memnite must be targetable");
+                submit(session, frame, victim);
+                bolted = true;
+                break;
+            }
+            answerCommon(session, frame);
+        }
+        Assert.assertTrue(bolted, "Bolt target must be chosen");
+        drainToResolution(session);
+        final Set<String> p3Yard = new HashSet<>();
+        for (Card c : constructed.game.getPlayers().get(2)
+                .getZone(ZoneType.Graveyard).getCards()) {
+            p3Yard.add(c.getName());
+        }
+        final Set<String> p4Yard = new HashSet<>();
+        for (Card c : constructed.game.getPlayers().get(3)
+                .getZone(ZoneType.Graveyard).getCards()) {
+            p4Yard.add(c.getName());
+        }
+        boolean p1MemniteYard = false;
+        for (Card c : constructed.game.getPlayers().get(0)
+                .getZone(ZoneType.Graveyard).getCards()) {
+            if ("Memnite".equals(c.getName())) {
+                p1MemniteYard = true;
+            }
+        }
+        System.err.println("[wsr24-probe] butcher p3yard=" + p3Yard + " p4yard=" + p4Yard
+                + " p1memniteYard=" + p1MemniteYard);
+        Assert.assertTrue(p1MemniteYard, "Bolt must kill p1 Memnite");
+        Assert.assertTrue(p3Yard.contains("Ornithopter"), "p3 must sacrifice Ornithopter");
+        Assert.assertTrue(p4Yard.contains("Phyrexian Walker"), "p4 must sacrifice Walker");
+        session.shutdown(5000);
+    }
+
+    // ------------------------------------------------------------------
     // Makeshift Mannequin: reanimate with counter.
     // ------------------------------------------------------------------
     @Test(timeOut = 300000)
