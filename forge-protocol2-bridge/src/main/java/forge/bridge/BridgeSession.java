@@ -135,6 +135,20 @@ public final class BridgeSession {
     private volatile Long seedBinding;
     private volatile ScenarioBootstrap.Plan scenarioPlan;
 
+    /** WSR30 test-only fault injection for the creation-time seed install. */
+    static volatile String seedInstallFaultForTests;
+
+    /** WSR30: engine-readback of an accepted seed binding (never a request echo). */
+    public static final class SeedAcknowledgement {
+        public final long acceptedSeed;
+        public final boolean explicit;
+
+        SeedAcknowledgement(long acceptedSeed, boolean explicit) {
+            this.acceptedSeed = acceptedSeed;
+            this.explicit = explicit;
+        }
+    }
+
     private final AtomicLong frameSeq = new AtomicLong(0);
     private final AtomicLong auditSeq = new AtomicLong(0);
     private volatile DecisionFrame currentFrame;
@@ -168,6 +182,47 @@ public final class BridgeSession {
 
     public synchronized void setSeedBinding(Long seed) {
         this.seedBinding = seed;
+    }
+
+    /**
+     * WSR30: install the requested seed into the engine at creation and read the
+     * engine's own accepted state back.
+     *
+     * <p>The acknowledgement a create response carries is derived from
+     * {@code MyRandom.getRootSeed()/isExplicitSeed()}, never from the request
+     * value: a field populated only from what the caller sent proves what was
+     * asked, not what the Rules Core accepted. A readback that is not explicit,
+     * null, or different from the requested seed fails closed by throwing, so
+     * the create transaction cannot report a binding the engine did not take.
+     *
+     * <p>The authoritative pre-shuffle install for the running game still happens
+     * in {@link #launch()}; this creation-time install exists so the creation
+     * transaction can be acknowledged, and it is why {@link #launch()} clears a
+     * stale explicit binding for unseeded sessions.
+     */
+    public synchronized SeedAcknowledgement installSeedBindingForCreation() {
+        final Long requested = seedBinding;
+        if (requested == null) {
+            return null;
+        }
+        if ("reject".equals(seedInstallFaultForTests)) {
+            throw new IllegalStateException("injected seed rejection");
+        }
+        final long installed = "mismatch".equals(seedInstallFaultForTests)
+                ? requested.longValue() + 1
+                : requested.longValue();
+        try {
+            forge.util.MyRandom.bindSeed(installed);
+        } catch (Throwable t) {
+            throw new IllegalStateException("seed install failed", t);
+        }
+        final Long accepted = forge.util.MyRandom.getRootSeed();
+        final boolean explicit = forge.util.MyRandom.isExplicitSeed();
+        if (!explicit || accepted == null || accepted.longValue() != requested.longValue()) {
+            throw new IllegalStateException("engine did not accept the requested seed");
+        }
+        audit("seed_accepted_at_creation", detail("seed", accepted.toString()));
+        return new SeedAcknowledgement(accepted.longValue(), true);
     }
 
     /** WS202: validated scenario plan for native hook placement (null when none). */
@@ -301,6 +356,14 @@ public final class BridgeSession {
                 throw new IllegalStateException("seed install failed");
             }
             audit("seed_bound", detail("seed", capturedSeed.toString()));
+        } else {
+            // WSR30: an unseeded session must not run under a stale explicit
+            // binding left by an earlier creation. Without this, an abandoned
+            // seeded create would make a later "unseeded" game secretly
+            // seeded while its evidence still claimed UNCONTROLLED_ENGINE_RNG.
+            // Clearing makes that classification true rather than merely
+            // recorded. Seeded execution stays single-flight by contract.
+            forge.util.MyRandom.clearBinding();
         }
         if (capturedPlan == null) {
             launchStarter(() -> capturedMatch.startGame(capturedGame));

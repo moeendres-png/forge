@@ -539,12 +539,35 @@ public final class BridgeEngine {
                     "engine rejected game creation", 0);
         }
         session.attach(match, game);
+        // WSR30: the creation transaction installs the requested seed into the
+        // engine and acknowledges from the engine's own accepted state. A field
+        // populated only from the request would prove what the caller sent, not
+        // what the Rules Core accepted, so a failed or divergent readback fails
+        // closed here and the session is not registered.
+        final BridgeSession.SeedAcknowledgement seedAcknowledgement;
+        if (seedBinding != null) {
+            try {
+                seedAcknowledgement = session.installSeedBindingForCreation();
+            } catch (Throwable e) {
+                logInternal("engine did not accept the requested seed", e);
+                return BridgeProtocol.error(request.requestId, BridgeErrors.SEED_UNSUPPORTED,
+                        "engine did not accept the requested seed", (int) session.auditSize());
+            }
+        } else {
+            seedAcknowledgement = null;
+        }
         sessions.put(gameId, session);
         session.audit("game_created", creationDetails(gameId, handles));
         final JsonObject payload = new JsonObject();
         payload.addProperty("game_id", gameId);
         payload.addProperty("player_count", handles.size());
         payload.addProperty("status", "created");
+        if (seedAcknowledgement != null) {
+            final JsonObject rng = new JsonObject();
+            rng.addProperty("explicit_seed", seedAcknowledgement.explicit);
+            rng.addProperty("rules_seed", seedAcknowledgement.acceptedSeed);
+            payload.add("rng", rng);
+        }
         final JsonArray seats = new JsonArray();
         for (int i = 0; i < handles.size(); i++) {
             final JsonObject seat = new JsonObject();

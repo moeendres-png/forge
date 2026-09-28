@@ -83,6 +83,16 @@ public final class StateProjection {
         }
         final JsonObject state = new JsonObject();
         state.addProperty("game_id", session.getGameId());
+        // WSR30 requester binding: the response names the principal it was
+        // projected FOR, so a consumer can bind an observation to the requester
+        // instead of inferring it from which seat happens to hold visible cards.
+        // Null is the public (observer-less) view. The value is the validated
+        // request principal, i.e. a seat token like "p1", never a private name.
+        if (observerPlayerId == null) {
+            state.add("observer_player_id", JsonNull.INSTANCE);
+        } else {
+            state.addProperty("observer_player_id", observerPlayerId);
+        }
         final Long seedBinding = session.getSeedBinding();
         if (seedBinding == null) {
             state.add("seed", JsonNull.INSTANCE);
@@ -379,6 +389,14 @@ public final class StateProjection {
         final JsonObject state = new JsonObject();
         state.addProperty("player_id", session.playerIdOf(player));
         state.addProperty("seat", session.seatOf(player));
+        // WSR30 requester binding: mark the principal this observation is scoped
+        // to. Derived from the validated observer request context, never from
+        // which seat happens to hold visible cards, and never reconstructed from
+        // redaction output. In a principal observation "actor" is the observing
+        // principal; the decision frame's actor is a separate concept reported
+        // under `decision`. Exactly one player is marked when the caller named a
+        // valid observer; none are marked for the public view.
+        state.addProperty("is_actor", observer != null && observer.equals(player));
         final int life = require("life:" + state.get("player_id").getAsString(), () -> player.getLife());
         final int poison = require("poison:" + state.get("player_id").getAsString(),
                 () -> Math.max(0, player.getPoisonCounters()));
