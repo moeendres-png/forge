@@ -235,6 +235,11 @@ public class WsR24Pb05BuildIdentityTest {
 
     private static Path shadowProps(String engineCommit, String gitCommit, String gitDirty)
             throws Exception {
+        return shadowProps(engineCommit, gitCommit, null, gitDirty);
+    }
+
+    private static Path shadowProps(String engineCommit, String gitCommit, String gitTree,
+                                    String gitDirty) throws Exception {
         final Path shadow = Files.createTempDirectory("pb05-shadow");
         final StringBuilder body = new StringBuilder("bridge.artifact=forge-protocol2-bridge\n"
                 + "bridge.version=test\n");
@@ -243,6 +248,9 @@ public class WsR24Pb05BuildIdentityTest {
         }
         if (gitCommit != null) {
             body.append("engine.git_commit=").append(gitCommit).append('\n');
+        }
+        if (gitTree != null) {
+            body.append("engine.git_tree=").append(gitTree).append('\n');
         }
         if (gitDirty != null) {
             body.append("engine.git_dirty=").append(gitDirty).append('\n');
@@ -301,6 +309,70 @@ public class WsR24Pb05BuildIdentityTest {
                     + "\"start_engine\"}");
             Assert.assertFalse(started.get("success").getAsBoolean(),
                     "missing identity must fail closed where required");
+        } finally {
+            child.close();
+        }
+    }
+
+    @Test(timeOut = 600000)
+    public void testMissingBuildTreeNeverVerifies() throws Exception {
+        final String sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        final Path shadow = shadowProps(sha, sha, null, "false");
+        final Child child = new Child(shadow);
+        try {
+            final JsonObject version = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"pb05-missing-tree\",\"message_type\":"
+                    + "\"get_provider_version\"}");
+            Assert.assertTrue(version.get("success").getAsBoolean());
+            final JsonObject payload = version.get("payload").getAsJsonObject();
+            Assert.assertEquals(payload.get("engine_build_commit").getAsString(), sha);
+            Assert.assertEquals(payload.get("engine_build_tree").getAsString(), "unknown");
+            Assert.assertEquals(payload.get("engine_build_source").getAsString(), "unavailable");
+            Assert.assertFalse(payload.get("engine_commit_verified").getAsBoolean(),
+                    "commit+clean without a valid build tree must never verify");
+        } finally {
+            child.close();
+        }
+    }
+
+    @Test(timeOut = 600000)
+    public void testMalformedBuildTreeNeverVerifies() throws Exception {
+        final String sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        final Path shadow = shadowProps(sha, sha, "not-a-tree", "false");
+        final Child child = new Child(shadow);
+        try {
+            final JsonObject version = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"pb05-malformed-tree\",\"message_type\":"
+                    + "\"get_provider_version\"}");
+            Assert.assertTrue(version.get("success").getAsBoolean());
+            final JsonObject payload = version.get("payload").getAsJsonObject();
+            Assert.assertEquals(payload.get("engine_build_tree").getAsString(), "unknown");
+            Assert.assertFalse(payload.get("engine_commit_verified").getAsBoolean(),
+                    "malformed build tree must fail closed");
+        } finally {
+            child.close();
+        }
+    }
+
+    @Test(timeOut = 600000)
+    public void testCompleteCleanCommitAndTreeCanVerify() throws Exception {
+        final String sha = "cccccccccccccccccccccccccccccccccccccccc";
+        final String tree = "dddddddddddddddddddddddddddddddddddddddd";
+        final Path shadow = shadowProps(sha, sha, tree, "false");
+        final Child child = new Child(shadow);
+        try {
+            final JsonObject version = child.request("{\"protocol_version\":\"2.0.0\","
+                    + "\"request_id\":\"pb05-complete\",\"message_type\":"
+                    + "\"get_provider_version\"}");
+            Assert.assertTrue(version.get("success").getAsBoolean());
+            final JsonObject payload = version.get("payload").getAsJsonObject();
+            Assert.assertEquals(payload.get("engine_build_commit").getAsString(), sha);
+            Assert.assertEquals(payload.get("engine_build_tree").getAsString(), tree);
+            Assert.assertEquals(payload.get("engine_build_dirty").getAsString(), "false");
+            Assert.assertEquals(payload.get("engine_build_source").getAsString(),
+                    "build:bridge.properties:git");
+            Assert.assertTrue(payload.get("engine_commit_verified").getAsBoolean(),
+                    "complete clean commit+tree provenance may verify");
         } finally {
             child.close();
         }
