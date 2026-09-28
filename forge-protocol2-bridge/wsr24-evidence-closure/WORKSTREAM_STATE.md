@@ -51,11 +51,12 @@ Date: 2026-09-27
   enumerates current-state abilities only; the RightSplit aftermath SA is never
   added, so the bridge has nothing to offer. Engine Rules authority: documented
   for a dedicated engine workstream, not invented here.
-- PB07 register: 20 runtime-qualified / 8 runtime-touched / 0 construction-only
-  / 1 documented engine gap (maximum Forge-local; global closure NOT claimed).
-- Full bridge suite 271/271 green (JDK 21) after all changes; touched surfaces
+- PB07 register: 28 runtime-qualified / 0 touched / 0 construction-only
+  / 1 documented engine gap (aftermath back face; Forge-local maximum,
+  global closure NOT claimed).
+- Full bridge suite 278/278 green (JDK 21) after all changes; touched surfaces
   43/43 green on JDK 17; project checkstyle validation green.
-- Branch HEAD `e38a74a4126` == remote; PR #4 open (CI Java lanes queued at
+- Branch HEAD `76276a80175` == remote; PR #4 open (CI Java lanes queued at
   handoff, link audit green); no master merge (governance boundary).
 
 ## PB-06 layer-trace status
