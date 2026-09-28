@@ -108,7 +108,10 @@ public final class VersionInfo {
 
     /** Where the build identity came from, for payload transparency. */
     public static String buildGitSource() {
-        return buildGitCommit() == null ? "unavailable" : "build:bridge.properties:git";
+        return buildGitCommit() == null
+                        || buildGitTree() == null
+                        || "unknown".equals(buildGitDirty())
+                ? "unavailable" : "build:bridge.properties:git";
     }
 
     /**
@@ -118,6 +121,9 @@ public final class VersionInfo {
     public static String buildGitTree() {
         final String value = buildProperty("engine.git_tree", null);
         if (value == null || !value.matches("[0-9a-f]{40}")) {
+            return null;
+        }
+        if (value.matches("0{40}")) {
             return null;
         }
         return value;
@@ -134,7 +140,8 @@ public final class VersionInfo {
     public static boolean claimMatchesBuild() {
         final String claim = engineCommitIfValid();
         final String built = buildGitCommit();
-        if (claim == null || built == null) {
+        final String tree = buildGitTree();
+        if (claim == null || built == null || tree == null) {
             return false;
         }
         if (!claim.equals(built)) {
