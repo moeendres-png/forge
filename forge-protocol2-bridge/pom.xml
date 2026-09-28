@@ -116,17 +116,25 @@
                                 </exec>
                                 <condition property="git.commit.id.full"
                                         value="${git.head.raw}">
-                                    <matches pattern="^[0-9a-f]{40}\s*$"
-                                            string="${git.head.raw}"/>
+                                    <and>
+                                        <equals arg1="${git.head.exit}" arg2="0"/>
+                                        <matches pattern="^[0-9a-f]{40}\s*$"
+                                                string="${git.head.raw}"/>
+                                    </and>
                                 </condition>
                                 <condition property="git.tree.full"
                                         value="${git.tree.raw}">
-                                    <matches pattern="^[0-9a-f]{40}\s*$"
-                                            string="${git.tree.raw}"/>
+                                    <and>
+                                        <equals arg1="${git.tree.exit}" arg2="0"/>
+                                        <matches pattern="^[0-9a-f]{40}\s*$"
+                                                string="${git.tree.raw}"/>
+                                    </and>
                                 </condition>
                                 <condition property="git.dirty" value="true">
                                     <and>
+                                        <equals arg1="${git.status.exit}" arg2="0"/>
                                         <isset property="git.commit.id.full"/>
+                                        <isset property="git.tree.full"/>
                                         <isset property="git.status.raw"/>
                                         <not>
                                             <equals arg1="${git.status.raw}" arg2=""/>
@@ -135,10 +143,11 @@
                                 </condition>
                                 <condition property="git.dirty" value="false">
                                     <and>
+                                        <equals arg1="${git.status.exit}" arg2="0"/>
                                         <isset property="git.commit.id.full"/>
-                                        <not>
-                                            <isset property="git.dirty"/>
-                                        </not>
+                                        <isset property="git.tree.full"/>
+                                        <isset property="git.status.raw"/>
+                                        <equals arg1="${git.status.raw}" arg2=""/>
                                     </and>
                                 </condition>
                             </target>
