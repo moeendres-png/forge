@@ -602,6 +602,10 @@ public class WsR24Pb07MechanicProbesTest {
         BridgeTestSupport.addCard(constructed.game, 0, "Find // Finality", ZoneType.Hand);
         BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Graveyard);
         BridgeTestSupport.addCard(constructed.game, 0, "Ornithopter", ZoneType.Graveyard);
+        // Finality behaviour discriminator: P1's 4/4 survives after two
+        // +1/+1 counters then -4/-4; P2's unboosted 2/2 dies.
+        BridgeTestSupport.addCard(constructed.game, 0, "Serra Angel", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Battlefield);
         fillLibraries(constructed, 5);
         BridgeTestSupport.launchConstructed(constructed);
         BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
@@ -641,68 +645,63 @@ public class WsR24Pb07MechanicProbesTest {
         System.err.println("[wsr24-probe] creatures returned: " + handCreatures);
         Assert.assertTrue(handCreatures >= 1, "Find must return at least one creature");
 
-        // Aftermath survey: is Finality offered from the graveyard?
-        boolean aftermathSeen = false;
-        for (int i = 0; i < 10; i++) {
+        // Aftermath: Finality must now be engine-enumerated from the graveyard,
+        // offered as a real cast, paid through the normal mana pipeline, and
+        // resolved with its actual asymmetric creature effect.
+        DecisionFrame.Option finality = null;
+        DecisionFrame finalityFrame = null;
+        for (int i = 0; i < 20 && finality == null; i++) {
             final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
             Assert.assertNotNull(frame);
             if (frameMatches(frame, "p1", DecisionFrame.Kind.PRIORITY)) {
                 for (DecisionFrame.Option o : frame.options) {
-                    if (o.sourceCardName != null
+                    if ("cast_spell".equals(o.actionType)
+                            && o.sourceCardName != null
                             && o.sourceCardName.contains("Finality")) {
-                        aftermathSeen = true;
+                        finality = o;
+                        finalityFrame = frame;
+                        break;
                     }
                 }
-                logOptions("aftermath-survey", frame);
-                break;
+                if (finality != null) {
+                    break;
+                }
             }
             answerCommon(session, frame);
         }
-        System.err.println("[wsr24-probe] aftermath offered: " + aftermathSeen);
-        // Pinned boundary characterization (not a bridge filter defect): the
-        // engine's grant index contains the aftermath card, but its ability
-        // enumeration yields zero abilities, so the bridge has nothing to
-        // offer and correctly offers nothing instead of inventing Rules.
-        // Aftermath-half enumeration needs dedicated engine work (out of
-        // scope: no defect, no privacy impact, no card-name hack applies).
-        boolean inGrantIndex = false;
-        int abilityCount = -1;
-        try {
-            final forge.game.player.Player p1 =
-                    constructed.game.getPlayers().get(0);
-            for (Card c : p1.getCardsActivatableInExternalZones(true)) {
-                if (c != null && c.getName() != null
-                        && c.getName().contains("Finality")) {
-                    inGrantIndex = true;
-                    System.err.println("[wsr24-probe] grant card=" + c.getName()
-                            + " zone=" + c.getZone().getZoneType()
-                            + " split=" + c.isSplitCard());
-                    final java.util.List<forge.game.spellability.SpellAbility> abilities =
-                            c.getAllPossibleAbilities(p1, true);
-                    abilityCount = abilities.size();
-                    System.err.println("[wsr24-probe] abilities=" + abilities.size());
-                    for (forge.game.spellability.SpellAbility sa : abilities) {
-                        String blocker = null;
-                        try {
-                            blocker = ExternalPlayerController.classifyComplex(sa);
-                        } catch (Throwable t) {
-                            blocker = "classifier-threw:" + t;
-                        }
-                        System.err.println("[wsr24-probe] ability spell=" + sa.isSpell()
-                                + " announce=" + sa.hasParam("AnnounceType")
-                                + " optional=" + forge.game.GameActionUtil
-                                        .getOptionalCostValues(sa)
-                                + " blocker=" + blocker);
-                    }
-                }
+        Assert.assertNotNull(finality, "Finality aftermath cast must be engine-offered");
+        Assert.assertNotNull(finalityFrame);
+        submit(session, finalityFrame, finality);
+        settleMana(session);
+        drainToResolution(session);
+
+        boolean serraSurvives = false;
+        for (Card card : constructed.game.getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if ("Serra Angel".equals(card.getName())) {
+                serraSurvives = true;
             }
-        } catch (Throwable t) {
-            System.err.println("[wsr24-probe] grant index unreadable: " + t);
         }
-        Assert.assertFalse(aftermathSeen, "aftermath stays unoffered on this boundary");
-        Assert.assertTrue(inGrantIndex, "engine grant index must surface the card");
-        Assert.assertEquals(abilityCount, 0,
-                "engine enumerates zero aftermath abilities: ENGINE_GAP, not a bridge filter");
+        boolean opponentBearSurvives = false;
+        for (Card card : constructed.game.getPlayers().get(1)
+                .getCardsIn(ZoneType.Battlefield)) {
+            if ("Grizzly Bears".equals(card.getName())) {
+                opponentBearSurvives = true;
+            }
+        }
+        boolean aftermathExiled = false;
+        for (Card card : constructed.game.getPlayers().get(0)
+                .getZone(ZoneType.Exile).getCards()) {
+            if (card.getName() != null && card.getName().contains("Finality")) {
+                aftermathExiled = true;
+            }
+        }
+        Assert.assertTrue(serraSurvives,
+                "own 4/4 must survive Finality after +2/+2 counters and -4/-4");
+        Assert.assertFalse(opponentBearSurvives,
+                "opponent 2/2 must die to Finality's -4/-4");
+        Assert.assertTrue(aftermathExiled,
+                "an aftermath spell cast from the graveyard must be exiled on resolution");
         session.shutdown(5000);
     }
 
