@@ -260,7 +260,10 @@ public final class BridgeEngine {
         notes.add("WS202 executable surface: pre-floated pool mana payment with framed "
                 + "ambiguity, single-target selection, X/number, modes, trigger/replacement/"
                 + "static ordering, copy/entity/spell/zone/color selections, alternate costs, "
-                + "commander-move confirms and priority concession; multi-target/divided, combat, "
+                + "commander-move confirms, priority concession, and complete attack/block "
+                + "declarations (each whole declaration validated by CombatUtil.validateAttackers/"
+                + "validateBlocks, including multi-block; more than four candidate attackers or "
+                + "blockers fail closed); multi-target/divided, "
                 + "sacrifice/discard/exile costs and choice-mana outputs still fail closed; global "
                 + "legal_actions_supported and action_submission_supported stay false until the "
                 + "full decision surface qualifies");
