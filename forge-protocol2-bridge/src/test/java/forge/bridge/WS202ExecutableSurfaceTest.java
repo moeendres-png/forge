@@ -1748,21 +1748,6 @@ public class WS202ExecutableSurfaceTest {
         Assert.assertEquals(ordered.options.size(), 120,
                 "all 120 permutations must be offered completely");
         Assert.assertEquals(ordered.actorPlayerId, "p1");
-        // Six DISTINCT cards (720 permutations) exceed the completeness bound:
-        // fail closed synchronously, nothing parked. Must run while the session
-        // is live and use distinct objects (a duplicated reference would dedupe
-        // to five and park instead of throwing).
-        BridgeTestSupport.addCard(framing.game, 0, "Memnite", ZoneType.Battlefield);
-        final List<Card> sixCards = new ArrayList<>(framing.game.getPlayers().get(0)
-                .getCardsIn(ZoneType.Battlefield));
-        Assert.assertEquals(sixCards.size(), 6);
-        final forge.game.card.CardCollection sixView = new forge.game.card.CardCollection(sixCards);
-        try {
-            framingController.orderMoveToZoneList(sixView, ZoneType.Library, null);
-            throw new AssertionError("six-card library ordering must fail closed");
-        } catch (BridgeUnsupportedDecision expected) {
-            Assert.assertTrue(expected.getMessage().contains("orderMoveToZoneList"));
-        }
         framing.session.shutdown(5000);
         try {
             parker.join(15000);
@@ -1770,6 +1755,56 @@ public class WS202ExecutableSurfaceTest {
             Thread.currentThread().interrupt();
         }
         Assert.assertFalse(parker.isAlive(), "parker must be released by shutdown");
+        // Six DISTINCT cards (720 permutations) exceed the complete-permutation
+        // bound: the order is chosen one position at a time instead, so the
+        // first frame lists every card for position 1 (never a truncated set).
+        final BridgeTestSupport.ConstructedGame framing6 =
+                BridgeTestSupport.buildConstructedGame("ws202-order-bounds-six");
+        for (int i = 0; i < 6; i++) {
+            BridgeTestSupport.addCard(framing6.game, 0, "Memnite", ZoneType.Battlefield);
+        }
+        final ExternalPlayerController framing6Controller =
+                (ExternalPlayerController) framing6.game.getPlayers().get(0).getController();
+        final forge.game.card.CardCollection sixView = new forge.game.card.CardCollection(
+                framing6.game.getPlayers().get(0).getCardsIn(ZoneType.Battlefield));
+        Assert.assertEquals(sixView.size(), 6);
+        final Thread parker6 = new Thread(() -> {
+            try {
+                framing6Controller.orderMoveToZoneList(sixView, ZoneType.Library, null);
+            } catch (Throwable ignored) {
+                // Aborted via shutdown below.
+            }
+        });
+        parker6.setDaemon(true);
+        parker6.start();
+        DecisionFrame first = null;
+        final long sixDeadline = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < sixDeadline && first == null) {
+            final DecisionFrame cur = framing6.session.getCurrentFrame();
+            if (cur != null && cur.kind == DecisionFrame.Kind.ORDER_CHOICE
+                    && cur.status == DecisionFrame.Status.SUPPORTED) {
+                first = cur;
+            } else {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        Assert.assertNotNull(first, "six-card ordering must park its first position");
+        Assert.assertEquals(first.options.size(), 6, "every card offered for position 1");
+        for (DecisionFrame.Option option : first.options) {
+            Assert.assertEquals(option.actionType, "order_zone_next");
+        }
+        framing6.session.shutdown(5000);
+        try {
+            parker6.join(15000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        Assert.assertFalse(parker6.isAlive(), "six-card parker released by shutdown");
         // Singleton: no discretion, input returned.
         final forge.game.card.CardCollection one =
                 new forge.game.card.CardCollection(five.subList(0, 1));
@@ -2213,6 +2248,11 @@ public class WS202ExecutableSurfaceTest {
                 session.playerById("p1").getController();
         Assert.assertTrue(raw instanceof ExternalPlayerController);
         final ExternalPlayerController controller = (ExternalPlayerController) raw;
+        // Let the live game park its own first decision before the direct
+        // call: the session shows only the latest park, so a game frame
+        // parked after the combo frame would hide it (a start-up race).
+        final DecisionFrame settled = BridgeTestSupport.awaitFrame(session, 30000);
+        Assert.assertNotNull(settled, "live game never parked its first decision");
         // The blocking controller call runs on a worker thread while the test
         // thread plays pilot: identical actor/revision/option discipline as
         // engine-driven parks.
@@ -2231,11 +2271,7 @@ public class WS202ExecutableSurfaceTest {
         worker.setDaemon(true);
         worker.start();
         DecisionFrame comboFrame = null;
-        long seenRevision = -1;
-        final DecisionFrame parked0 = session.getCurrentFrame();
-        if (parked0 != null) {
-            seenRevision = parked0.revision;
-        }
+        long seenRevision = settled.revision;
         for (int i = 0; i < 40 && comboFrame == null; i++) {
             final DecisionFrame parked = awaitNext(session, seenRevision, 15000);
             Assert.assertNotNull(parked);

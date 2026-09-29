@@ -62,8 +62,9 @@ import java.util.List;
  *
  * <p>Choice-free resolutions (self tap/untap, computed add-mana amounts) are
  * answered directly, mirroring the Human shape. Discretionary cost selections
- * with a native controller surface — sacrifice, discard, exile and pay-life
- * costs plus the generic exact-count card selection — are parked as
+ * with a native controller surface — sacrifice, discard, exile, pay-life,
+ * pay-energy, return-to-hand, reveal, exert and mill costs plus the generic
+ * exact-count card selection — are parked as
  * authoritative COST_SELECTION frames through the payer's external controller;
  * pilot decline (where the cost is optional) or incompletely offerable sets
  * return null so the engine rolls the ability back with no state change. Every
@@ -290,11 +291,35 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostDamage cost) {
+        // Mirrors HumanCostDecision: "CARDNAME deals N damage to you" on consent.
+        // An "unless" payment the pilot already chose is not asked twice.
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        final int c = cost.getAbilityAmount(ability);
+        if (controller.paysPreventionCostFor(ability) || controller.frameCostConfirm(
+                "cost_damage", "Have " + source.getName() + " deal " + c + " damage to you")) {
+            return PaymentDecision.number(c);
+        }
         return null;
     }
 
     @Override
     public PaymentDecision visit(CostDraw cost) {
+        // Mirrors HumanCostDecision: the drawing players are fixed by the cost.
+        final ExternalPlayerController controller = controller();
+        if (controller == null || !cost.canPay(ability, player, isEffect())) {
+            return null;
+        }
+        final int c = cost.getAbilityAmount(ability);
+        if (controller.paysPreventionCostFor(ability)
+                || controller.frameCostConfirm("cost_draw", "Draw " + c + " card(s)")) {
+            final PaymentDecision decision =
+                    PaymentDecision.players(cost.getPotentialPlayers(player, ability));
+            decision.c = c;
+            return decision;
+        }
         return null;
     }
 
@@ -385,7 +410,31 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostExert cost) {
-        return null;
+        // Mirrors HumanCostDecision: exerting is always cancellable.
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        if (cost.payCostFromSource()) {
+            if (source.getController() == ability.getActivatingPlayer() && source.isInPlay()
+                    && controller.frameCostConfirm("cost_exert", "Exert " + source.getName())) {
+                return PaymentDecision.card(source);
+            }
+            return null;
+        }
+        final CardCollectionView list = CardLists.getValidCards(
+                player.getCardsIn(ZoneType.Battlefield), cost.getType().split(";"),
+                player, source, ability);
+        final int c = cost.getAbilityAmount(ability);
+        if (c == 0) {
+            return PaymentDecision.number(0);
+        }
+        if (list.size() < c) {
+            return null;
+        }
+        final CardCollection chosen = controller.frameCostCards("cost_exert",
+                "Exert " + c + " " + cost.getDescriptiveType(), list, c, true);
+        return chosen == null ? null : PaymentDecision.card(chosen);
     }
 
     @Override
@@ -410,6 +459,16 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostMill cost) {
+        // Mirrors HumanCostDecision: top-of-library order is the engine's, so
+        // the only discretion is paying at all.
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        final int c = cost.getAbilityAmount(ability);
+        if (controller.frameCostConfirm("cost_mill", "Mill " + c + " card(s)")) {
+            return PaymentDecision.number(c);
+        }
         return null;
     }
 
@@ -437,6 +496,17 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostPayEnergy cost) {
+        // Mirrors HumanCostDecision: pay only what the player has, on consent.
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        final int c = cost.getAbilityAmount(ability);
+        if (player.canPayEnergy(c) && controller.frameCostConfirm("cost_pay_energy",
+                "Pay " + c + " energy (have "
+                        + player.getCounters(forge.game.card.CounterEnumType.ENERGY) + ")")) {
+            return PaymentDecision.number(c);
+        }
         return null;
     }
 
@@ -540,12 +610,67 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostReturn cost) {
-        return null;
+        // Mirrors HumanCostDecision, including ninjutsu's "return an unblocked
+        // attacker you control" (Return<1/Creature.attacking+unblocked>).
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        if (cost.payCostFromSource()) {
+            final Card card = ability.getHostCard();
+            if (card.getController() == player && card.isInPlay()
+                    && controller.frameCostConfirm("cost_return",
+                            "Return " + card.getName() + " to hand")) {
+                return PaymentDecision.card(card);
+            }
+            return null;
+        }
+        final int c = cost.getAbilityAmount(ability);
+        final CardCollectionView valid = CardLists.getValidCards(
+                ability.getActivatingPlayer().getCardsIn(ZoneType.Battlefield),
+                cost.getType().split(";"), player, source, ability);
+        if (valid.size() < c) {
+            return null;
+        }
+        final CardCollection chosen = controller.frameCostCards("cost_return",
+                "Return " + c + " " + cost.getDescriptiveType() + " to hand", valid, c,
+                !mandatory);
+        return chosen == null ? null : PaymentDecision.card(chosen);
     }
 
     @Override
     public PaymentDecision visit(CostReveal cost) {
-        return null;
+        // Mirrors HumanCostDecision for the source, whole-hand and typed
+        // exact-count shapes. SameColor is not framed (classifier blocks it).
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        if (cost.payCostFromSource()) {
+            return PaymentDecision.card(source);
+        }
+        if (cost.getType().equals("Hand")) {
+            return PaymentDecision.card(player.getCardsIn(ZoneType.Hand));
+        }
+        if (cost.getType().equals("SameColor")) {
+            return null;
+        }
+        final int num = cost.getAbilityAmount(ability);
+        final CardCollectionView valid = CardLists.getValidCards(
+                player.getCardsIn(cost.getRevealFrom()), cost.getType().split(";"),
+                player, source, ability);
+        if (valid.size() < num) {
+            return null;
+        }
+        if (num == 0) {
+            return PaymentDecision.number(0);
+        }
+        if (!ability.isCastFromPlayEffect() && valid.size() == num) {
+            return PaymentDecision.card(valid);
+        }
+        final CardCollection chosen = controller.frameCostCards("cost_reveal",
+                "Reveal " + num + " " + cost.getDescriptiveType(), valid, num, !mandatory);
+        return chosen == null ? null : PaymentDecision.card(chosen);
     }
 
     @Override
@@ -613,9 +738,84 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
         return null;
     }
 
+    /**
+     * Crew and similar "tap any number of untapped creatures with total power N
+     * or greater" (CR 702.122a): mirror Human, which accepts any selection of
+     * valid creatures that can crew whose total power reaches N. Every such
+     * set is one option; cancel is allowed, as Human allows it.
+     */
+    private PaymentDecision tapTotalPower(ExternalPlayerController controller,
+            CostTapType cost, String type) {
+        final String[] split = type.split("\\+withTotalPowerGE");
+        final String base = split[0];
+        final int threshold;
+        try {
+            threshold = Integer.parseInt(split[1].trim());
+        } catch (Exception e) {
+            return null;
+        }
+        CardCollectionView typeList = CardLists.getValidCards(
+                player.getCardsIn(ZoneType.Battlefield), base.split(";"), player, source, ability);
+        typeList = CardLists.filter(typeList,
+                ability.isCrew() ? CardPredicates.CAN_CREW : CardPredicates.CAN_TAP);
+        final java.util.List<Card> candidates = new java.util.ArrayList<>();
+        for (Card card : typeList) {
+            candidates.add(card);
+        }
+        if (candidates.size() > 7) {
+            return null;
+        }
+        final java.util.List<java.util.List<Card>> sets = new java.util.ArrayList<>();
+        for (java.util.List<Card> subset
+                : ExternalPlayerController.allSubsets(candidates, 1, candidates.size())) {
+            if (CardLists.getTotalPower(subset, ability) >= threshold) {
+                sets.add(subset);
+            }
+        }
+        final CardCollection chosen = controller.frameCostCardSets("cost_tap_total_power",
+                "Tap (total power " + threshold + "+)", sets, true);
+        return chosen == null ? null : PaymentDecision.card(chosen);
+    }
+
     @Override
     public PaymentDecision visit(CostTapType cost) {
-        return null;
+        // "Tap N untapped <type> you control" (Springleaf Drum, Opposition,
+        // Glare of Subdual): mirror the Human legal-list computation
+        // (valid battlefield cards of the cost type that can tap), then park an
+        // authoritative COST_SELECTION frame over every exact-size set. Cancel
+        // is allowed exactly when the cost is optional, mirroring Human. The
+        // shared-creature-type, total-power (crew) and "Any" shapes are not
+        // framed yet and stay unpaid (ExternalPlayerController.classifyComplex
+        // keeps them from being offered at all).
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        final String type = cost.getType();
+        if (type.equals("OriginalHost")) {
+            final Card host = ability.getOriginalHost();
+            return host != null && host.canTap() ? PaymentDecision.card(host) : null;
+        }
+        if (ExternalPlayerController.isTotalPowerTapTypeCost(cost)) {
+            return tapTotalPower(controller, cost, type);
+        }
+        if (!ExternalPlayerController.isPlainTapTypeCost(cost)) {
+            return null;
+        }
+        CardCollectionView typeList = CardLists.getValidCards(
+                player.getCardsIn(ZoneType.Battlefield), type.split(";"), player, source, ability);
+        typeList = CardLists.filter(typeList,
+                ability.isCrew() ? CardPredicates.CAN_CREW : CardPredicates.CAN_TAP);
+        final int c = cost.getAbilityAmount(ability);
+        if (c == 0) {
+            return PaymentDecision.number(0);
+        }
+        if (c > typeList.size()) {
+            return null;
+        }
+        final CardCollection chosen = controller.frameCostCards("cost_tap_type",
+                "Tap " + cost.getDescriptiveType(), typeList, c, !mandatory);
+        return chosen == null ? null : PaymentDecision.card(chosen);
     }
 
     @Override
