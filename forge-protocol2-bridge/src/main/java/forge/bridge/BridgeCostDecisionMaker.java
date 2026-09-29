@@ -615,7 +615,40 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostTapType cost) {
-        return null;
+        // "Tap N untapped <type> you control" (Springleaf Drum, Opposition,
+        // Glare of Subdual): mirror the Human legal-list computation
+        // (valid battlefield cards of the cost type that can tap), then park an
+        // authoritative COST_SELECTION frame over every exact-size set. Cancel
+        // is allowed exactly when the cost is optional, mirroring Human. The
+        // shared-creature-type, total-power (crew) and "Any" shapes are not
+        // framed yet and stay unpaid (ExternalPlayerController.classifyComplex
+        // keeps them from being offered at all).
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        final String type = cost.getType();
+        if (type.equals("OriginalHost")) {
+            final Card host = ability.getOriginalHost();
+            return host != null && host.canTap() ? PaymentDecision.card(host) : null;
+        }
+        if (!ExternalPlayerController.isPlainTapTypeCost(cost)) {
+            return null;
+        }
+        CardCollectionView typeList = CardLists.getValidCards(
+                player.getCardsIn(ZoneType.Battlefield), type.split(";"), player, source, ability);
+        typeList = CardLists.filter(typeList,
+                ability.isCrew() ? CardPredicates.CAN_CREW : CardPredicates.CAN_TAP);
+        final int c = cost.getAbilityAmount(ability);
+        if (c == 0) {
+            return PaymentDecision.number(0);
+        }
+        if (c > typeList.size()) {
+            return null;
+        }
+        final CardCollection chosen = controller.frameCostCards("cost_tap_type",
+                "Tap " + cost.getDescriptiveType(), typeList, c, !mandatory);
+        return chosen == null ? null : PaymentDecision.card(chosen);
     }
 
     @Override

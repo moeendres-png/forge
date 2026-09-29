@@ -362,10 +362,28 @@ public final class ExternalPlayerController extends PlayerController {
                 if (part instanceof forge.game.cost.CostRemoveCounter) {
                     continue;
                 }
+                if (part instanceof forge.game.cost.CostTapType
+                        && isPlainTapTypeCost((forge.game.cost.CostTapType) part)) {
+                    continue;
+                }
                 return "COMPLEX_COST:" + part.getClass().getSimpleName();
             }
         }
         return null;
+    }
+
+    /**
+     * The "tap N untapped &lt;type&gt; you control" shape framed by
+     * BridgeCostDecisionMaker: a fixed amount of a plain valid-card type.
+     * Shared-creature-type, total-power (crew) and "Any" amounts are not framed.
+     */
+    static boolean isPlainTapTypeCost(forge.game.cost.CostTapType cost) {
+        final String type = cost.getType();
+        final String amount = cost.getAmount();
+        return type != null && !type.equals("OriginalHost")
+                && !type.contains("sharesCreatureTypeWith")
+                && !type.contains("withTotalPowerGE")
+                && amount != null && !amount.equals("Any");
     }
 
     /**
