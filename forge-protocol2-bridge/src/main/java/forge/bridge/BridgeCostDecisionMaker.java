@@ -613,6 +613,45 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
         return null;
     }
 
+    /**
+     * Crew and similar "tap any number of untapped creatures with total power N
+     * or greater" (CR 702.122a): mirror Human, which accepts any selection of
+     * valid creatures that can crew whose total power reaches N. Every such
+     * set is one option; cancel is allowed, as Human allows it.
+     */
+    private PaymentDecision tapTotalPower(ExternalPlayerController controller,
+            CostTapType cost, String type) {
+        final String[] split = type.split("\\+withTotalPowerGE");
+        final String base = split[0];
+        final int threshold;
+        try {
+            threshold = Integer.parseInt(split[1].trim());
+        } catch (Exception e) {
+            return null;
+        }
+        CardCollectionView typeList = CardLists.getValidCards(
+                player.getCardsIn(ZoneType.Battlefield), base.split(";"), player, source, ability);
+        typeList = CardLists.filter(typeList,
+                ability.isCrew() ? CardPredicates.CAN_CREW : CardPredicates.CAN_TAP);
+        final java.util.List<Card> candidates = new java.util.ArrayList<>();
+        for (Card card : typeList) {
+            candidates.add(card);
+        }
+        if (candidates.size() > 7) {
+            return null;
+        }
+        final java.util.List<java.util.List<Card>> sets = new java.util.ArrayList<>();
+        for (java.util.List<Card> subset
+                : ExternalPlayerController.allSubsets(candidates, 1, candidates.size())) {
+            if (CardLists.getTotalPower(subset, ability) >= threshold) {
+                sets.add(subset);
+            }
+        }
+        final CardCollection chosen = controller.frameCostCardSets("cost_tap_total_power",
+                "Tap (total power " + threshold + "+)", sets, true);
+        return chosen == null ? null : PaymentDecision.card(chosen);
+    }
+
     @Override
     public PaymentDecision visit(CostTapType cost) {
         // "Tap N untapped <type> you control" (Springleaf Drum, Opposition,
@@ -631,6 +670,9 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
         if (type.equals("OriginalHost")) {
             final Card host = ability.getOriginalHost();
             return host != null && host.canTap() ? PaymentDecision.card(host) : null;
+        }
+        if (ExternalPlayerController.isTotalPowerTapTypeCost(cost)) {
+            return tapTotalPower(controller, cost, type);
         }
         if (!ExternalPlayerController.isPlainTapTypeCost(cost)) {
             return null;

@@ -363,7 +363,8 @@ public final class ExternalPlayerController extends PlayerController {
                     continue;
                 }
                 if (part instanceof forge.game.cost.CostTapType
-                        && isPlainTapTypeCost((forge.game.cost.CostTapType) part)) {
+                        && (isPlainTapTypeCost((forge.game.cost.CostTapType) part)
+                                || isTotalPowerTapTypeCost((forge.game.cost.CostTapType) part))) {
                     continue;
                 }
                 return "COMPLEX_COST:" + part.getClass().getSimpleName();
@@ -384,6 +385,18 @@ public final class ExternalPlayerController extends PlayerController {
                 && !type.contains("sharesCreatureTypeWith")
                 && !type.contains("withTotalPowerGE")
                 && amount != null && !amount.equals("Any");
+    }
+
+    /**
+     * The crew / "tap any number of untapped creatures with total power N or
+     * greater" shape (tapXType&lt;Any/...+withTotalPowerGE N&gt;) framed by
+     * BridgeCostDecisionMaker.
+     */
+    static boolean isTotalPowerTapTypeCost(forge.game.cost.CostTapType cost) {
+        final String type = cost.getType();
+        return type != null && type.contains("+withTotalPowerGE")
+                && !type.contains("sharesCreatureTypeWith")
+                && "Any".equals(cost.getAmount());
     }
 
     /**
@@ -897,6 +910,64 @@ public final class ExternalPlayerController extends PlayerController {
      * chosen cards, or null on pilot decline / insufficient legals / incompletely
      * offerable sets (engine rolls back; the decline/audit records the reason).
      */
+    /**
+     * Frames an explicit, engine-derived list of candidate card sets (each one
+     * complete) as one COST_SELECTION decision. Returns null when there is no
+     * set, the list is too large to offer completely (audited), or the pilot
+     * declines an optional cost.
+     */
+    CardCollection frameCostCardSets(String actionType, String prompt, List<List<Card>> sets,
+            boolean cancelAllowed) {
+        if (sets.isEmpty() || sets.size() > 128) {
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("action", actionType);
+            details.put("reason", sets.isEmpty() ? "no valid set" : "too many sets");
+            session.audit("cost_unrepresentable", details);
+            return null;
+        }
+        if (sets.size() == 1 && !cancelAllowed) {
+            return new CardCollection(sets.get(0));
+        }
+        final List<DecisionFrame.Option> options = new ArrayList<>(sets.size() + 1);
+        for (List<Card> set : sets) {
+            final StringBuilder label = new StringBuilder(prompt).append(" [");
+            for (Card card : set) {
+                try {
+                    label.append(card.getName()).append(';');
+                } catch (Throwable t) {
+                    label.append("?;");
+                }
+            }
+            label.append(']');
+            options.add(DecisionFrame.payloadOption(actionType, label.toString(), null,
+                    new CardCollection(set), "CARD_LIST"));
+        }
+        if (cancelAllowed) {
+            options.add(DecisionFrame.confirmOption(actionType, "Decline payment", false));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.COST_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        if (answer.selected.confirmValue != null && !answer.selected.confirmValue.booleanValue()) {
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("action", actionType);
+            details.put("choice", "declined");
+            session.audit("cost_declined", details);
+            return null;
+        }
+        final CardCollection chosen = (CardCollection) answer.selected.nativePayload;
+        if (chosen == null) {
+            throw new IllegalStateException("cost option without native payload");
+        }
+        return chosen;
+    }
+
+    static <T> List<List<T>> allSubsets(List<T> legal, int min, int max) {
+        return enumerateSubsets(legal, min, max);
+    }
+
     CardCollection frameCostCards(String actionType, String prompt, CardCollectionView legalView,
             int count, boolean cancelAllowed) {
         final List<Card> legal = new ArrayList<>();
