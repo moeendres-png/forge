@@ -352,4 +352,119 @@ public class NonManaCostPartsTest {
     public void unaffordableEmergeRollsBackWithoutSacrificing() {
         emergeGryff("Grizzly Bears", false);
     }
+
+    // ---- "unless" damage: Blazing Salvo, 3 to the creature unless its
+    // controller takes 5. Choosing to pay used to be silently "not paid". ----
+
+    private void blazingSalvo(boolean pay) {
+        final BridgeTestSupport.ConstructedGame constructed = game("salvo-" + pay);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Blazing Salvo", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Mountain", ZoneType.Battlefield);
+        final Card wurm = BridgeTestSupport.addCard(constructed.game, 1, "Craw Wurm",
+                ZoneType.Battlefield);
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        frame = floatMana(session, frame, "Mountain", 1);
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Blazing Salvo".equals(o.sourceCardName), "cast Blazing Salvo"));
+        boolean asked = false;
+        for (int i = 0; i < 30 && (session.getGame().getStack().size() > 0 || !asked); i++) {
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,
+                    "blocked: " + f.kind + " " + f.reason);
+            if (has(f, "pay_to_prevent")) {
+                Assert.assertEquals(f.actorPlayerId, "p2", "the creature's controller decides");
+                asked = true;
+                submit(session, f, pick(f, o -> Boolean.valueOf(pay).equals(o.confirmValue),
+                        pay ? "take 5" : "decline"));
+            } else if (f.kind == DecisionFrame.Kind.TARGET_SELECTION) {
+                submit(session, f, pick(f, o -> o.label != null && o.label.contains("Craw Wurm"),
+                        "target the Wurm"));
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                submit(session, f, pick(f, o -> o.isPass, "pass"));
+            } else {
+                throw new AssertionError("unexpected " + f.kind + " " + f.reason);
+            }
+        }
+        Assert.assertTrue(asked, "the payer was asked");
+        Assert.assertEquals(session.getGame().getPlayers().get(1).getLife(), pay ? 35 : 40);
+        Assert.assertEquals(wurm.getDamage(), pay ? 0 : 3, pay ? "damage prevented" : "3 dealt");
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void takingSalvoDamageSparesTheCreature() {
+        blazingSalvo(true);
+    }
+
+    @Test(timeOut = 300000)
+    public void decliningSalvoDamagesTheCreature() {
+        blazingSalvo(false);
+    }
+
+    // ---- Draw cost: Windrider Wizard, "you may draw a card. If you do, discard" ----
+
+    private void windriderLoot(boolean loot) {
+        final BridgeTestSupport.ConstructedGame constructed = game("loot-" + loot);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Windrider Wizard", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Shock", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Craw Wurm", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Mountain", ZoneType.Battlefield);
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        final int library = session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Library).size();
+        frame = floatMana(session, frame, "Mountain", 1);
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Shock".equals(o.sourceCardName), "cast Shock"));
+        boolean asked = false;
+        for (int i = 0; i < 30 && (session.getGame().getStack().size() > 0 || !asked); i++) {
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,
+                    "blocked: " + f.kind + " " + f.reason);
+            if (has(f, "cost_draw")) {
+                asked = true;
+                submit(session, f, pick(f, o -> Boolean.valueOf(loot).equals(o.confirmValue),
+                        loot ? "draw" : "do not draw"));
+            } else if (has(f, "trigger_play")) {
+                // "you may": the engine first asks whether to use the trigger.
+                submit(session, f, pick(f, o -> o.label != null && o.label.endsWith("[Yes]"),
+                        "use the trigger"));
+            } else if (f.kind == DecisionFrame.Kind.TARGET_SELECTION) {
+                submit(session, f, pick(f, o -> o.label != null && o.label.contains("p2"), "p2"));
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                submit(session, f, pick(f, o -> o.isPass, "pass"));
+            } else if (f.options.stream().anyMatch(o -> o.label != null
+                    && o.label.contains("Craw Wurm"))) {
+                submit(session, f, pick(f, o -> o.label.contains("Craw Wurm"), "discard the Wurm"));
+            } else {
+                throw new AssertionError("unexpected " + f.kind + " " + f.reason + " "
+                        + f.options.stream().map(o -> o.actionType + "|" + o.label).toList());
+            }
+        }
+        Assert.assertTrue(asked, "drawing was the controller's choice");
+        Assert.assertEquals(session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Library).size(),
+                loot ? library - 1 : library);
+        Assert.assertEquals(find(session, 0, "Craw Wurm", ZoneType.Graveyard) != null, loot,
+                loot ? "looted away the Wurm" : "no discard without the draw");
+        Assert.assertEquals(session.getGame().getPlayers().get(1).getLife(), 38, "Shock resolved");
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void windriderWizardLootsWhenChosen() {
+        windriderLoot(true);
+    }
+
+    @Test(timeOut = 300000)
+    public void windriderWizardMayDeclineTheLoot() {
+        windriderLoot(false);
+    }
 }

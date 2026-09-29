@@ -291,11 +291,35 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
 
     @Override
     public PaymentDecision visit(CostDamage cost) {
+        // Mirrors HumanCostDecision: "CARDNAME deals N damage to you" on consent.
+        // An "unless" payment the pilot already chose is not asked twice.
+        final ExternalPlayerController controller = controller();
+        if (controller == null) {
+            return null;
+        }
+        final int c = cost.getAbilityAmount(ability);
+        if (controller.paysPreventionCostFor(ability) || controller.frameCostConfirm(
+                "cost_damage", "Have " + source.getName() + " deal " + c + " damage to you")) {
+            return PaymentDecision.number(c);
+        }
         return null;
     }
 
     @Override
     public PaymentDecision visit(CostDraw cost) {
+        // Mirrors HumanCostDecision: the drawing players are fixed by the cost.
+        final ExternalPlayerController controller = controller();
+        if (controller == null || !cost.canPay(ability, player, isEffect())) {
+            return null;
+        }
+        final int c = cost.getAbilityAmount(ability);
+        if (controller.paysPreventionCostFor(ability)
+                || controller.frameCostConfirm("cost_draw", "Draw " + c + " card(s)")) {
+            final PaymentDecision decision =
+                    PaymentDecision.players(cost.getPotentialPlayers(player, ability));
+            decision.c = c;
+            return decision;
+        }
         return null;
     }
 

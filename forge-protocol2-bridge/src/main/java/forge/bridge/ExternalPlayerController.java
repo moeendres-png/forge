@@ -119,6 +119,11 @@ public final class ExternalPlayerController extends PlayerController {
     /** The ability whose prevention cost the pilot chose to pay, while paying. */
     private SpellAbility preventionPaymentConsent;
 
+    /** True while the pilot's recorded "pay" choice for {@code sa}'s prevention cost is being carried out. */
+    boolean paysPreventionCostFor(SpellAbility sa) {
+        return preventionPaymentConsent != null && sa == preventionPaymentConsent;
+    }
+
     private BridgeUnsupportedDecision unsupported(String callback, String detail) {
         return new BridgeUnsupportedDecision(callback, actorId(), detail);
     }
@@ -329,64 +334,78 @@ public final class ExternalPlayerController extends PlayerController {
         if (manaBlocker != null) {
             return manaBlocker;
         }
-        final Cost cost = sa.getPayCosts();
-        if (cost != null) {
-            for (CostPart part : cost.getCostParts()) {
-                if (part instanceof CostPartMana) {
-                    continue;
-                }
-                if (part instanceof CostTap) {
-                    continue;
-                }
-                if (part instanceof CostUntap) {
-                    continue;
-                }
-                if (part instanceof CostAddMana) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostSacrifice) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostDiscard) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostExile) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostPayLife) {
-                    continue;
-                }
-                // R12: loyalty-cost shapes (planeswalker AddCounter /
-                // SubCounter). From-source forced payments resolve through
-                // BridgeCostDecisionMaker; anything else fails there with
-                // rollback (audited), never silently. X arrives only via
-                // framed X_ANNOUNCE.
-                if (part instanceof forge.game.cost.CostPutCounter) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostRemoveCounter) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostReturn
-                        || part instanceof forge.game.cost.CostPayEnergy
-                        || part instanceof forge.game.cost.CostExert) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostMill) {
-                    continue;
-                }
-                // SameColor reveals are not framed; the payment would roll back.
-                if (part instanceof forge.game.cost.CostReveal
-                        && !"SameColor".equals(((forge.game.cost.CostReveal) part).getType())) {
-                    continue;
-                }
-                if (part instanceof forge.game.cost.CostTapType
-                        && (isPlainTapTypeCost((forge.game.cost.CostTapType) part)
-                                || isTotalPowerTapTypeCost((forge.game.cost.CostTapType) part))) {
-                    continue;
-                }
-                return "COMPLEX_COST:" + part.getClass().getSimpleName();
+        final String costBlocker = unframedCostPart(sa.getPayCosts());
+        return costBlocker == null ? null : "COMPLEX_COST:" + costBlocker;
+    }
+
+    /**
+     * The first cost part the bridge cannot let its payer decide, by class
+     * simple name, or null when every part is framed (or decided without
+     * discretion). Shared by the priority classifier and by pay-to-prevent,
+     * so an "unless" cost is only offered as payable when paying it can
+     * actually be carried out.
+     */
+    static String unframedCostPart(Cost cost) {
+        if (cost == null) {
+            return null;
+        }
+        for (CostPart part : cost.getCostParts()) {
+            if (part instanceof CostPartMana) {
+                continue;
             }
+            if (part instanceof CostTap) {
+                continue;
+            }
+            if (part instanceof CostUntap) {
+                continue;
+            }
+            if (part instanceof CostAddMana) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostSacrifice) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostDiscard) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostExile) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostPayLife) {
+                continue;
+            }
+            // R12: loyalty-cost shapes (planeswalker AddCounter /
+            // SubCounter). From-source forced payments resolve through
+            // BridgeCostDecisionMaker; anything else fails there with
+            // rollback (audited), never silently. X arrives only via
+            // framed X_ANNOUNCE.
+            if (part instanceof forge.game.cost.CostPutCounter) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostRemoveCounter) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostReturn
+                    || part instanceof forge.game.cost.CostDraw
+                    || part instanceof forge.game.cost.CostDamage
+                    || part instanceof forge.game.cost.CostPayEnergy
+                    || part instanceof forge.game.cost.CostExert) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostMill) {
+                continue;
+            }
+            // SameColor reveals are not framed; the payment would roll back.
+            if (part instanceof forge.game.cost.CostReveal
+                    && !"SameColor".equals(((forge.game.cost.CostReveal) part).getType())) {
+                continue;
+            }
+            if (part instanceof forge.game.cost.CostTapType
+                    && (isPlainTapTypeCost((forge.game.cost.CostTapType) part)
+                            || isTotalPowerTapTypeCost((forge.game.cost.CostTapType) part))) {
+                continue;
+            }
+            return part.getClass().getSimpleName();
         }
         return null;
     }
@@ -4288,6 +4307,13 @@ public final class ExternalPlayerController extends PlayerController {
         }
         final String sourceName = sa == null || sa.getHostCard() == null
                 ? "effect" : sa.getHostCard().getName();
+        // Offering "pay" for a cost part the bridge cannot carry out would turn
+        // the payer's choice silently into "not paid". Fail closed instead.
+        final String unframed = unframedCostPart(cost);
+        if (unframed != null) {
+            throw unsupported("payCostToPreventEffect",
+                    "prevention cost part is not represented: " + unframed);
+        }
         final List<DecisionFrame.Option> options = new ArrayList<>(2);
         options.add(DecisionFrame.confirmOption("pay_to_prevent",
                 "Pay " + costText + " for " + sourceName, true));
