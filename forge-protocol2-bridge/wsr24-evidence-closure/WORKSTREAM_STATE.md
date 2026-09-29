@@ -92,3 +92,12 @@ artifact of a false card-script mutation, not an engine limitation.
 
 Full record, including the decision-integrity argument for the new probe path and the impact matrix:
 `FIND_FINALITY_SOURCE_TRUTH_20260929.md`.
+
+- **Review round 1 corrections (accepted)**: the source-truth record had wrongly attributed the card
+  to March of the Gathering as a Double Feature. The original printing is **Guilds of Ravnica #225**
+  (Forge edition catalog `Guilds of Ravnica.txt` line 239, `Ravnica Remastered.txt` line 254 for the
+  #245 reprint); it is a plain split card under CR 709. The register also reported the probe suite as
+  16/16 when it now has 17 `@Test` methods. Both are corrected in
+  `FIND_FINALITY_SOURCE_TRUTH_20260929.md`, `PB07_EVIDENCE.json` and the probe comment. The
+  substantive conclusion is unchanged and strengthened: the card is from a different set, frame
+  treatment and era than any Aftermath card.
