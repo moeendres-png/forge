@@ -224,4 +224,83 @@ public class MultiplayerEliminationTest {
     public void bookBurningMillsWhenNoPlayerPays() {
         bookBurning("");
     }
+
+    // ---- More than four simultaneous triggers (CR 603.3b) in 4P: Wrath of
+    // God under Blood Artist puts six triggers under p1's control at once.
+
+    @Test(timeOut = 300000)
+    public void sixSimultaneousBloodArtistTriggersAreOrderedAndResolve() {
+        final int players = 4;
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("mp-many-triggers", players);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Wrath of God", ZoneType.Hand);
+        for (int i = 0; i < 4; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Plains", ZoneType.Battlefield);
+        }
+        BridgeTestSupport.addCard(constructed.game, 0, "Blood Artist", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Grizzly Bears", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Grizzly Bears", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 2, "Runeclaw Bear", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 3, "Llanowar Elves", ZoneType.Battlefield);
+        for (int seat = 0; seat < players; seat++) {
+            for (int i = 0; i < 10; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        for (int i = 0; i < 4; i++) {
+            submit(session, frame, pick(frame, o -> "activate_ability".equals(o.actionType)
+                    && "Plains".equals(o.sourceCardName), "Plains"));
+            frame = BridgeTestSupport.awaitFrame(session, 15000);
+        }
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Wrath of God".equals(o.sourceCardName), "cast Wrath of God"));
+        final List<Player> ps = session.getGame().getPlayers();
+        int orderFrames = 0;
+        int targeted = 0;
+        boolean wiped = false;
+        for (int i = 0; i < 120; i++) {
+            if (wiped && targeted == 6 && session.getGame().getStack().isEmpty()) {
+                break;
+            }
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,
+                    "blocked: " + f.kind + " " + f.reason);
+            if (f.kind == DecisionFrame.Kind.TRIGGER_ORDER) {
+                Assert.assertEquals(f.actorPlayerId, "p1", "p1 controls every Blood Artist trigger");
+                Assert.assertEquals(f.options.size(), 6 - orderFrames,
+                        "one option per trigger not yet placed");
+                orderFrames++;
+                submit(session, f, f.options.get(f.options.size() - 1));
+            } else if (f.kind == DecisionFrame.Kind.TARGET_SELECTION) {
+                wiped = true;
+                // Spread the drain: two triggers each at p2, p3, p4.
+                final String victim = "p" + (2 + targeted / 2);
+                targeted++;
+                submit(session, f, pick(f, o -> o.label != null && o.label.contains(victim),
+                        victim));
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                if (session.getGame().getCardsIn(ZoneType.Battlefield).stream()
+                        .noneMatch(c -> c.isCreature())) {
+                    wiped = true;
+                }
+                submit(session, f, pick(f, o -> o.isPass, "pass"));
+            } else {
+                throw new AssertionError("unexpected " + f.kind + " " + f.reason);
+            }
+        }
+        Assert.assertEquals(orderFrames, 5, "six triggers ordered in five picks");
+        Assert.assertEquals(targeted, 6, "every trigger was targeted");
+        Assert.assertEquals(ps.get(0).getLife(), 46, "p1 gained 6");
+        for (int seat = 1; seat < players; seat++) {
+            Assert.assertEquals(ps.get(seat).getLife(), 38, "p" + (seat + 1) + " lost 2");
+        }
+        session.shutdown(5000);
+    }
 }

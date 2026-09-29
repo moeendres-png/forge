@@ -1244,9 +1244,11 @@ public final class ExternalPlayerController extends PlayerController {
             return activePlayerSAs;
         }
         // WS202: authoritative trigger ordering. Complete permutation set when
-        // small; fail closed when too large to offer completely (no partial).
+        // small; beyond four (a board wipe under Blood Artist, "each opponent"
+        // triggers in a 4-player game) the order is chosen one position at a
+        // time, so every order stays reachable without a factorial list.
         if (activePlayerSAs.size() > 4) {
-            throw unsupported("orderSimultaneousSa", "too many simultaneous abilities to order");
+            return orderSimultaneousSaIncrementally(activePlayerSAs);
         }
         final List<List<SpellAbility>> perms = permutations(activePlayerSAs);
         final List<DecisionFrame.Option> options = new ArrayList<>(perms.size());
@@ -1277,6 +1279,62 @@ public final class ExternalPlayerController extends PlayerController {
         details.put("count", Integer.toString(chosen.size()));
         session.audit("trigger_ordered", details);
         return new ArrayList<>(chosen);
+    }
+
+    /**
+     * CR 603.3b: the controller puts their simultaneous triggers on the stack
+     * in any order. The returned list is resolve-first first (as the Human
+     * "Resolve first" order dialog returns it); each frame picks the ability
+     * that resolves next among those not yet placed (N-1 frames).
+     */
+    private List<SpellAbility> orderSimultaneousSaIncrementally(List<SpellAbility> all) {
+        final List<SpellAbility> remaining = new ArrayList<>(all);
+        final List<SpellAbility> ordered = new ArrayList<>(all.size());
+        while (remaining.size() > 1) {
+            final List<DecisionFrame.Option> options = new ArrayList<>(remaining.size());
+            for (SpellAbility sa : remaining) {
+                String name;
+                try {
+                    name = sa.getHostCard().getName();
+                } catch (Throwable t) {
+                    name = "?";
+                }
+                final List<SpellAbility> payload = new ArrayList<>(1);
+                payload.add(sa);
+                options.add(DecisionFrame.payloadOption("trigger_order_next",
+                        "Resolve " + (ordered.size() + 1) + ": " + name + "#"
+                                + indexOfIdentity(all, sa) + " " + stackText(sa),
+                        null, payload, "ORDER"));
+            }
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.TRIGGER_ORDER, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            @SuppressWarnings("unchecked")
+            final List<SpellAbility> picked = (List<SpellAbility>) answer.selected.nativePayload;
+            if (picked == null || picked.size() != 1) {
+                throw new IllegalStateException("order option without its ability");
+            }
+            final int index = indexOfIdentity(remaining, picked.get(0));
+            if (index < 0) {
+                throw new IllegalStateException("order option names a placed ability");
+            }
+            ordered.add(remaining.remove(index));
+        }
+        ordered.addAll(remaining);
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("count", Integer.toString(ordered.size()));
+        session.audit("trigger_ordered", details);
+        return ordered;
+    }
+
+    private static String stackText(SpellAbility sa) {
+        try {
+            final String text = sa.getStackDescription();
+            return text == null ? "" : text;
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     private static <T> List<List<T>> permutations(List<T> input) {
@@ -1924,11 +1982,33 @@ public final class ExternalPlayerController extends PlayerController {
                 }
             }
         }
+        // Large multiplayer boards: choose the new targets one at a time
+        // (same count as before), after an explicit keep-or-change choice
+        // when changing is optional.
+        List<GameEntity> incremental = null;
         if (legal.size() > 9) {
-            throw unsupported("chooseNewTargetsFor", "too many candidates to offer completely");
+            if (optional && !parkBinary(DecisionFrame.Kind.TARGET_SELECTION, "retarget",
+                    "Choose new targets")) {
+                return null;
+            }
+            try {
+                sa.clearTargets();
+                incremental = chooseTargetsIncrementally(sa, legal, count, count);
+            } finally {
+                try {
+                    sa.setTargets(oldTargets);
+                } catch (Throwable t) {
+                    throw unsupported("chooseNewTargetsFor", "target restore failed");
+                }
+            }
+            if (incremental == null || incremental.size() != count) {
+                return null;
+            }
         }
         final List<List<GameEntity>> validSets = new ArrayList<>();
-        for (List<GameEntity> subset : enumerateSubsets(legal, count, count)) {
+        final List<List<GameEntity>> combinations = incremental != null
+                ? List.of(incremental) : enumerateSubsets(legal, count, count);
+        for (List<GameEntity> subset : combinations) {
             try {
                 sa.clearTargets();
                 for (GameEntity entity : subset) {
@@ -1965,7 +2045,7 @@ public final class ExternalPlayerController extends PlayerController {
             return null;
         }
         final List<GameEntity> chosen;
-        if (validSets.size() == 1 && !optional) {
+        if (validSets.size() == 1 && (!optional || incremental != null)) {
             chosen = validSets.get(0);
         } else {
             final List<DecisionFrame.Option> options = new ArrayList<>(validSets.size() + 1);
@@ -2013,6 +2093,83 @@ public final class ExternalPlayerController extends PlayerController {
         details.put("count", Integer.toString(chosen.size()));
         session.audit("targets_redirected", details);
         return sa.getTargets();
+    }
+
+    /**
+     * Target selection one target at a time, as the Human InputSelectTargets
+     * loop does: each frame lists every entity the engine accepts as the next
+     * target given the targets already chosen (canTarget with those targets
+     * in place, never the same object twice, CR 115.3), plus "done" once the
+     * minimum is reached and the engine's MustTarget restriction holds.
+     * Returns null when no complete legal set can be reached (the engine
+     * then cancels the play, nothing is chosen by default).
+     */
+    private List<GameEntity> chooseTargetsIncrementally(SpellAbility sa, List<GameEntity> legal,
+            int min, int max) {
+        final List<GameEntity> chosen = new ArrayList<>();
+        final int limit = Math.min(max, legal.size());
+        while (chosen.size() < limit) {
+            final List<GameEntity> next = new ArrayList<>();
+            final boolean canFinish;
+            try {
+                for (GameEntity entity : chosen) {
+                    sa.getTargets().add(toTargetObject(entity, "chooseTargetsFor"));
+                }
+                canFinish = chosen.size() >= min && forge.game.staticability
+                        .StaticAbilityMustTarget.meetsMustTargetRestriction(sa);
+                for (GameEntity entity : legal) {
+                    if (!containsIdentity(chosen, entity) && sa.canTarget(entity)) {
+                        next.add(entity);
+                    }
+                }
+            } catch (Throwable t) {
+                throw unsupported("chooseTargetsFor", "target legality check failed");
+            } finally {
+                try {
+                    sa.resetTargets();
+                } catch (Throwable t) {
+                    throw unsupported("chooseTargetsFor", "target reset failed");
+                }
+            }
+            if (next.isEmpty()) {
+                return canFinish ? chosen : null;
+            }
+            final List<DecisionFrame.Option> options = new ArrayList<>(next.size() + 1);
+            for (GameEntity entity : next) {
+                final List<GameEntity> payload = new ArrayList<>(1);
+                payload.add(entity);
+                options.add(DecisionFrame.payloadOption("target_next",
+                        "Target " + (chosen.size() + 1) + " [" + targetName(entity) + "]", null,
+                        payload, "GAME_ENTITY_LIST"));
+            }
+            if (canFinish) {
+                options.add(DecisionFrame.confirmOption("target_next",
+                        "Done choosing targets (" + chosen.size() + ")", false));
+            }
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.TARGET_SELECTION, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            if (answer.selected.confirmValue != null
+                    && !answer.selected.confirmValue.booleanValue()) {
+                return chosen;
+            }
+            @SuppressWarnings("unchecked")
+            final List<GameEntity> picked = (List<GameEntity>) answer.selected.nativePayload;
+            if (picked == null || picked.size() != 1) {
+                throw new IllegalStateException("target option without its entity");
+            }
+            chosen.add(picked.get(0));
+        }
+        return chosen;
+    }
+
+    private static boolean containsIdentity(List<GameEntity> list, GameEntity entity) {
+        for (GameEntity item : list) {
+            if (item == entity) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -2065,13 +2222,21 @@ public final class ExternalPlayerController extends PlayerController {
         if (legal.isEmpty()) {
             return min <= 0;
         }
-        if (legal.size() > 9) {
-            throw unsupported("chooseTargetsFor", "too many candidates to offer completely");
+        // Multiplayer boards routinely offer more than nine legal targets
+        // (four players plus every creature for "any target"). Larger sets are
+        // chosen one target at a time instead of as one combination list.
+        final List<GameEntity> incremental = legal.size() > 9
+                ? chooseTargetsIncrementally(currentAbility, legal, min, max) : null;
+        if (legal.size() > 9 && incremental == null) {
+            return false;
         }
         // Trial-assign each combination so MustTarget and sibling-target rules
         // prune the offered set exactly; the frame carries only valid sets.
         final List<List<GameEntity>> validSets = new ArrayList<>();
-        for (List<GameEntity> subset : enumerateSubsets(legal, min, Math.min(max, legal.size()))) {
+        final List<List<GameEntity>> combinations = incremental != null
+                ? List.of(incremental)
+                : enumerateSubsets(legal, min, Math.min(max, legal.size()));
+        for (List<GameEntity> subset : combinations) {
             try {
                 for (GameEntity entity : subset) {
                     currentAbility.getTargets().add(toTargetObject(entity, "chooseTargetsFor"));
