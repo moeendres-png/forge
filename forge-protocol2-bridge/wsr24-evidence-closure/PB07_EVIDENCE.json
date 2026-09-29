@@ -1,1 +1,184 @@
-{"bridge_changes_for_probes": {"delve_payment": "ExternalPlayerController.exileDelved performs the engine-declared delve exile natively (mirrors the engine null-placeholder path incl. zone-change triggers); payment continues via pool/taps; exile failure still declines closed", "order_cap": "orderMoveToZoneList cap 4->5 (120 permutations within the 128 completeness bound; 6+ still fail closed); combat/trigger/target caps untouched"}, "denominator": {"count": 29, "order": "Lab order preserved", "source": "commander-playtest-lab/qualification/manifests/ACTUAL_CARD_DOMAIN_v1.json#regression_corpus_29 (read-only; Lab unmutated)"}, "global_verdict": "PARTIAL (Forge-side preparation only; PB-07 global closure NOT claimed)", "mechanism_reuse": {"construction": "WsR24Pb07ActualCardPreparationTest#testAll29ResolveAndConstruct (29/29 resolve + construct; Boseiju via front face, recorded)", "new_runtime": ["WsR24Pb07ActualCardPreparationTest#testSyphonMindMultiplayerDiscardRuntime", "WsR24Pb07MechanicProbesTest (6/6: Dig, Vandalblast, Shriekmaw, Find, Collar, Mannequin)"]}, "rows": [{"card": "Ishai, Ojutai Dragonspeaker", "evidence": "probe: opponent Memnite cast puts exactly one +1/+1 counter on Ishai", "status": "RUNTIME_QUALIFIED"}, {"card": "Rograkh, Son of Rohgahh", "evidence": "BridgeEngineTest commander cast+tax+battlefield; deck-rograkh fixtures", "status": "RUNTIME_QUALIFIED"}, {"card": "Esior, Wardwing Familiar", "evidence": "probe: hardcast resolves, Flying verified, turn-2 combat evasion deals 1 through ground defenders (p2 40->39); partner mechanism covered by Kediss/Rograkh families, ward unasserted", "status": "RUNTIME_QUALIFIED"}, {"card": "Kediss, Emberclaw Familiar", "evidence": "WsR10KedissBridgeFamilyTest", "status": "RUNTIME_QUALIFIED"}, {"card": "Veyran, Voice of Duality", "evidence": "WS236F4BridgeTest + WS234", "status": "RUNTIME_QUALIFIED"}, {"card": "Harmonic Prodigy", "evidence": "WS236F4BridgeTest", "status": "RUNTIME_QUALIFIED"}, {"card": "Narset, Parter of Veils", "evidence": "probe: hardcast resolves, CantDraw static active (conditions true), Opt scry resolves but extra draw prevented (hand keeps only turn-draw, library untouched). Harness lesson: zone-gated statics need real ETB (pre-placed permanents carry stale LKI).", "status": "RUNTIME_QUALIFIED"}, {"card": "Jeska, Thrice Reborn", "evidence": "WsR11JeskaBridgeFamilyTest (loyalty-cost shape)", "status": "RUNTIME_QUALIFIED"}, {"card": "Magma Opus", "evidence": "WsR10MagmaBridgeFamilyTest", "status": "RUNTIME_QUALIFIED"}, {"card": "Wash Away", "evidence": "probe: cleave {1}{U}{U} variant counters a hand-cast Memnite in response (graveyard, never lands)", "status": "RUNTIME_QUALIFIED"}, {"card": "Wear // Tear", "evidence": "WsR11FuseBridgeFamilyTest (fuse)", "status": "RUNTIME_QUALIFIED"}, {"card": "Dig Through Time", "evidence": "probe full runtime: delve framed+paid (6 exiled), look-7-pick-2 (21 options), bottom-5 ORDER_CHOICE (120 options), resolution end-state verified", "status": "RUNTIME_QUALIFIED"}, {"card": "Flare of Duplication", "evidence": "WsR9RetargetBridgeFamilyTest", "status": "RUNTIME_QUALIFIED"}, {"card": "Vandalblast", "evidence": "probe: normal and overload ({4}{R}) offered as distinct variants, both fully execute", "status": "RUNTIME_QUALIFIED"}, {"card": "Finale of Revelation", "evidence": "WsR9FinaleX10BridgeFamilyTest (X spell)", "status": "RUNTIME_QUALIFIED"}, {"card": "Psychosis Crawler", "evidence": "probe: Opt draw drains each opponent to 39 (controller untouched)", "status": "RUNTIME_QUALIFIED"}, {"card": "Kaervek the Merciless", "evidence": "probe: opponent Bears (MV 2) burns p2 to 38 via any-target choice", "status": "RUNTIME_QUALIFIED"}, {"card": "Shriekmaw", "evidence": "probe: hardcast ETB destroy + evoke ({1}{B}) with sacrifice and second ETB verified", "status": "RUNTIME_QUALIFIED"}, {"card": "Butcher of Malakir", "evidence": "probe: Bolt kills own Memnite, each opponent sacrifices exactly their creature (p3 Ornithopter, p4 Walker in graveyards)", "status": "RUNTIME_QUALIFIED"}, {"card": "Syphon Mind", "evidence": "new multiplayer-discard runtime (this campaign)", "status": "RUNTIME_QUALIFIED"}, {"card": "Gratuitous Violence", "evidence": "probe: cast + real combat, 1-power attacker deals exactly 2 (p2 40->38)", "status": "RUNTIME_QUALIFIED"}, {"card": "Bolt Bend", "evidence": "WsR9RetargetBridgeFamilyTest", "status": "RUNTIME_QUALIFIED"}, {"card": "Makeshift Mannequin", "evidence": "probe: reanimate with mannequin counter verified", "status": "RUNTIME_QUALIFIED"}, {"card": "Warstorm Surge", "evidence": "probe: Memnite entry hits p2 for its power (p2 39)", "status": "RUNTIME_QUALIFIED"}, {"card": "Basilisk Collar", "evidence": "probe: cast + equip + Deathtouch/Lifelink verified", "status": "RUNTIME_QUALIFIED"}, {"card": "Burn Down the House", "evidence": "probe: Devils mode creates exactly three Devil tokens", "status": "RUNTIME_QUALIFIED"}, {"card": "Path of Ancestry", "evidence": "WsR13PathBridgeFamilyTest", "status": "RUNTIME_QUALIFIED"}, {"card": "Find // Finality", "drop_point": "Card.getAllPossibleAbilities enumerates only current-state (Find) abilities; the RightSplit aftermath SA (aftermath=true, zone Graveyard per CardFactoryUtil) is never added, so the bridge has nothing to offer. Surfacing it needs engine ability-discovery work (all callers incl. AI affected); the bridge must not invent ability discovery (Rules authority).", "evidence": "probe: front-face Find returns both creatures (runtime); aftermath Finality unoffered though engine grant index surfaces the card and enumerates zero abilities", "next": "dedicated engine workstream on split-card aftermath-half discovery", "status": "RUNTIME_QUALIFIED_FRONT_PLUS_ENGINE_GAP"}, {"card": "Boseiju Reaches Skyward // Branch of Boseiju", "evidence": "WsR11BoseijuBridgeFamilyTest: saga cast, chapter-I search, full transform, Branch power tracking (front-face resolution rule)", "status": "RUNTIME_QUALIFIED"}], "schema_version": "wsr24.pb07-evidence/1.0.0", "summary": {"CONSTRUCTION_ONLY": 0, "ENGINE_GAP_documented": 1, "RUNTIME_QUALIFIED": 28, "RUNTIME_TOUCHED": 0}}
+{
+  "bridge_changes_for_probes": {
+    "delve_payment": "ExternalPlayerController.exileDelved performs the engine-declared delve exile natively (mirrors the engine null-placeholder path incl. zone-change triggers); payment continues via pool/taps; exile failure still declines closed",
+    "order_cap": "orderMoveToZoneList cap 4->5 (120 permutations within the 128 completeness bound; 6+ still fail closed); combat/trigger/target caps untouched"
+  },
+  "denominator": {
+    "count": 29,
+    "order": "Lab order preserved",
+    "source": "commander-playtest-lab/qualification/manifests/ACTUAL_CARD_DOMAIN_v1.json#regression_corpus_29 (read-only; Lab unmutated)"
+  },
+  "global_verdict": "PARTIAL (Forge-side preparation only; PB-07 global closure NOT claimed). Row 28 (Find // Finality) is re-derived at the source-truth-corrected head and is RUNTIME_QUALIFIED; the previous documented engine gap on that row was an artifact of a false K:Aftermath card-script mutation and is RETRACTED. The Lab canonical denominator of 29 is unchanged.",
+  "mechanism_reuse": {
+    "construction": "WsR24Pb07ActualCardPreparationTest#testAll29ResolveAndConstruct (29/29 resolve + construct; Boseiju via front face, recorded)",
+    "new_runtime": [
+      "WsR24Pb07ActualCardPreparationTest#testSyphonMindMultiplayerDiscardRuntime",
+      "WsR24Pb07MechanicProbesTest (17/17 actual-card probes; Find and Finality rows re-derived)"
+    ]
+  },
+  "rows": [
+    {
+      "card": "Ishai, Ojutai Dragonspeaker",
+      "evidence": "probe: opponent Memnite cast puts exactly one +1/+1 counter on Ishai",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Rograkh, Son of Rohgahh",
+      "evidence": "BridgeEngineTest commander cast+tax+battlefield; deck-rograkh fixtures",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Esior, Wardwing Familiar",
+      "evidence": "probe: hardcast resolves, Flying verified, turn-2 combat evasion deals 1 through ground defenders (p2 40->39); partner mechanism covered by Kediss/Rograkh families, ward unasserted",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Kediss, Emberclaw Familiar",
+      "evidence": "WsR10KedissBridgeFamilyTest",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Veyran, Voice of Duality",
+      "evidence": "WS236F4BridgeTest + WS234",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Harmonic Prodigy",
+      "evidence": "WS236F4BridgeTest",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Narset, Parter of Veils",
+      "evidence": "probe: hardcast resolves, CantDraw static active (conditions true), Opt scry resolves but extra draw prevented (hand keeps only turn-draw, library untouched). Harness lesson: zone-gated statics need real ETB (pre-placed permanents carry stale LKI).",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Jeska, Thrice Reborn",
+      "evidence": "WsR11JeskaBridgeFamilyTest (loyalty-cost shape)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Magma Opus",
+      "evidence": "WsR10MagmaBridgeFamilyTest",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Wash Away",
+      "evidence": "probe: cleave {1}{U}{U} variant counters a hand-cast Memnite in response (graveyard, never lands)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Wear // Tear",
+      "evidence": "WsR11FuseBridgeFamilyTest (fuse)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Dig Through Time",
+      "evidence": "probe full runtime: delve framed+paid (6 exiled), look-7-pick-2 (21 options), bottom-5 ORDER_CHOICE (120 options), resolution end-state verified",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Flare of Duplication",
+      "evidence": "WsR9RetargetBridgeFamilyTest",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Vandalblast",
+      "evidence": "probe: normal and overload ({4}{R}) offered as distinct variants, both fully execute",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Finale of Revelation",
+      "evidence": "WsR9FinaleX10BridgeFamilyTest (X spell)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Psychosis Crawler",
+      "evidence": "probe: Opt draw drains each opponent to 39 (controller untouched)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Kaervek the Merciless",
+      "evidence": "probe: opponent Bears (MV 2) burns p2 to 38 via any-target choice",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Shriekmaw",
+      "evidence": "probe: hardcast ETB destroy + evoke ({1}{B}) with sacrifice and second ETB verified",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Butcher of Malakir",
+      "evidence": "probe: Bolt kills own Memnite, each opponent sacrifices exactly their creature (p3 Ornithopter, p4 Walker in graveyards)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Syphon Mind",
+      "evidence": "new multiplayer-discard runtime (this campaign)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Gratuitous Violence",
+      "evidence": "probe: cast + real combat, 1-power attacker deals exactly 2 (p2 40->38)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Bolt Bend",
+      "evidence": "WsR9RetargetBridgeFamilyTest",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Makeshift Mannequin",
+      "evidence": "probe: reanimate with mannequin counter verified",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Warstorm Surge",
+      "evidence": "probe: Memnite entry hits p2 for its power (p2 39)",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Basilisk Collar",
+      "evidence": "probe: cast + equip + Deathtouch/Lifelink verified",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Burn Down the House",
+      "evidence": "probe: Devils mode creates exactly three Devil tokens",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Path of Ancestry",
+      "evidence": "WsR13PathBridgeFamilyTest",
+      "status": "RUNTIME_QUALIFIED"
+    },
+    {
+      "card": "Find // Finality",
+      "status": "RUNTIME_QUALIFIED",
+      "fixture": "CARD_28",
+      "evidence": "runtime at this head: WsR24Pb07MechanicProbesTest#testFindFromHandAndGraveyardHalfRefused (Find cast from hand returns both graveyard creatures; the split card then exposes NO ability in the graveyard and the bridge offers no graveyard cast) and WsR24Pb07MechanicProbesTest#testFinalityFromHandResolvesAsymmetricPump (Finality half cast from hand by an exact engine-offered match on the half's own CardState, paid only from the six fixture-scripted payment sources obj:card_28-mana-p1-0..5, then the optional counter target chosen by an exact Serra Angel match: own 4/4 survives two +1/+1 counters plus -4/-4, opponent 2/2 dies, the card ends in the graveyard and NOT in exile). Engine-level regression: Ws234CleaveAftermathTest#testFindFinalityBothHalvesArePlainSplitSpells / #testFinalityIsHandCastableAndGraveyardCastRefused / #testFinalityResolvesFromHandAndReturnsToGraveyard plus the card-database invariants in AftermathKeywordOracleConsistencyTest.",
+      "oracle_semantics": "Find // Finality is an ordinary split card (Guilds of Ravnica #225; reprinted in Ravnica Remastered #245; CR 709 Split Cards). Neither face's Oracle text carries the Aftermath keyword, so under CR 108.1 (Oracle text governs wording) and CR 702.127a (Aftermath is a keyword ability found on some split cards) no half is graveyard-castable and no Aftermath exile-on-resolve replacement applies.",
+      "supersedes": "RUNTIME_QUALIFIED_FRONT_PLUS_ENGINE_GAP (recorded on Forge PR #4 at 76276a80175 and carried to PR #5/PR #6). That row was derived from the false card-script mutation bc347e62255e61d950154824b427251fdabcf5f6 and is RETRACTED, not carried forward. See forge-protocol2-bridge/wsr24-evidence-closure/FIND_FINALITY_SOURCE_TRUTH_20260929.md."
+    },
+    {
+      "card": "Boseiju Reaches Skyward // Branch of Boseiju",
+      "evidence": "WsR11BoseijuBridgeFamilyTest: saga cast, chapter-I search, full transform, Branch power tracking (front-face resolution rule)",
+      "status": "RUNTIME_QUALIFIED"
+    }
+  ],
+  "schema_version": "wsr24.pb07-evidence/1.1.0",
+  "summary": {
+    "CONSTRUCTION_ONLY": 0,
+    "ENGINE_GAP_documented": 0,
+    "RUNTIME_QUALIFIED": 29,
+    "RUNTIME_TOUCHED": 0
+  },
+  "source_truth_correction": {
+    "defect": "Forge commit bc347e62255e61d950154824b427251fdabcf5f6 (Lab-fork card-script edit, now on Forge master ef958ee91ac6c9ce0152189f2654bf6e05abf273) added K:Aftermath to the Finality half of forge-gui/res/cardsfolder/f/find_finality.txt and rewrote that half's Oracle line to match.",
+    "authority": "Oracle: Find // Finality (Guilds of Ravnica #225 original printing; Ravnica Remastered #245 reprint; Forge edition catalog forge-gui/res/editions/Guilds of Ravnica.txt line 239 and forge-gui/res/editions/Ravnica Remastered.txt line 254) is a plain split card with layout `split`, type line `Sorcery // Sorcery` and keywords=[]. No face carries the Aftermath reminder. CR 108.1 makes Oracle text the wording authority; CR 702.127a defines Aftermath as a keyword ability found on some split cards. It is NOT a March of the Gathering Double Feature card and does not appear in March of the Machine; the Aftermath keyword belongs to the Amonkhet, Kaladesh, Streets of New Capenna, Modern Horizons 2 and March of the Machine sets, all of which use a distinct aftermath split-card frame treatment that this card does not have.",
+    "corroboration": "Pristine upstream Forge a37a865a53280dd8ad6fad3384d69611e8c5a42f scripts the card WITHOUT K:Aftermath; the corrected fork script is now byte-identical to it. The fork's Aftermath card set (27 scripts) is exactly the Oracle set of 27 Aftermath cards, and Find // Finality is not among them, so the mutation was the only false Aftermath in the card database.",
+    "correction": "forge-gui/res/cardsfolder/f/find_finality.txt restored to the pristine Oracle script; no Rules-Core Java change was made or required.",
+    "rules_core_mutation_disposition": "Forge PR #6 (b31d21df238) added forge-game Card.getAllPossibleAbilities split-half enumeration so the FALSE Aftermath half could be offered. With the false requirement removed that mutation has no independent purpose for this card, it is not carried into this branch, and it is not retained merely because its own tests were green.",
+    "record": "forge-protocol2-bridge/wsr24-evidence-closure/FIND_FINALITY_SOURCE_TRUTH_20260929.md"
+  }
+}

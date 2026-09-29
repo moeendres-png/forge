@@ -28,13 +28,21 @@ import forge.game.zone.ZoneType;
  * enumerates. The bridge probe showed the consequence: the grant index contains
  * the card and the enumeration yields zero abilities.
  *
+ * <p>Bound to Cut // Ribbons (a genuine Aftermath card); the original binding to
+ * Find // Finality rested on a false premise (Finality has no Aftermath).
+ *
  * <p>These tests pin the enumeration, not the keyword: a graveyard Aftermath
  * half must be offered, the hand must not offer it, the front half must not be
  * offered from the graveyard, and no half may be duplicated.
  */
 public class DeepseekAftermathDiscoveryTest extends SimulationTest {
 
-    private static final String SPLIT = "Find // Finality";
+    // A genuine Aftermath split card. Oracle: Ribbons has "Aftermath (Cast this spell only
+    // from your graveyard. Then exile it.)". Find // Finality is NOT an Aftermath card
+    // (plain split card; see AftermathKeywordOracleConsistencyTest / PB-07 source truth),
+    // so this regression is bound to Cut // Ribbons instead. Verified: without the
+    // Card.getAllPossibleAbilities alternate-split-state enumeration these tests fail 3/6.
+    private static final String SPLIT = "Cut // Ribbons";
 
     private Card addHand(String name, Player p) {
         Card c = createCard(name, p);

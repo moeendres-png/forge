@@ -126,18 +126,6 @@ public class WsR24Pb07MechanicProbesTest {
                 }
             }
             throw new AssertionError("no combat decline offered");
-        } else if (frame.kind == DecisionFrame.Kind.COPY_CHOICE) {
-            DecisionFrame.Option exact = null;
-            for (DecisionFrame.Option o : frame.options) {
-                if ("Serra Angel".equals(o.sourceCardName)) {
-                    Assert.assertNull(exact,
-                            "Finality entity choice must expose exactly one Serra Angel option");
-                    exact = o;
-                }
-            }
-            Assert.assertNotNull(exact,
-                    "unsupported COPY_CHOICE: no exact Serra Angel entity option");
-            submit(session, frame, exact);
         } else {
             throw new AssertionError("unexpected " + frame.kind + " for " + frame.actorPlayerId);
         }
@@ -256,13 +244,14 @@ public class WsR24Pb07MechanicProbesTest {
         }
     }
 
-    private static void logOptions(String tag, DecisionFrame frame) {
+    private static String logOptions(String tag, DecisionFrame frame) {
         final StringBuilder seen = new StringBuilder("[wsr24-probe] ").append(tag)
                 .append(" kind=").append(frame.kind).append(" status=").append(frame.status);
         for (DecisionFrame.Option o : frame.options) {
             seen.append(" |[").append(o.actionType).append('|').append(o.label).append(']');
         }
         System.err.println(seen);
+        return seen.toString();
     }
 
     // ------------------------------------------------------------------
@@ -599,11 +588,133 @@ public class WsR24Pb07MechanicProbesTest {
     }
 
     // ------------------------------------------------------------------
-    // Find // Finality: Find from hand + aftermath attempt.
+    // Find // Finality (PB-07 CARD_28) — Oracle-correct re-derivation.
+    //
+    // Find // Finality is an ordinary split card from Guilds of Ravnica #225
+    // (reprinted in Ravnica Remastered #245). It has no Aftermath keyword
+    // (CR 108.1: Oracle text governs wording; CR 702.127a:
+    // Aftermath is a keyword found on some split cards), so BOTH halves are
+    // castable only from the hand and NEITHER half is castable from a
+    // graveyard. The previous probe on this row asserted the opposite because
+    // Forge commit bc347e62255e61d950154824b427251fdabcf5f6 added K:Aftermath
+    // to the Finality half and rewrote its Oracle line to match. The frozen
+    // Lab fixture for CARD_28 (qualification/ws47 SEMANTIC_FIXTURE_MATERIALIZATION
+    // record CARD_28) scripts `cast_split_half:Finality` for P1 as a hand cast
+    // and expects put_+1/+1_counters:2, continuous_-4/-4_all_creatures and
+    // state_based_actions — no graveyard cast. The two probes below execute
+    // exactly that frozen intent.
     // ------------------------------------------------------------------
 
+    /**
+     * Selects the engine-offered option for a named split half, by the half's
+     * own engine identity, and fails closed unless exactly one such option is
+     * offered. No ordering, label position or option id establishes the choice:
+     * the frozen fixture names the half, the engine names the half, and the two
+     * must agree on exactly one offered option.
+     */
+    private static DecisionFrame.Option exactSplitHalfOption(DecisionFrame frame, String halfName) {
+        DecisionFrame.Option exact = null;
+        final StringBuilder dump = new StringBuilder();
+        for (DecisionFrame.Option o : frame.options) {
+            dump.append('|').append(o.actionType).append(':').append(o.label);
+            if (!"cast_spell".equals(o.actionType) || o.nativeBinding == null) {
+                continue;
+            }
+            if (!halfName.equals(splitHalfName(o.nativeBinding))) {
+                continue;
+            }
+            Assert.assertNull(exact,
+                    "the engine offered more than one '" + halfName + "' half cast: " + dump);
+            exact = o;
+        }
+        Assert.assertNotNull(exact,
+                "no engine-offered cast of the '" + halfName + "' half: " + dump);
+        return exact;
+    }
+
+    /**
+     * Pays a mana frame only after proving every offered option is the SAME
+     * payment. The probe's mana sources are the six fixture-scripted untapped
+     * basic lands (Lab CARD_28 `explicit_payment_sources` obj:card_28-mana-p1-0
+     * .. -5); a basic land has no function besides producing its mana, so any
+     * allocation over them that yields the same required total is semantically
+     * equivalent. When the equivalence precondition does not hold this fails
+     * closed instead of taking the first option.
+     */
+    private static void payScriptedBasicLands(BridgeSession session, String actorId,
+            java.util.List<Card> scriptedSources) {
+        final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+        Assert.assertNotNull(frame);
+        Assert.assertEquals(frame.kind, DecisionFrame.Kind.MANA_PAYMENT);
+        Assert.assertEquals(frame.actorPlayerId, actorId);
+
+        // Fail closed on anything the fixture did not script. A tap-source frame
+        // may only offer the fixture's own payment sources; an un-scripted source
+        // means the fixture does not describe this payment, which is UNKNOWN, not
+        // a licence to pick one.
+        final java.util.List<DecisionFrame.Option> offers = new java.util.ArrayList<>();
+        for (DecisionFrame.Option o : frame.options) {
+            if (o.confirmValue != null) {
+                continue;
+            }
+            Assert.assertEquals(o.payloadKind, "SPELL_ABILITY",
+                    "unhandled mana payload kind " + o.payloadKind
+                            + "; the harness must not guess an answer for an unknown mechanism");
+            Assert.assertTrue(o.nativePayload instanceof forge.game.spellability.SpellAbility,
+                    "unreadable tap-source payload for " + o.label);
+            offers.add(o);
+        }
+        Assert.assertFalse(offers.isEmpty(), "a tap-source frame must offer at least one source");
+        for (DecisionFrame.Option o : offers) {
+            final Card host = ((forge.game.spellability.SpellAbility) o.nativePayload)
+                    .getHostCard();
+            Assert.assertTrue(scriptedSources.contains(host),
+                    "the engine offered an un-scripted mana source " + host.getName()
+                            + "; the frozen fixture does not authorize that payment");
+        }
+
+        // Fixture-authorized exact choice: the CARD_28 fixture enumerates its
+        // payment sources in a fixed order, so the first still-untapped scripted
+        // source the engine offers is the intended one. The engine's offered
+        // legality is proven before the submit; exactly one option must match.
+        for (Card source : scriptedSources) {
+            if (source.isTapped()) {
+                continue;
+            }
+            DecisionFrame.Option exact = null;
+            for (DecisionFrame.Option o : offers) {
+                if (((forge.game.spellability.SpellAbility) o.nativePayload)
+                        .getHostCard() != source) {
+                    continue;
+                }
+                Assert.assertNull(exact,
+                        "the engine offered a scripted mana source twice: " + source.getName());
+                exact = o;
+            }
+            if (exact == null) {
+                continue;
+            }
+            final BridgeSession.SubmitOutcome outcome = session.submit(frame.actorPlayerId,
+                    exact.optionId, exact.actionType, frame.revision);
+            Assert.assertTrue(outcome.applied,
+                    "the engine must accept the fixture-scripted source " + source.getName());
+            ANSWERED.add(Long.valueOf(frame.revision));
+            return;
+        }
+        throw new AssertionError("no offered mana payment matched the fixture-scripted sources "
+                + namesOf(scriptedSources));
+    }
+
+    private static java.util.List<String> namesOf(java.util.List<Card> cards) {
+        final java.util.List<String> names = new java.util.ArrayList<>();
+        for (Card c : cards) {
+            names.add(c.getName() + (c.isTapped() ? "(tapped)" : ""));
+        }
+        return names;
+    }
+
     @Test(timeOut = 300000)
-    public void testFindAndAftermath() {
+    public void testFindFromHandAndGraveyardHalfRefused() {
         final BridgeTestSupport.ConstructedGame constructed =
                 BridgeTestSupport.buildConstructedGame("wsr24-pb07-find", 4);
         final BridgeSession session = constructed.session;
@@ -614,10 +725,6 @@ public class WsR24Pb07MechanicProbesTest {
         BridgeTestSupport.addCard(constructed.game, 0, "Find // Finality", ZoneType.Hand);
         BridgeTestSupport.addCard(constructed.game, 0, "Memnite", ZoneType.Graveyard);
         BridgeTestSupport.addCard(constructed.game, 0, "Ornithopter", ZoneType.Graveyard);
-        // Finality behaviour discriminator: P1's 4/4 survives after two
-        // +1/+1 counters then -4/-4; P2's unboosted 2/2 dies.
-        BridgeTestSupport.addCard(constructed.game, 0, "Serra Angel", ZoneType.Battlefield);
-        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Battlefield);
         fillLibraries(constructed, 5);
         BridgeTestSupport.launchConstructed(constructed);
         BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
@@ -657,64 +764,267 @@ public class WsR24Pb07MechanicProbesTest {
         System.err.println("[wsr24-probe] creatures returned: " + handCreatures);
         Assert.assertTrue(handCreatures >= 1, "Find must return at least one creature");
 
-        // Aftermath: Finality must now be engine-enumerated from the graveyard,
-        // offered as a real cast, paid through the normal mana pipeline, and
-        // resolved with its actual asymmetric creature effect.
-        DecisionFrame.Option finality = null;
-        DecisionFrame finalityFrame = null;
-        for (int i = 0; i < 20 && finality == null; i++) {
+        // Negative control for the retired Aftermath premise: with the split
+        // card now in the graveyard, the engine must offer NO cast of either
+        // half. A Split card's halves are cast only from the hand; graveyard
+        // casting exists only for a half that prints Aftermath, and this card
+        // prints none. Any offered graveyard cast here would be a Rules defect.
+        for (int i = 0; i < 10; i++) {
             final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
             Assert.assertNotNull(frame);
             if (frameMatches(frame, "p1", DecisionFrame.Kind.PRIORITY)) {
+                logOptions("graveyard-half-refusal", frame);
                 for (DecisionFrame.Option o : frame.options) {
-                    if ("cast_spell".equals(o.actionType)
-                            && o.sourceCardName != null
-                            && o.sourceCardName.contains("Finality")) {
-                        finality = o;
-                        finalityFrame = frame;
-                        break;
+                    if ("cast_spell".equals(o.actionType) && o.nativeBinding != null
+                            && constructed.game.getPlayers().get(0)
+                                    .getZone(ZoneType.Graveyard)
+                                    .getCards().stream()
+                                    .anyMatch(c -> c == o.nativeBinding.getHostCard())) {
+                        throw new AssertionError(
+                                "Find // Finality offered a graveyard cast of half "
+                                        + splitHalfName(o.nativeBinding) + "; the card has no "
+                                        + "Aftermath keyword so no half is graveyard-castable");
                     }
                 }
-                if (finality != null) {
+                break;
+            }
+            answerCommon(session, frame);
+        }
+
+        // Engine statement, Oracle-correct: a Find // Finality sitting in a
+        // graveyard has no activatable ability at all. The bridge therefore has
+        // nothing to offer and offers nothing, rather than inventing Rules.
+        final forge.game.player.Player p1 = constructed.game.getPlayers().get(0);
+        Card inGrave = null;
+        for (Card c : p1.getZone(ZoneType.Graveyard).getCards()) {
+            if (c.getName() != null && c.getName().contains("Finality")) {
+                inGrave = c;
+            }
+        }
+        Assert.assertNotNull(inGrave, "the resolved split card must be in the graveyard");
+        Assert.assertTrue(inGrave.getAllPossibleAbilities(p1, true).isEmpty(),
+                "a split card with no Aftermath half exposes no ability in the graveyard");
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void testFinalityFromHandResolvesAsymmetricPump() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("wsr24-pb07-finality", 4);
+        final BridgeSession session = constructed.session;
+        // The six fixture-scripted payment sources (CARD_28
+        // obj:card_28-mana-p1-0..5) and nothing else: three green and three
+        // black basic lands, which pay {4}{B}{G} exactly. No un-scripted mana
+        // source exists, so every offered tap is a fixture-authorized choice.
+        final java.util.List<Card> scriptedSources = new java.util.ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            scriptedSources.add(BridgeTestSupport.addCard(constructed.game, 0, "Forest",
+                    ZoneType.Battlefield));
+            scriptedSources.add(BridgeTestSupport.addCard(constructed.game, 0, "Swamp",
+                    ZoneType.Battlefield));
+        }
+        // Behavior discriminator required by the frozen CARD_28 event list:
+        // a 4/4 that receives the two +1/+1 counters survives -4/-4, an
+        // unboosted 2/2 does not.
+        BridgeTestSupport.addCard(constructed.game, 0, "Serra Angel", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Find // Finality", ZoneType.Hand);
+        fillLibraries(constructed, 5);
+        BridgeTestSupport.launchConstructed(constructed);
+        BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+
+        // Fixture-authorized cast: the frozen CARD_28 decision script selects
+        // cast_split_half with half=Finality on obj:card_28-subject.
+        boolean cast = false;
+        final StringBuilder priorityDump = new StringBuilder();
+        for (int i = 0; i < 40 && !cast; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(frame);
+            if (frameMatches(frame, "p1", DecisionFrame.Kind.PRIORITY)) {
+                priorityDump.append(logOptions("finality-scan", frame)).append('\n');
+                if (hasSplitHalfOption(frame, "Finality")) {
+                    final DecisionFrame.Option finality =
+                            exactSplitHalfOption(frame, "Finality");
+                    submit(session, frame, finality);
+                    cast = true;
                     break;
                 }
             }
             answerCommon(session, frame);
         }
-        Assert.assertNotNull(finality, "Finality aftermath cast must be engine-offered");
-        Assert.assertNotNull(finalityFrame);
-        submit(session, finalityFrame, finality);
-        settleMana(session);
-        drainToResolution(session);
+        Assert.assertTrue(cast, "the engine must offer the Finality half from hand; scanned:"
+                + priorityDump);
 
-        boolean serraSurvives = false;
-        for (Card card : constructed.game.getPlayers().get(0)
-                .getCardsIn(ZoneType.Battlefield)) {
-            if ("Serra Angel".equals(card.getName())) {
-                serraSurvives = true;
-            }
-        }
-        boolean opponentBearSurvives = false;
-        for (Card card : constructed.game.getPlayers().get(1)
-                .getCardsIn(ZoneType.Battlefield)) {
-            if ("Grizzly Bears".equals(card.getName())) {
-                opponentBearSurvives = true;
-            }
-        }
-        boolean aftermathExiled = false;
-        for (Card card : constructed.game.getPlayers().get(0)
-                .getZone(ZoneType.Exile).getCards()) {
-            if (card.getName() != null && card.getName().contains("Finality")) {
-                aftermathExiled = true;
-            }
-        }
+        // Pay, then answer the optional counter target (and nothing else)
+        // through the externally driven frames.
+        settleManaScripted(session, "p1", scriptedSources);
+        drainToResolutionWithFinalityTarget(session, scriptedSources);
+
+        final boolean serraSurvives = constructed.game.getPlayers().get(0)
+                .getCardsIn(ZoneType.Battlefield).stream()
+                .anyMatch(c -> "Serra Angel".equals(c.getName()));
+        final boolean opponentBearSurvives = constructed.game.getPlayers().get(1)
+                .getCardsIn(ZoneType.Battlefield).stream()
+                .anyMatch(c -> "Grizzly Bears".equals(c.getName()));
+        System.err.println("[wsr24-probe] finality serraSurvives=" + serraSurvives
+                + " bearSurvives=" + opponentBearSurvives);
         Assert.assertTrue(serraSurvives,
-                "own 4/4 must survive Finality after +2/+2 counters and -4/-4");
+                "own 4/4 with two +1/+1 counters must survive Finality's -4/-4");
         Assert.assertFalse(opponentBearSurvives,
                 "opponent 2/2 must die to Finality's -4/-4");
-        Assert.assertTrue(aftermathExiled,
-                "an aftermath spell cast from the graveyard must be exiled on resolution");
+
+        // A non-Aftermath spell returns to the graveyard after resolving.
+        boolean inGrave = false;
+        boolean inExile = false;
+        for (Card c : constructed.game.getPlayers().get(0)
+                .getZone(ZoneType.Graveyard).getCards()) {
+            if (c.getName() != null && c.getName().contains("Finality")) {
+                inGrave = true;
+            }
+        }
+        for (Card c : constructed.game.getPlayers().get(0)
+                .getZone(ZoneType.Exile).getCards()) {
+            if (c.getName() != null && c.getName().contains("Finality")) {
+                inExile = true;
+            }
+        }
+        Assert.assertTrue(inGrave, "a hand-cast Finality ends in the graveyard");
+        Assert.assertFalse(inExile,
+                "Finality must not be exiled: the card has no Aftermath keyword");
         session.shutdown(5000);
+    }
+
+    /**
+     * The engine's own identity for the half a cast option would put on the
+     * stack: the CardState the SpellAbility was built from. The bridge exposes
+     * the host card name for both halves of a split card, so the half identity
+     * has to come from the ability's own state, not from the card name and not
+     * from the option's position in the frame.
+     */
+    private static String splitHalfName(forge.game.spellability.SpellAbility sa) {
+        final forge.game.card.CardState state = sa.getCardState();
+        return state == null || state.getName() == null ? sa.getName() : state.getName();
+    }
+
+    private static boolean hasSplitHalfOption(DecisionFrame frame, String halfName) {
+        for (DecisionFrame.Option o : frame.options) {
+            if ("cast_spell".equals(o.actionType) && o.nativeBinding != null
+                    && halfName.equals(splitHalfName(o.nativeBinding))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Mana settlement restricted to the fixture-scripted payment sources. */
+    private static void settleManaScripted(BridgeSession session, String actorId,
+            java.util.List<Card> scriptedSources) {
+        final long deadline = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < deadline) {
+            final DecisionFrame frame = session.getCurrentFrame();
+            if (frame != null && frame.kind == DecisionFrame.Kind.MANA_PAYMENT
+                    && frame.status == DecisionFrame.Status.SUPPORTED
+                    && !alreadyAnswered(frame)) {
+                payScriptedBasicLands(session, actorId, scriptedSources);
+                continue;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private static boolean alreadyAnswered(DecisionFrame frame) {
+        return ANSWERED.contains(Long.valueOf(frame.revision));
+    }
+
+    /**
+     * Drains frames through Finality's resolution. The optional +1/+1 counter
+     * target is the single discretionary decision the frozen CARD_28 event list
+     * requires; it is selected by an exact engine-offered match on the fixture's
+     * creature, and the assertion also requires the two counters to have landed
+     * so a "decline" answer cannot silently satisfy the fixture.
+     */
+    private static void drainToResolutionWithFinalityTarget(BridgeSession session,
+            java.util.List<Card> scriptedSources) {
+        final DecisionFrame entry = session.getCurrentFrame();
+        if (entry != null && entry.status == DecisionFrame.Status.SUPPORTED
+                && !alreadyAnswered(entry)) {
+            answerFinalityFrame(session, entry, scriptedSources);
+        }
+        int quietPasses = 0;
+        for (int i = 0; i < 60; i++) {
+            DecisionFrame frame = null;
+            final long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline) {
+                final DecisionFrame cur = session.getCurrentFrame();
+                if (cur != null && !alreadyAnswered(cur)) {
+                    frame = cur;
+                    break;
+                }
+                if (session.isTerminal()) {
+                    frame = session.getCurrentFrame();
+                    break;
+                }
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            if (frame == null) {
+                if (session.getGame().getStack().isEmpty()) {
+                    return;
+                }
+                throw new AssertionError("finality drain stalled with a non-empty stack");
+            }
+            if (frame.status != DecisionFrame.Status.SUPPORTED) {
+                throw new AssertionError("finality drain hit UNSUPPORTED " + frame.kind
+                        + " reason=" + frame.reason);
+            }
+            answerFinalityFrame(session, frame, scriptedSources);
+            if (frame.kind == DecisionFrame.Kind.PRIORITY
+                    && session.getGame().getStack().isEmpty()) {
+                quietPasses++;
+                if (quietPasses >= 4) {
+                    return;
+                }
+            } else {
+                quietPasses = 0;
+            }
+        }
+    }
+
+    private static void answerFinalityFrame(BridgeSession session, DecisionFrame frame,
+            java.util.List<Card> scriptedSources) {
+        if (frame.kind == DecisionFrame.Kind.TARGET_SELECTION
+                || frame.kind == DecisionFrame.Kind.COPY_CHOICE) {
+            DecisionFrame.Option exact = null;
+            final StringBuilder dump = new StringBuilder();
+            for (DecisionFrame.Option o : frame.options) {
+                dump.append('|').append(o.actionType).append(':').append(o.label);
+                if (o.label == null || !o.label.contains("Serra Angel")) {
+                    continue;
+                }
+                Assert.assertNull(exact,
+                        "the counter target frame must expose exactly one Serra Angel option: "
+                                + dump);
+                exact = o;
+            }
+            Assert.assertNotNull(exact,
+                    "no exact Serra Angel counter-target option offered: " + dump);
+            submit(session, frame, exact);
+            return;
+        }
+        if (frame.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+            payScriptedBasicLands(session, frame.actorPlayerId, scriptedSources);
+            return;
+        }
+        answerCommon(session, frame);
     }
 
     // ------------------------------------------------------------------

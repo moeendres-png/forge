@@ -1,6 +1,5 @@
 package forge.gamesimulationtests.ws234;
 
-import java.util.List;
 
 import org.testng.annotations.Test;
 import static org.testng.Assert.*;
@@ -20,6 +19,18 @@ import forge.game.zone.ZoneType;
  * Cleave is Forge-systemic dual-SpellAbility with AlternativeCost.Cleave marking
  * (bracket removal per-card via distinct ValidTgts/Effects); Aftermath is engine
  * zone plus exile replacement. No card-name hacks; names are fixtures only.
+ *
+ * <p><b>Source-truth correction (PB-07 / CARD_28).</b> The three Aftermath trials
+ * that this class originally asserted were derived from a Lab-fork card-script
+ * mutation (Forge {@code bc347e62255e61d950154824b427251fdabcf5f6}) that added
+ * {@code K:Aftermath} to {@code Find // Finality} and rewrote that half's Oracle
+ * text. Find // Finality is an ordinary Double Feature split card; its current
+ * Oracle text carries no Aftermath keyword, so under CR 108.1 (Oracle text governs
+ * wording) and CR 702.127a (Aftermath is a keyword ability found on some split
+ * cards) it has no graveyard half at all. The trials below now assert the Oracle
+ * behavior, and the genuine Aftermath card is the positive control that the
+ * keyword itself is still supported by the engine. Card names are fixtures only;
+ * no card-name branch selects an expected answer.
  */
 public class Ws234CleaveAftermathTest extends SimulationTest {
 
@@ -142,7 +153,7 @@ public class Ws234CleaveAftermathTest extends SimulationTest {
     }
 
     @Test(timeOut = 60000)
-    public void testFindIsHandCastableFinalityIsAftermath() {
+    public void testFindFinalityBothHalvesArePlainSplitSpells() {
         Game game = initAndCreateGame();
         Player p1 = game.getPlayers().get(0);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p1);
@@ -162,62 +173,93 @@ public class Ws234CleaveAftermathTest extends SimulationTest {
         assertNotNull(findSa, "Find must have a spell ability");
         assertNotNull(finalitySa, "Finality must have a spell ability");
 
-        assertFalse(findSa.isAftermath(), "Find must not be aftermath");
-        assertTrue(finalitySa.isAftermath(), "Finality must carry engine Aftermath");
-        assertEquals(finalitySa.getRestrictions().getZone(), ZoneType.Graveyard,
-                "Finality must be restricted to graveyard by engine");
+        // Neither half carries Aftermath: the Oracle text of this card has no
+        // Aftermath keyword, so the engine must not manufacture one.
+        assertFalse(findSa.isAftermath(),
+                "Find must not be aftermath: the card's Oracle text has no Aftermath keyword");
+        assertFalse(finalitySa.isAftermath(),
+                "Finality must not be aftermath: the card's Oracle text has no Aftermath keyword");
+
+        // Neither half is restricted to a graveyard, so neither is a graveyard half.
+        assertNotEquals(finalitySa.getRestrictions().getZone(), ZoneType.Graveyard,
+                "Finality must not be restricted to the graveyard");
+        assertNotEquals(findSa.getRestrictions().getZone(), ZoneType.Graveyard,
+                "Find must not be restricted to the graveyard");
+
+        // Split-card characteristics come from the combined halves, not from the
+        // current (left) state: 8 total mana value and black-green identity.
+        assertEquals(split.getRules().getManaCost().getCMC(), 8,
+                "a split card's mana value is the sum of both halves (Find 2 + Finality 6)");
+        assertTrue(split.getRules().getColorIdentity().hasBlack()
+                        && split.getRules().getColorIdentity().hasGreen(),
+                "Find // Finality is a black-green split card");
     }
 
     @Test(timeOut = 60000)
-    public void testFinalityOnlyCastableFromGraveyard() {
+    public void testFinalityIsHandCastableAndGraveyardCastRefused() {
         Game game = initAndCreateGame();
         Player p1 = game.getPlayers().get(0);
         Player p2 = game.getPlayers().get(1);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p1);
 
-        // Reference: Commit // Memory is the proven Aftermath split (Commit hand, Memory grave).
+        // Positive control: a genuine Aftermath split card. Commit from hand,
+        // Memory from the graveyard. If this control ever fails, the Aftermath
+        // keyword itself regressed and the negative assertions below are void.
         Card ref = createCard("Commit // Memory", p1);
         CardState refRight = ref.getState(CardStateName.RightSplit);
         SpellAbility memorySa = refRight.getFirstSpellAbility();
-        assertTrue(memorySa.isAftermath(), "Memory must be aftermath (reference)");
+        memorySa.setActivatingPlayer(p1);
+        assertTrue(memorySa.isAftermath(), "Memory must be aftermath (reference control)");
+        assertEquals(memorySa.getRestrictions().getZone(), ZoneType.Graveyard,
+                "a genuine Aftermath half stays graveyard-gated (reference control)");
 
-        // Find in hand must offer abilities; Finality in hand must offer none.
+        // In hand both halves of Find // Finality are ordinary hand casts, and
+        // neither of them is an Aftermath half. The halves are told apart by
+        // their own mana cost (Find {B/G}{B/G} = 2, Finality {4}{B}{G} = 6),
+        // not by option order.
         Card inHand = addHand("Find // Finality", p1);
-        List<SpellAbility> handOptions = inHand.getAllPossibleAbilities(p1, true);
-        boolean handHasFind = false;
-        boolean handHasFinality = false;
-        for (SpellAbility sa : handOptions) {
+        final java.util.Set<Integer> offeredCmc = new java.util.TreeSet<>();
+        boolean handHasAftermath = false;
+        for (SpellAbility sa : inHand.getAllPossibleAbilities(p1, true)) {
             sa.setActivatingPlayer(p1);
             if (sa.isAftermath()) {
-                handHasFinality = true;
-            } else {
-                handHasFind = true;
+                handHasAftermath = true;
+                continue;
+            }
+            if (sa.isSpell()) {
+                offeredCmc.add(Integer.valueOf(sa.getPayCosts().getTotalMana().getCMC()));
             }
         }
-        assertTrue(handHasFind, "Find must be castable from hand");
-        assertFalse(handHasFinality, "Finality must not be castable from hand");
+        assertFalse(handHasAftermath, "no half of Find // Finality is an Aftermath half");
+        assertEquals(offeredCmc, new java.util.TreeSet<>(java.util.Arrays.asList(
+                        Integer.valueOf(2), Integer.valueOf(6))),
+                "both halves must be offered as distinct hand casts");
 
-        // Finality in graveyard must offer the aftermath ability.
+        // In the graveyard neither half may be cast: a split card's halves are
+        // only castable from the hand (or from exile for a meld, never here).
         Card inGrave = addGraveyard("Find // Finality", p1);
-        // The graveyard object exposes the right half via state; check engine zone gate directly.
-        CardState graveRight = inGrave.getState(CardStateName.RightSplit);
-        SpellAbility graveFinality = graveRight.getFirstSpellAbility();
-        graveFinality.setActivatingPlayer(p1);
-        assertTrue(graveFinality.isAftermath(), "graveyard Finality must still be aftermath");
-        assertEquals(graveFinality.getRestrictions().getZone(), ZoneType.Graveyard,
-                "graveyard Finality zone must remain graveyard");
-        // Engine restriction: aftermath SA requires graveyard; hand object fails, grave passes.
-        assertFalse(p2.getZone(ZoneType.Hand).contains(inGrave), "sanity: test card is in graveyard");
+        assertTrue(p1.getZone(ZoneType.Graveyard).contains(inGrave),
+                "sanity: the test card really is in the graveyard");
+        assertFalse(p2.getZone(ZoneType.Hand).contains(inGrave),
+                "sanity: the graveyard card is not in another player's hand");
+        for (SpellAbility sa : inGrave.getAllPossibleAbilities(p1, true)) {
+            sa.setActivatingPlayer(p1);
+            assertFalse(sa.isAftermath(),
+                    "a graveyard Find // Finality must expose no Aftermath ability");
+        }
     }
 
     @Test(timeOut = 60000)
-    public void testFinalityExilesOnResolve() {
+    public void testFinalityResolvesFromHandAndReturnsToGraveyard() {
         Game game = initAndCreateGame();
         Player p1 = game.getPlayers().get(0);
+        Player p2 = game.getPlayers().get(1);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p1);
-        // No creatures so the optional PutCounter has no targets; PumpAll hits nothing.
-        // Finality 4BG from graveyard must resolve then exile (not return to graveyard).
-        Card splitGrave = addGraveyard("Find // Finality", p1);
+
+        // Behavior discriminator: P1's 4/4 gets two +1/+1 counters and then
+        // -4/-4, so it survives as a 2/2; P2's unboosted 2/2 dies outright.
+        Card own = addBattlefield("Serra Angel", p1);
+        Card theirs = addBattlefield("Grizzly Bears", p2);
         for (int i = 0; i < 3; i++) {
             Card sw = createCard("Swamp", p1);
             sw.setGameTimestamp(game.getNextTimestamp());
@@ -229,24 +271,43 @@ public class Ws234CleaveAftermathTest extends SimulationTest {
             game.getAction().moveTo(ZoneType.Battlefield, fo, null, null);
         }
         game.getAction().checkStaticAbilities();
-        CardState right = splitGrave.getState(CardStateName.RightSplit);
-        SpellAbility finalitySa = right.getFirstSpellAbility();
+
+        // Cast the Finality half from HAND, the only zone Oracle permits.
+        Card inHand = addHand("Find // Finality", p1);
+        SpellAbility finalitySa = inHand.getState(CardStateName.RightSplit).getFirstSpellAbility();
         finalitySa.setActivatingPlayer(p1);
-        boolean ok = forge.game.player.PlaySpellAbility.playSpellAbility(
-                p1.getController(), p1, finalitySa);
-        assertTrue(ok, "Finality must cast from graveyard");
+        assertTrue(forge.game.player.PlaySpellAbility.playSpellAbility(
+                p1.getController(), p1, finalitySa), "Finality must be castable from hand");
         int guard = 0;
         while (!game.getStack().isEmpty() && guard < 20) {
             game.getStack().resolveStack();
             game.getAction().checkStateEffects(true);
             guard++;
         }
+        game.getAction().checkStateEffects(true);
+
+        // Asymmetric creature effect: -4/-4 kills the Bear, the Angel survives.
+        assertTrue(p1.getZone(ZoneType.Battlefield).contains(own),
+                "a 4/4 with two +1/+1 counters must survive Finality's -4/-4");
+        assertFalse(p2.getZone(ZoneType.Battlefield).contains(theirs),
+                "an unboosted 2/2 must die to Finality's -4/-4");
+
+        // A non-Aftermath spell returns to the graveyard after resolving; it is
+        // not exiled, and it did not come from the graveyard.
+        boolean inGrave = false;
         boolean inExile = false;
+        for (Card c : p1.getZone(ZoneType.Graveyard).getCards()) {
+            if (c.getName() != null && c.getName().contains("Finality")) {
+                inGrave = true;
+            }
+        }
         for (Card c : p1.getZone(ZoneType.Exile).getCards()) {
-            if (c.getName().contains("Finality")) {
+            if (c.getName() != null && c.getName().contains("Finality")) {
                 inExile = true;
             }
         }
-        assertTrue(inExile, "Finality must exile on resolve (Aftermath)");
+        assertTrue(inGrave, "a hand-cast Finality ends in the graveyard on resolution");
+        assertFalse(inExile,
+                "Finality must not be exiled: the card has no Aftermath keyword");
     }
 }
