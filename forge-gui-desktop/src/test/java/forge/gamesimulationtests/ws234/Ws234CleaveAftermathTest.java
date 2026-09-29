@@ -142,7 +142,7 @@ public class Ws234CleaveAftermathTest extends SimulationTest {
     }
 
     @Test(timeOut = 60000)
-    public void testFindIsHandCastableFinalityIsAftermath() {
+    public void testFindAndFinalityAreOrdinarySplitHalves() {
         Game game = initAndCreateGame();
         Player p1 = game.getPlayers().get(0);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p1);
@@ -162,62 +162,47 @@ public class Ws234CleaveAftermathTest extends SimulationTest {
         assertNotNull(findSa, "Find must have a spell ability");
         assertNotNull(finalitySa, "Finality must have a spell ability");
 
-        assertFalse(findSa.isAftermath(), "Find must not be aftermath");
-        assertTrue(finalitySa.isAftermath(), "Finality must carry engine Aftermath");
-        assertEquals(finalitySa.getRestrictions().getZone(), ZoneType.Graveyard,
-                "Finality must be restricted to graveyard by engine");
+        findSa.setActivatingPlayer(p1);
+        finalitySa.setActivatingPlayer(p1);
+        assertFalse(findSa.isAftermath(), "Find must not be Aftermath");
+        assertFalse(finalitySa.isAftermath(), "Finality must not be Aftermath");
     }
 
     @Test(timeOut = 60000)
-    public void testFinalityOnlyCastableFromGraveyard() {
+    public void testFinalityCastableFromHandNotGraveyard() {
         Game game = initAndCreateGame();
         Player p1 = game.getPlayers().get(0);
-        Player p2 = game.getPlayers().get(1);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p1);
 
-        // Reference: Commit // Memory is the proven Aftermath split (Commit hand, Memory grave).
+        // Positive reference: Commit // Memory remains a genuine Aftermath split.
         Card ref = createCard("Commit // Memory", p1);
-        CardState refRight = ref.getState(CardStateName.RightSplit);
-        SpellAbility memorySa = refRight.getFirstSpellAbility();
-        assertTrue(memorySa.isAftermath(), "Memory must be aftermath (reference)");
+        SpellAbility memorySa = ref.getState(CardStateName.RightSplit).getFirstSpellAbility();
+        assertTrue(memorySa.isAftermath(), "Memory must remain Aftermath (reference)");
 
-        // Find in hand must offer abilities; Finality in hand must offer none.
         Card inHand = addHand("Find // Finality", p1);
-        List<SpellAbility> handOptions = inHand.getAllPossibleAbilities(p1, true);
-        boolean handHasFind = false;
-        boolean handHasFinality = false;
-        for (SpellAbility sa : handOptions) {
-            sa.setActivatingPlayer(p1);
-            if (sa.isAftermath()) {
-                handHasFinality = true;
-            } else {
-                handHasFind = true;
-            }
-        }
-        assertTrue(handHasFind, "Find must be castable from hand");
-        assertFalse(handHasFinality, "Finality must not be castable from hand");
+        SpellAbility handFinality =
+                inHand.getState(CardStateName.RightSplit).getFirstSpellAbility();
+        handFinality.setActivatingPlayer(p1);
+        assertFalse(handFinality.isAftermath(), "Finality must be an ordinary split half");
+        assertTrue(handFinality.canPlay(true),
+                "Finality must be castable from hand at sorcery timing");
 
-        // Finality in graveyard must offer the aftermath ability.
         Card inGrave = addGraveyard("Find // Finality", p1);
-        // The graveyard object exposes the right half via state; check engine zone gate directly.
-        CardState graveRight = inGrave.getState(CardStateName.RightSplit);
-        SpellAbility graveFinality = graveRight.getFirstSpellAbility();
+        SpellAbility graveFinality =
+                inGrave.getState(CardStateName.RightSplit).getFirstSpellAbility();
         graveFinality.setActivatingPlayer(p1);
-        assertTrue(graveFinality.isAftermath(), "graveyard Finality must still be aftermath");
-        assertEquals(graveFinality.getRestrictions().getZone(), ZoneType.Graveyard,
-                "graveyard Finality zone must remain graveyard");
-        // Engine restriction: aftermath SA requires graveyard; hand object fails, grave passes.
-        assertFalse(p2.getZone(ZoneType.Hand).contains(inGrave), "sanity: test card is in graveyard");
+        assertFalse(graveFinality.isAftermath(), "graveyard copy must not acquire Aftermath");
+        assertFalse(graveFinality.canPlay(true),
+                "Finality needs a separate permission effect to be cast from graveyard");
     }
 
     @Test(timeOut = 60000)
-    public void testFinalityExilesOnResolve() {
+    public void testFinalityResolvesNormallyToGraveyard() {
         Game game = initAndCreateGame();
         Player p1 = game.getPlayers().get(0);
         game.getPhaseHandler().devModeSet(PhaseType.MAIN1, p1);
-        // No creatures so the optional PutCounter has no targets; PumpAll hits nothing.
-        // Finality 4BG from graveyard must resolve then exile (not return to graveyard).
-        Card splitGrave = addGraveyard("Find // Finality", p1);
+
+        Card splitHand = addHand("Find // Finality", p1);
         for (int i = 0; i < 3; i++) {
             Card sw = createCard("Swamp", p1);
             sw.setGameTimestamp(game.getNextTimestamp());
@@ -229,24 +214,38 @@ public class Ws234CleaveAftermathTest extends SimulationTest {
             game.getAction().moveTo(ZoneType.Battlefield, fo, null, null);
         }
         game.getAction().checkStaticAbilities();
-        CardState right = splitGrave.getState(CardStateName.RightSplit);
-        SpellAbility finalitySa = right.getFirstSpellAbility();
+
+        SpellAbility finalitySa =
+                splitHand.getState(CardStateName.RightSplit).getFirstSpellAbility();
         finalitySa.setActivatingPlayer(p1);
+        assertFalse(finalitySa.isAftermath(), "Finality must not use Aftermath replacement");
+        assertTrue(finalitySa.canPlay(true), "Finality must be legal from hand");
+
         boolean ok = forge.game.player.PlaySpellAbility.playSpellAbility(
                 p1.getController(), p1, finalitySa);
-        assertTrue(ok, "Finality must cast from graveyard");
+        assertTrue(ok, "Finality must cast from hand");
         int guard = 0;
         while (!game.getStack().isEmpty() && guard < 20) {
             game.getStack().resolveStack();
             game.getAction().checkStateEffects(true);
             guard++;
         }
+        assertTrue(game.getStack().isEmpty(), "Finality must resolve within the bounded loop");
+
+        boolean inGraveyard = false;
         boolean inExile = false;
-        for (Card c : p1.getZone(ZoneType.Exile).getCards()) {
-            if (c.getName().contains("Finality")) {
+        for (Card card : p1.getZone(ZoneType.Graveyard).getCards()) {
+            if (card.getName().contains("Finality")) {
+                inGraveyard = true;
+            }
+        }
+        for (Card card : p1.getZone(ZoneType.Exile).getCards()) {
+            if (card.getName().contains("Finality")) {
                 inExile = true;
             }
         }
-        assertTrue(inExile, "Finality must exile on resolve (Aftermath)");
+        assertTrue(inGraveyard, "ordinary split spell must go to graveyard after resolving");
+        assertFalse(inExile, "Finality must not receive Aftermath exile-on-resolve semantics");
     }
+
 }
