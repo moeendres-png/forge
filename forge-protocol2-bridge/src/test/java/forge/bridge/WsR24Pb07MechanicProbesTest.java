@@ -126,6 +126,18 @@ public class WsR24Pb07MechanicProbesTest {
                 }
             }
             throw new AssertionError("no combat decline offered");
+        } else if (frame.kind == DecisionFrame.Kind.COPY_CHOICE) {
+            DecisionFrame.Option exact = null;
+            for (DecisionFrame.Option o : frame.options) {
+                if ("Serra Angel".equals(o.sourceCardName)) {
+                    Assert.assertNull(exact,
+                            "Finality entity choice must expose exactly one Serra Angel option");
+                    exact = o;
+                }
+            }
+            Assert.assertNotNull(exact,
+                    "unsupported COPY_CHOICE: no exact Serra Angel entity option");
+            submit(session, frame, exact);
         } else {
             throw new AssertionError("unexpected " + frame.kind + " for " + frame.actorPlayerId);
         }
