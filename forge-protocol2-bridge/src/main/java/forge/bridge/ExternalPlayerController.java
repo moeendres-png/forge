@@ -3327,11 +3327,26 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public ImmutablePair<CardCollection, CardCollection> arrangeForScry(CardCollection topN) {
-        // R13: scry arrangement via bottom-subset framing (GENERIC_SELECTION).
-        // Every bottom-subset is one authoritative option in canonical
-        // encounter order (no order invented by the bridge); 2^N subsets
-        // with the usual 128-combination completeness cap. Always framed,
-        // even binary scry-1: scry is discretionary and never defaulted.
+        // CR 701.22a: any number to the bottom, the rest on top in any order.
+        return arrangeTopAndAway("scry_arrange", "Scry bottom", topN);
+    }
+
+    @Override
+    public ImmutablePair<CardCollection, CardCollection> arrangeForSurveil(CardCollection topN) {
+        // CR 701.25a: any number into the graveyard, the rest on top in any order.
+        return arrangeTopAndAway("surveil_arrange", "Surveil graveyard", topN);
+    }
+
+    /**
+     * Scry / surveil: first every subset to move away (bottom or graveyard)
+     * is one authoritative option (GENERIC_SELECTION, 2^N, 128 cap), then the
+     * kept cards are ordered one position at a time (frameTopOrder), as
+     * PlayerControllerHuman does with its order dialog. Nothing is defaulted:
+     * even a single-card look is framed. Left = top cards, first = topmost;
+     * right = cards moved away.
+     */
+    private ImmutablePair<CardCollection, CardCollection> arrangeTopAndAway(String actionType,
+            String awayLabel, CardCollection topN) {
         final List<Card> cards = new ArrayList<>();
         if (topN != null) {
             for (Card c : topN) {
@@ -3347,37 +3362,29 @@ public final class ExternalPlayerController extends PlayerController {
         try {
             subsets = enumerateSubsets(cards, 0, cards.size());
         } catch (Throwable t) {
-            throw unsupported("arrangeForScry", "subset enumeration failed");
+            throw unsupported(actionType, "subset enumeration failed");
         }
         if (subsets.isEmpty() || subsets.size() > 128) {
-            throw unsupported("arrangeForScry", "cannot offer complete selection");
+            throw unsupported(actionType, "cannot offer complete selection");
         }
         final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size());
-        for (List<Card> bottom : subsets) {
-            final java.util.Set<Card> bottomSet =
+        for (List<Card> away : subsets) {
+            final java.util.Set<Card> awaySet =
                     Collections.newSetFromMap(new IdentityHashMap<Card, Boolean>());
-            bottomSet.addAll(bottom);
-            final StringBuilder label = new StringBuilder("Scry bottom [");
-            for (Card c : bottom) {
-                try {
-                    label.append(c.getName()).append(';');
-                } catch (Throwable t) {
-                    label.append("?;");
-                }
+            awaySet.addAll(away);
+            final StringBuilder label = new StringBuilder(awayLabel).append(" [");
+            for (Card c : away) {
+                label.append(safeName(c)).append(';');
             }
             label.append("] top [");
             for (Card c : cards) {
-                if (!bottomSet.contains(c)) {
-                    try {
-                        label.append(c.getName()).append(';');
-                    } catch (Throwable t) {
-                        label.append("?;");
-                    }
+                if (!awaySet.contains(c)) {
+                    label.append(safeName(c)).append(';');
                 }
             }
             label.append(']');
-            options.add(DecisionFrame.payloadOption("scry_arrange", label.toString(), null,
-                    new ArrayList<>(bottom), "CARD_LIST"));
+            options.add(DecisionFrame.payloadOption(actionType, label.toString(), null,
+                    new ArrayList<>(away), "CARD_LIST"));
         }
         final BridgeSession.FrameAnswer answer = session.parkFrame(
                 DecisionFrame.Kind.GENERIC_SELECTION, player,
@@ -3385,31 +3392,67 @@ public final class ExternalPlayerController extends PlayerController {
         @SuppressWarnings("unchecked")
         final List<Card> chosen = (List<Card>) answer.selected.nativePayload;
         if (chosen == null) {
-            throw new IllegalStateException("scry option without native payload");
+            throw new IllegalStateException(actionType + " option without native payload");
         }
         final java.util.Set<Card> chosenSet =
                 Collections.newSetFromMap(new IdentityHashMap<Card, Boolean>());
         chosenSet.addAll(chosen);
-        final CardCollection toBottom = new CardCollection();
-        final CardCollection toTop = new CardCollection();
+        final CardCollection away = new CardCollection();
+        final List<Card> keep = new ArrayList<>();
         for (Card c : cards) {
             if (chosenSet.contains(c)) {
-                toBottom.add(c);
+                away.add(c);
             } else {
-                toTop.add(c);
+                keep.add(c);
             }
         }
-        return ImmutablePair.of(toTop, toBottom);
+        return ImmutablePair.of(frameTopOrder(keep), away);
     }
 
-    @Override
-    public ImmutablePair<CardCollection, CardCollection> arrangeForSurveil(CardCollection topN) {
-        throw unsupported("arrangeForSurveil", "surveil arrangement is not represented");
+    /**
+     * Orders cards going back on top of the library: the pilot picks the
+     * topmost remaining card one position at a time (N-1 frames, each listing
+     * every card still unplaced), so every order is reachable without a
+     * factorial option list. The returned collection is topmost first.
+     */
+    private CardCollection frameTopOrder(List<Card> keep) {
+        final CardCollection ordered = new CardCollection();
+        final List<Card> remaining = new ArrayList<>(keep);
+        while (remaining.size() > 1) {
+            final List<DecisionFrame.Option> options = new ArrayList<>(remaining.size());
+            for (Card c : remaining) {
+                final List<Card> payload = new ArrayList<>(1);
+                payload.add(c);
+                options.add(DecisionFrame.payloadOption("library_top_order",
+                        "Top of library, position " + (ordered.size() + 1) + ": "
+                                + safeName(c), null, payload, "CARD_LIST"));
+            }
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.GENERIC_SELECTION, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            @SuppressWarnings("unchecked")
+            final List<Card> picked = (List<Card>) answer.selected.nativePayload;
+            if (picked == null || picked.size() != 1 || !remaining.remove(picked.get(0))) {
+                throw new IllegalStateException("library order option without its card");
+            }
+            ordered.add(picked.get(0));
+        }
+        ordered.addAll(remaining);
+        return ordered;
+    }
+
+    private static String safeName(Card c) {
+        try {
+            return c.getName();
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     @Override
     public boolean willPutCardOnTop(Card card) {
-        throw unsupported("willPutCardOnTop", "library arrangement is not represented");
+        return parkBinary(DecisionFrame.Kind.GENERIC_SELECTION, "library_top_or_bottom",
+                "Put " + safeName(card) + " on top of your library (No: bottom)");
     }
 
     @Override
@@ -3752,8 +3795,28 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public String chooseSomeType(String kindOfType, SpellAbility sa, Collection<String> validTypes,
             boolean isOptional) {
-        throw unsupported("chooseSomeType", "type choice is not represented");
+        // Cavern of Souls, Kindred Discovery, ...: every engine-valid type is an
+        // option (no deck-frequency sorting, which only orders the Human list);
+        // an optional choice adds an explicit "no type".
+        final List<String> legal = new ArrayList<>();
+        if (validTypes != null) {
+            for (String type : validTypes) {
+                if (type != null) {
+                    legal.add(type);
+                }
+            }
+        }
+        if (isOptional) {
+            legal.add(NO_CHOICE);
+        }
+        final String chosen = parkChoices(DecisionFrame.Kind.GENERIC_SELECTION, "choose_type",
+                legal, item -> NO_CHOICE.equals(item) ? "Choose no " + kindOfType + " type"
+                        : "Choose " + kindOfType + " type [" + item + "]", "STRING");
+        return NO_CHOICE.equals(chosen) ? null : chosen;
     }
+
+    /** Sentinel payload for an explicit optional "choose nothing" option. */
+    private static final String NO_CHOICE = "__bridge_no_choice__";
 
     @Override
     public String chooseSector(Card assignee, String ai, List<String> sectors) {
@@ -3805,7 +3868,37 @@ public final class ExternalPlayerController extends PlayerController {
     public Object vote(SpellAbility sa, String prompt, List<Object> options,
             com.google.common.collect.ListMultimap<Object, Player> votes, Player forPlayer,
             boolean optional) {
-        throw unsupported("vote", "voting is not represented");
+        // Council's Judgment, Expropriate, ...: one vote among the engine-supplied
+        // options (players, permanents or modes); optional votes may abstain.
+        final List<Object> legal = new ArrayList<>();
+        if (options != null) {
+            for (Object option : options) {
+                if (option != null) {
+                    legal.add(option);
+                }
+            }
+        }
+        if (optional) {
+            legal.add(NO_CHOICE);
+        }
+        final Object chosen = parkChoices(DecisionFrame.Kind.GENERIC_SELECTION, "vote", legal,
+                item -> NO_CHOICE.equals(item) ? "Do not vote"
+                        : (prompt == null ? "Vote" : prompt) + " [" + voteLabel(item) + "]",
+                "OBJECT");
+        return NO_CHOICE.equals(chosen) ? null : chosen;
+    }
+
+    private static String voteLabel(Object item) {
+        if (item instanceof Card) {
+            return ((Card) item).getName() + " #" + ((Card) item).getId();
+        }
+        if (item instanceof Player) {
+            return ((Player) item).getName();
+        }
+        if (item instanceof SpellAbility) {
+            return ((SpellAbility) item).getDescription();
+        }
+        return String.valueOf(item);
     }
 
     @Override
@@ -4152,7 +4245,31 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public boolean chooseCardsPile(SpellAbility sa, CardCollectionView pile1, CardCollectionView pile2,
             String faceUp) {
-        throw unsupported("chooseCardsPile", "pile choice is not represented");
+        // Fact or Fiction, ...: true = pile 1. faceUp carries the effect's
+        // FaceDown param ("False": both face up; "One": pile 1 face down;
+        // "True": both face down). Cards are named only where the Human
+        // controller shows them, so no hidden information leaks via labels.
+        final boolean showPile1 = "False".equals(faceUp);
+        final boolean showPile2 = !"True".equals(faceUp);
+        final List<Boolean> legal = new ArrayList<>(2);
+        legal.add(Boolean.TRUE);
+        legal.add(Boolean.FALSE);
+        return parkChoices(DecisionFrame.Kind.GENERIC_SELECTION, "choose_pile", legal,
+                item -> item ? pileLabel(1, pile1, showPile1) : pileLabel(2, pile2, showPile2),
+                "BOOLEAN");
+    }
+
+    private static String pileLabel(int number, CardCollectionView pile, boolean shown) {
+        final StringBuilder label = new StringBuilder("Pile ").append(number).append(" (")
+                .append(pile == null ? 0 : pile.size()).append(" cards)");
+        if (shown && pile != null) {
+            label.append(" [");
+            for (Card card : pile) {
+                label.append(safeName(card)).append(';');
+            }
+            label.append(']');
+        }
+        return label.toString();
     }
 
     @Override
@@ -4225,7 +4342,10 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public String chooseProtectionType(SpellAbility sa, List<String> choices) {
-        throw unsupported("chooseProtectionType", "protection choice is not represented");
+        // Mother of Runes, Giver of Runes, ...: one of the engine-supplied choices.
+        return parkChoices(DecisionFrame.Kind.GENERIC_SELECTION, "protection_type",
+                choices == null ? null : new ArrayList<>(choices),
+                item -> "Protection from " + item, "STRING");
     }
 
     @Override
