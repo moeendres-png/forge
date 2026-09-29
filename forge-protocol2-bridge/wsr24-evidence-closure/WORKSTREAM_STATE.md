@@ -62,3 +62,33 @@ Date: 2026-09-27
 ## PB-06 layer-trace status
 
 Complete — see `PB06_LAYER_TRACE.md` (6/6 PASS, `PB06_EVIDENCE.json`).
+
+## PB-07 source-truth correction — Find // Finality (2026-09-29, branch `sol/finality-sourcetruth-pb07-20260929`)
+
+The "Aftermath (Finality) pinned as ENGINE_GAP" paragraph above is **RETRACTED**. The gap was an
+artifact of a false card-script mutation, not an engine limitation.
+
+- **Defect**: Forge commit `bc347e62255e61d950154824b427251fdabcf5f6` added `K:Aftermath` to the
+  Finality half of `forge-gui/res/cardsfolder/f/find_finality.txt` and rewrote that half's Oracle
+  line to match. That commit is on `master` (`ef958ee9`) and on PRs #4/#5/#6/#7.
+- **Authority**: the real card prints no Aftermath keyword on either face. CR 108.1 makes Oracle text
+  the wording authority; CR 702.127a defines Aftermath as a keyword ability found on some split
+  cards. Pristine upstream `a37a865a` scripts the card without `K:Aftermath`; XMage `b1959698`
+  independently treats it as a plain split card.
+- **Correction**: `find_finality.txt` restored to the pristine Oracle script (now byte-identical to
+  `a37a865a`). No Rules-Core Java change. The fork's Aftermath card set is exactly the 27 Oracle
+  Aftermath cards, so this was the only false Aftermath in the database.
+- **PB07 register**: row 28 re-derived as `RUNTIME_QUALIFIED`; summary 29 qualified / 0 touched /
+  0 construction-only / 0 engine gap. Denominator 29 unchanged. `global_verdict` remains PARTIAL and
+  Forge-local; PB-07 global closure is still NOT claimed.
+- **PR #6 disposition**: the `Card.getAllPossibleAbilities` split-half enumeration and
+  `DeepseekAftermathDiscoveryTest` exist only to serve the false requirement; they are not carried
+  into this branch and are not retained because their own tests were green. PR #6 itself is left
+  untouched for coordinator supersession adjudication.
+- **Historical evidence**: the `ws234-s3`, `ws231-admission` and `ws236-s1` artifacts are preserved
+  verbatim and carry a `SUPERSEDED_FIND_FINALITY_SOURCE_TRUTH_20260929.md` pointer. The Lab's
+  `PROVIDER_READINESS_PACKET_20260928.md` still carries the false 28/29 statement but is an active
+  edit surface of Lab PR #289, so the correction is handed off, not pushed.
+
+Full record, including the decision-integrity argument for the new probe path and the impact matrix:
+`FIND_FINALITY_SOURCE_TRUTH_20260929.md`.
