@@ -385,24 +385,25 @@ public final class StateProjection {
         // names only, so on a multiplayer board two players' Sol Rings (or two
         // opponents) were indistinguishable to the pilot. Not part of the
         // semantic fingerprint; actor-scoped like the rest of the action.
-        final JsonArray refs = objectRefs(session, option.nativePayload);
+        final JsonArray refs = objectRefs(session, option.nativePayload,
+                session.playerById(frame.actorPlayerId));
         if (refs.size() > 0) {
             action.getAsJsonObject("metadata").add("object_refs", refs);
         }
         return action;
     }
 
-    static JsonArray objectRefs(BridgeSession session, Object payload) {
+    static JsonArray objectRefs(BridgeSession session, Object payload, Player actor) {
         final JsonArray refs = new JsonArray();
         if (payload instanceof Iterable) {
             for (Object item : (Iterable<?>) payload) {
-                final JsonObject ref = objectRef(session, item);
+                final JsonObject ref = objectRef(session, item, actor);
                 if (ref != null) {
                     refs.add(ref);
                 }
             }
         } else {
-            final JsonObject ref = objectRef(session, payload);
+            final JsonObject ref = objectRef(session, payload, actor);
             if (ref != null) {
                 refs.add(ref);
             }
@@ -410,12 +411,43 @@ public final class StateProjection {
         return refs;
     }
 
-    private static JsonObject objectRef(BridgeSession session, Object item) {
+    /**
+     * A card's identity is referenced only when the deciding player may see
+     * it: a face-up card in a public zone, or a card the actor owns (their
+     * own hand or library). Anything else (an opponent's unrevealed hand
+     * card, a face-down permanent) is marked hidden, never named or numbered,
+     * matching the "&lt;hidden&gt;" labels of those frames.
+     */
+    private static boolean identityVisible(Card card, Player actor) {
+        if (card.isFaceDown()) {
+            return actor != null && actor.equals(card.getController());
+        }
+        final forge.game.zone.Zone zone = card.getZone();
+        if (zone == null) {
+            return false;
+        }
+        switch (zone.getZoneType()) {
+            case Battlefield:
+            case Graveyard:
+            case Exile:
+            case Stack:
+            case Command:
+                return true;
+            default:
+                return actor != null && actor.equals(card.getOwner());
+        }
+    }
+
+    private static JsonObject objectRef(BridgeSession session, Object item, Player actor) {
         try {
             if (item instanceof Card) {
                 final Card card = (Card) item;
                 final JsonObject ref = new JsonObject();
                 ref.addProperty("kind", "card");
+                if (!identityVisible(card, actor)) {
+                    ref.addProperty("hidden", true);
+                    return ref;
+                }
                 ref.addProperty("card_id", card.getId());
                 ref.addProperty("name", card.getName());
                 if (card.getController() != null) {

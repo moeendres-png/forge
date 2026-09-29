@@ -234,4 +234,29 @@ public class MultiplayerTargetingTest {
                 "the redirected Shock killed p3's goblin");
         session.shutdown(5000);
     }
+
+    @Test(timeOut = 300000)
+    public void objectRefsNeverIdentifyCardsTheActorCannotSee() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("mp-refs-hidden", 4);
+        final Card ownHand = BridgeTestSupport.addCard(constructed.game, 0, "Shock",
+                ZoneType.Hand);
+        final Card opponentHand = BridgeTestSupport.addCard(constructed.game, 2, "Craw Wurm",
+                ZoneType.Hand);
+        final Card opponentCreature = BridgeTestSupport.addCard(constructed.game, 2,
+                "Grizzly Bears", ZoneType.Battlefield);
+        final forge.game.player.Player p1 = constructed.game.getPlayers().get(0);
+        final com.google.gson.JsonArray refs = StateProjection.objectRefs(constructed.session,
+                java.util.List.of(ownHand, opponentHand, opponentCreature), p1);
+        Assert.assertEquals(refs.size(), 3);
+        Assert.assertEquals(refs.get(0).getAsJsonObject().get("name").getAsString(), "Shock",
+                "the actor's own hand card is identified");
+        final com.google.gson.JsonObject hidden = refs.get(1).getAsJsonObject();
+        Assert.assertTrue(hidden.get("hidden").getAsBoolean(), "an opponent's hand card is hidden");
+        Assert.assertFalse(hidden.has("name") || hidden.has("card_id"),
+                "no name or id for a card p1 cannot see: " + hidden);
+        Assert.assertEquals(refs.get(2).getAsJsonObject().get("controller").getAsString(), "p3",
+                "a public permanent is identified with its controller");
+        constructed.session.shutdown(5000);
+    }
 }
