@@ -132,4 +132,61 @@ public class MultiplayerCombatTest {
     public void fivePlayersSplitAttackAndPerDefenderBlocks() {
         splitAttack(5);
     }
+
+    // ---- Goad (CR 701.38): until p1's next turn the goaded creature attacks
+    // each combat if able, and a player other than p1 if able.
+
+    @Test(timeOut = 300000)
+    public void goadedCreatureMustAttackSomeoneOtherThanTheGoader() {
+        final int players = 4;
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("mp-goad", players);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Disrupt Decorum", ZoneType.Hand);
+        for (int i = 0; i < 4; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Mountain", ZoneType.Battlefield);
+        }
+        BridgeTestSupport.addCard(constructed.game, 1, "Grizzly Bears", ZoneType.Battlefield);
+        for (int seat = 0; seat < players; seat++) {
+            for (int i = 0; i < 10; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        for (int i = 0; i < 4; i++) {
+            submit(session, frame, pick(frame, o -> "activate_ability".equals(o.actionType)
+                    && "Mountain".equals(o.sourceCardName), "Mountain"));
+            frame = BridgeTestSupport.awaitFrame(session, 15000);
+        }
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Disrupt Decorum".equals(o.sourceCardName), "cast Disrupt Decorum"));
+        DecisionFrame p2Attack = null;
+        for (int i = 0; i < 200 && p2Attack == null; i++) {
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,
+                    "blocked: " + f.kind + " " + f.reason);
+            if (f.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
+                    && "p2".equals(f.actorPlayerId)) {
+                p2Attack = f;
+            } else if (f.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS) {
+                submit(session, f, pick(f, o -> "No attacks".equals(o.label), "no attacks"));
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                submit(session, f, pick(f, o -> o.isPass, "pass"));
+            } else {
+                throw new AssertionError("unexpected " + f.kind + " for " + f.actorPlayerId);
+            }
+        }
+        Assert.assertNotNull(p2Attack, "p2 reached its declare-attackers decision");
+        final List<String> labels = new ArrayList<>();
+        p2Attack.options.forEach(o -> labels.add(o.label));
+        Assert.assertEquals(labels.stream().sorted().toList(),
+                List.of("Attack Grizzly Bears -> p3;", "Attack Grizzly Bears -> p4;"),
+                "goaded: must attack, and not the goader p1: " + labels);
+        submit(session, p2Attack, pick(p2Attack, o -> o.label.contains("-> p4"), "attack p4"));
+        session.shutdown(5000);
+    }
 }
