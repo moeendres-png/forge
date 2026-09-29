@@ -174,4 +174,67 @@ public class LibraryArrangementTest {
         Assert.assertEquals(topNames(session, 1), List.of(top.get(0)), "the other is next");
         session.shutdown(5000);
     }
+
+    // ---- Six cards to the bottom in any order (Collected Company): the order
+    // was all-or-nothing up to five cards; six or more ended the session.
+
+    @Test(timeOut = 300000)
+    public void collectedCompanyPutsSixCardsOnTheBottomInThePilotsOrder() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("zone-order-six", 2);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Collected Company", ZoneType.Hand);
+        for (int i = 0; i < 4; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Forest", ZoneType.Battlefield);
+        }
+        final String[] lands = {"Plains", "Island", "Swamp", "Mountain", "Wastes", "Forest",
+            "Command Tower", "Evolving Wilds"};
+        for (String land : lands) {
+            BridgeTestSupport.addCard(constructed.game, 0, land, ZoneType.Library);
+        }
+        for (int i = 0; i < 7; i++) {
+            BridgeTestSupport.addCard(constructed.game, 1, "Plains", ZoneType.Library);
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        final List<String> top6 = topNames(session, 6);
+        for (int i = 0; i < 4; i++) {
+            submit(session, frame, pick(frame, o -> "activate_ability".equals(o.actionType)
+                    && "Forest".equals(o.sourceCardName), "Forest"));
+            frame = BridgeTestSupport.awaitFrame(session, 15000);
+        }
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Collected Company".equals(o.sourceCardName), "cast Collected Company"));
+        // Choose the reverse of the looked-at order, position by position.
+        final List<String> wanted = new java.util.ArrayList<>(top6);
+        java.util.Collections.reverse(wanted);
+        int placed = 0;
+        for (int i = 0; i < 40 && (placed < 5 || !session.getGame().getStack().isEmpty()); i++) {
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,
+                    "blocked: " + f.kind + " " + f.reason);
+            if (has(f, "order_zone_next")) {
+                Assert.assertEquals(f.options.size(), 6 - placed);
+                final String next = wanted.get(placed++);
+                submit(session, f, pick(f, o -> o.label.endsWith(": " + next)
+                        && o.label.contains("1 = closest to the top"), "position " + placed));
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                submit(session, f, pick(f, o -> o.isPass, "pass"));
+            } else {
+                throw new AssertionError("unexpected " + f.kind + " " + f.reason + " "
+                        + f.options.stream().map(o -> o.actionType + "|" + o.label).toList());
+            }
+        }
+        Assert.assertEquals(placed, 5, "six cards ordered in five picks");
+        final List<String> library = session.getGame().getPlayers().get(0)
+                .getCardsIn(ZoneType.Library).stream().map(Card::getName).toList();
+        final List<String> bottom6 = library.subList(library.size() - 6, library.size());
+        // Dig moves the rest one by one to the bottom, so position 1 ends up
+        // closest to the top of that bottom block, as its label says.
+        Assert.assertEquals(bottom6, wanted, "the chosen order is kept, position 1 topmost");
+        session.shutdown(5000);
+    }
 }

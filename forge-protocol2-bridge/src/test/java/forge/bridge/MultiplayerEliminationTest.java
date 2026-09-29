@@ -303,4 +303,67 @@ public class MultiplayerEliminationTest {
         }
         session.shutdown(5000);
     }
+
+    // ---- "Each player sacrifices a creature" (Innocent Blood) in 4P: every
+    // player with a real choice decides for themselves; a single creature is
+    // sacrificed without a frame; a player with none is not asked.
+
+    @Test(timeOut = 300000)
+    public void innocentBloodEachPlayerChoosesTheirOwnSacrifice() {
+        final int players = 4;
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("mp-each-sac", players);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Innocent Blood", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Swamp", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Grizzly Bears", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Craw Wurm", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Llanowar Elves", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 1, "Palace Guard", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 2, "Runeclaw Bear", ZoneType.Battlefield);
+        for (int seat = 0; seat < players; seat++) {
+            for (int i = 0; i < 10; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        submit(session, frame, pick(frame, o -> "activate_ability".equals(o.actionType)
+                && "Swamp".equals(o.sourceCardName), "Swamp"));
+        frame = BridgeTestSupport.awaitFrame(session, 15000);
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Innocent Blood".equals(o.sourceCardName), "cast Innocent Blood"));
+        final List<String> choosers = new ArrayList<>();
+        boolean resolved = false;
+        for (int i = 0; i < 40 && !resolved; i++) {
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,
+                    "blocked: " + f.kind + " " + f.reason);
+            if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                resolved = !choosers.isEmpty() && session.getGame().getStack().isEmpty();
+                if (!resolved) {
+                    submit(session, f, pick(f, o -> o.isPass, "pass"));
+                }
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else {
+                choosers.add(f.actorPlayerId);
+                final String keepSmall = "p1".equals(f.actorPlayerId) ? "Craw Wurm"
+                        : "Palace Guard";
+                Assert.assertEquals(f.options.size(), 2, f.actorPlayerId + " picks one of two");
+                submit(session, f, pick(f, o -> o.label != null && o.label.contains(keepSmall),
+                        f.actorPlayerId + " sacrifices " + keepSmall));
+            }
+        }
+        Assert.assertEquals(choosers, List.of("p1", "p2"),
+                "exactly the players with a real choice decide, in APNAP order");
+        final java.util.function.BiPredicate<Integer, String> onField = (seat, name) ->
+                session.getGame().getPlayers().get(seat).getCardsIn(ZoneType.Battlefield)
+                        .stream().anyMatch(c -> c.getName().equals(name));
+        Assert.assertTrue(onField.test(0, "Grizzly Bears") && !onField.test(0, "Craw Wurm"));
+        Assert.assertTrue(onField.test(1, "Llanowar Elves") && !onField.test(1, "Palace Guard"));
+        Assert.assertFalse(onField.test(2, "Runeclaw Bear"), "p3's only creature was sacrificed");
+        session.shutdown(5000);
+    }
 }

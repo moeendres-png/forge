@@ -3665,7 +3665,46 @@ public final class ExternalPlayerController extends PlayerController {
             }
         }
         if (legal.size() > 5) {
-            throw unsupported("orderMoveToZoneList", "too many cards to order completely");
+            // Collected Company / Dig Through Time: six or more cards to order.
+            // The order is chosen one position at a time (every order stays
+            // reachable); position 1 means what the Human order dialog says.
+            final String first;
+            if (destinationZone == ZoneType.Library) {
+                first = orderedMoveToTopOfLibrary(destinationZone, source)
+                        ? "closest to the top" : "closest to the bottom";
+            } else if (destinationZone == ZoneType.Graveyard) {
+                first = "closest to the bottom";
+            } else {
+                first = "put first";
+            }
+            final CardCollection orderedLarge = new CardCollection();
+            final List<Card> remaining = new ArrayList<>(legal);
+            while (remaining.size() > 1) {
+                final List<DecisionFrame.Option> options = new ArrayList<>(remaining.size());
+                for (Card card : remaining) {
+                    final List<Card> payload = new ArrayList<>(1);
+                    payload.add(card);
+                    options.add(DecisionFrame.payloadOption("order_zone_next",
+                            "Position " + (orderedLarge.size() + 1) + " (1 = " + first + "): "
+                                    + safeName(card), null, payload, "CARD_LIST"));
+                }
+                final BridgeSession.FrameAnswer answer = session.parkFrame(
+                        DecisionFrame.Kind.ORDER_CHOICE, player,
+                        DecisionFrame.Status.SUPPORTED, "", options);
+                @SuppressWarnings("unchecked")
+                final List<Card> picked = (List<Card>) answer.selected.nativePayload;
+                if (picked == null || picked.size() != 1 || !remaining.remove(picked.get(0))) {
+                    throw new IllegalStateException("zone order option without its card");
+                }
+                orderedLarge.add(picked.get(0));
+            }
+            orderedLarge.addAll(remaining);
+            final Map<String, String> chosenLarge = new LinkedHashMap<>();
+            chosenLarge.put("actor", actorId());
+            chosenLarge.put("destination", destinationZone == null ? "?" : destinationZone.name());
+            chosenLarge.put("count", Integer.toString(legal.size()));
+            session.audit("zone_order_chosen", chosenLarge);
+            return orderedLarge;
         }
         // WSR24 completeness bound: 5 cards enumerate 120 permutations, still
         // within the 128-combination completeness cap, so every order is one
