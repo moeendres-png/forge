@@ -4129,7 +4129,58 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid,
             FCollectionView<Player> allPayers) {
-        throw unsupported("payCostToPreventEffect", "prevention payment choice is not represented");
+        // "... unless [a player] pays {X}" (Rhystic Study, Smothering Tithe,
+        // Mana Leak): whether to pay is the payer's discretionary choice. The
+        // bridge frames only that choice; payment itself runs through the same
+        // native path Forge's human controller uses
+        // (PlaySpellAbility.payCostDuringAbilityResolve -> framed payManaCost with
+        // pool and mid-payment taps). An attempt the payer cannot complete fails
+        // natively, is refunded, and counts as not paid. Costs with non-mana
+        // parts would reach confirmPayment, which the bridge never answers on
+        // the pilot's behalf, so they stay fail-closed here.
+        if (cost == null) {
+            throw unsupported("payCostToPreventEffect", "no cost to pay");
+        }
+        for (CostPart part : cost.getCostParts()) {
+            if (!(part instanceof CostPartMana)) {
+                throw unsupported("payCostToPreventEffect",
+                        "non-mana prevention cost is not represented: "
+                                + part.getClass().getSimpleName());
+            }
+        }
+        String costText;
+        try {
+            costText = cost.toSimpleString();
+        } catch (Throwable t) {
+            costText = "the cost";
+        }
+        final String sourceName = sa == null || sa.getHostCard() == null
+                ? "effect" : sa.getHostCard().getName();
+        final List<DecisionFrame.Option> options = new ArrayList<>(2);
+        options.add(DecisionFrame.confirmOption("pay_to_prevent",
+                "Pay " + costText + " for " + sourceName, true));
+        options.add(DecisionFrame.confirmOption("pay_to_prevent",
+                "Do not pay " + costText + " for " + sourceName, false));
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.COST_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        final Boolean pay = answer.selected.confirmValue;
+        if (pay == null) {
+            throw new IllegalStateException("prevention payment option without confirm value");
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("source", sourceName);
+        details.put("choice", pay.toString());
+        if (!pay.booleanValue()) {
+            session.audit("prevention_payment_declined", details);
+            return false;
+        }
+        final boolean paid = forge.game.player.PlaySpellAbility.payCostDuringAbilityResolve(
+                this, player, cost, sa, null);
+        details.put("paid", Boolean.toString(paid));
+        session.audit("prevention_payment_attempted", details);
+        return paid;
     }
 
     @Override
