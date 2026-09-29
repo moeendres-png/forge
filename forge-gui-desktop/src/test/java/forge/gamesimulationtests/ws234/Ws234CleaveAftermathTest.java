@@ -1,7 +1,5 @@
 package forge.gamesimulationtests.ws234;
 
-import java.util.List;
-
 import org.testng.annotations.Test;
 import static org.testng.Assert.*;
 
