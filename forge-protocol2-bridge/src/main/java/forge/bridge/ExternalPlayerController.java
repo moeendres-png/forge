@@ -34,7 +34,6 @@ import forge.game.cost.CostPartWithList;
 import forge.game.cost.CostTap;
 import forge.game.cost.CostAddMana;
 import forge.game.cost.CostUntap;
-import forge.game.GameActionUtil;
 import forge.game.keyword.KeywordInterface;
 import forge.game.mana.Mana;
 import forge.game.mana.ManaConversionMatrix;
@@ -309,8 +308,10 @@ public final class ExternalPlayerController extends PlayerController {
      * fail closed at payment with rollback. WS217: chooser-divided
      * allocation travels through the native Core-owned divided-allocation seam
      * (DIVIDED_ALLOCATION frames, CR 601.2d) with native validation, so it no
-     * longer blocks offering. AnnounceType, optional costs and the remaining
-     * non-framed cost parts still fail closed.
+     * longer blocks offering. Optional additional costs (kicker, buyback,
+     * entwine, ...) are chosen in a COST_SELECTION frame via
+     * chooseOptionalCosts, so they no longer block offering either.
+     * AnnounceType and the remaining non-framed cost parts still fail closed.
      */
     static String classifyComplex(SpellAbility sa) {
         if (sa.usesTargeting() && !isSingleTargetRepresentable(sa)) {
@@ -318,9 +319,6 @@ public final class ExternalPlayerController extends PlayerController {
         }
         if (sa.hasParam("AnnounceType")) {
             return "ANNOUNCE";
-        }
-        if (!GameActionUtil.getOptionalCostValues(sa).isEmpty()) {
-            return "OPTIONAL_COST";
         }
         final String manaBlocker = classifyMana(sa);
         if (manaBlocker != null) {
@@ -4077,7 +4075,55 @@ public final class ExternalPlayerController extends PlayerController {
     @Override
     public List<OptionalCostValue> chooseOptionalCosts(SpellAbility chosen,
             List<OptionalCostValue> optionalCostValues) {
-        throw unsupported("chooseOptionalCosts", "optional costs are not represented");
+        // CR 601.2b/601.2f: after choosing to cast a spell the caster announces
+        // which optional additional costs (kicker, buyback, entwine, ...) to pay.
+        // The engine supplies the complete candidate list
+        // (GameActionUtil.getOptionalCostValues) and accepts any subset, exactly
+        // as Forge's human controller offers it; paying the chosen costs is
+        // validated natively afterwards (an unpayable choice rolls the cast
+        // back). Every subset, including paying none, is one option.
+        if (optionalCostValues == null || optionalCostValues.isEmpty()) {
+            return new ArrayList<>();
+        }
+        if (optionalCostValues.size() > 6) {
+            throw unsupported("chooseOptionalCosts", "too many optional costs to offer completely");
+        }
+        final List<List<OptionalCostValue>> subsets =
+                enumerateSubsets(new ArrayList<>(optionalCostValues), 0, optionalCostValues.size());
+        final List<DecisionFrame.Option> options = new ArrayList<>(subsets.size());
+        for (List<OptionalCostValue> subset : subsets) {
+            final StringBuilder label = new StringBuilder();
+            if (subset.isEmpty()) {
+                label.append("Pay no optional costs");
+            } else {
+                label.append("Pay optional");
+                for (OptionalCostValue value : subset) {
+                    label.append(' ');
+                    try {
+                        label.append(value.toString());
+                    } catch (Throwable t) {
+                        label.append('?');
+                    }
+                    label.append(';');
+                }
+            }
+            options.add(DecisionFrame.payloadOption("choose_optional_costs", label.toString(),
+                    chosen == null ? null : chosen.getHostCard().getName(),
+                    new ArrayList<>(subset), "OPTIONAL_COSTS"));
+        }
+        final BridgeSession.FrameAnswer answer = session.parkFrame(
+                DecisionFrame.Kind.COST_SELECTION, player,
+                DecisionFrame.Status.SUPPORTED, "", options);
+        @SuppressWarnings("unchecked")
+        final List<OptionalCostValue> picked = (List<OptionalCostValue>) answer.selected.nativePayload;
+        if (picked == null) {
+            throw new IllegalStateException("optional cost option without native payload");
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("count", Integer.toString(picked.size()));
+        session.audit("optional_costs_chosen", details);
+        return new ArrayList<>(picked);
     }
 
     @Override
