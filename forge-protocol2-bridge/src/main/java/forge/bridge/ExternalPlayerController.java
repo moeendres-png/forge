@@ -645,12 +645,14 @@ public final class ExternalPlayerController extends PlayerController {
         if (toPay.isZero() || toPay.isNoCost()) {
             return true;
         }
+        // Offering/Emerge (CR 702.48 / 702.119): CostAdjustment asks the payer
+        // which permanent to sacrifice (framed via choosePermanentsToSacrifice)
+        // and reduces the cost. As in PlaySpellAbility.payManaCost, no chosen
+        // permanent cancels the cast, and the sacrifice happens only once the
+        // mana is paid.
+        final boolean sacrificeReduces = sa != null && (sa.isOffering() || sa.isEmerge());
+        boolean paid = false;
         try {
-            // Offering/Emerge need dedicated selections; fail closed rather
-            // than paying incorrectly. Pilot pre-floats all other mana.
-            if (sa != null && (sa.isOffering() || sa.isEmerge())) {
-                return false;
-            }
             final forge.game.mana.ManaCostBeingPaid beingPaid =
                     new forge.game.mana.ManaCostBeingPaid(toPay);
             // Mirror the engine's X binding (PlaySpellAbility authority): retain
@@ -667,6 +669,14 @@ public final class ExternalPlayerController extends PlayerController {
             final CardCollection delvePlaceholder = new CardCollection();
             forge.game.cost.CostAdjustment.adjust(beingPaid, sa, player, delvePlaceholder, false,
                     effect);
+            if (sacrificeReduces && (sa.isOffering() ? sa.getSacrificedAsOffering() == null
+                    : sa.getSacrificedAsEmerge() == null)) {
+                final Map<String, String> details = new LinkedHashMap<>();
+                details.put("actor", actorId());
+                details.put("reason", "no permanent chosen for " + (sa.isOffering() ? "offering" : "emerge"));
+                session.audit("mana_payment_declined", details);
+                return false;
+            }
             if (!delvePlaceholder.isEmpty() && !exileDelved(sa, delvePlaceholder)) {
                 return false;
             }
@@ -679,6 +689,10 @@ public final class ExternalPlayerController extends PlayerController {
             }
             // Pool-first, then framed mid-payment taps for any shortfall.
             if (payFromPoolWithTaps(beingPaid, sa)) {
+                paid = true;
+                if (sacrificeReduces) {
+                    forge.game.cost.CostPayment.handleOfferings(sa, false, true);
+                }
                 if (source != null) {
                     try {
                         source.setXManaCostPaidByColor(beingPaid.getXManaCostPaidByColor());
@@ -698,6 +712,11 @@ public final class ExternalPlayerController extends PlayerController {
             throw e;
         } catch (Throwable t) {
             return false;
+        } finally {
+            if (sacrificeReduces && !paid) {
+                // Release the chosen permanent unsacrificed (test = true resets).
+                forge.game.cost.CostPayment.handleOfferings(sa, true, false);
+            }
         }
     }
 

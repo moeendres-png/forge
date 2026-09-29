@@ -12,7 +12,7 @@ import java.util.function.Predicate;
 
 /**
  * Energy, return-to-hand (ninjutsu), reveal and exert costs are the payer's
- * choice, framed as COST_SELECTION.
+ * choice, framed as COST_SELECTION; so is the emerge sacrifice.
  *
  * <p>Each of these cost parts used to decline in BridgeCostDecisionMaker and
  * was classified COMPLEX_COST, so any priority frame with such an ability in
@@ -286,5 +286,70 @@ public class NonManaCostPartsTest {
         Assert.assertNotNull(find(session, 0, "Raging Goblin", ZoneType.Hand),
                 "the goblin went back to hand");
         session.shutdown(5000);
+    }
+
+    // ---- Emerge: Wretched Gryff, "Emerge {5}{U}" (CR 702.119) ----
+
+    private void emergeGryff(String sacrificed, boolean resolves) {
+        final BridgeTestSupport.ConstructedGame constructed = game("emerge-" + sacrificed);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Wretched Gryff", ZoneType.Hand);
+        BridgeTestSupport.addCard(constructed.game, 0, "Craw Wurm", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Grizzly Bears", ZoneType.Battlefield);
+        BridgeTestSupport.addCard(constructed.game, 0, "Island", ZoneType.Battlefield);
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        frame = floatMana(session, frame, "Island", 1);
+        Assert.assertEquals(frame.status, DecisionFrame.Status.SUPPORTED,
+                "priority frame blocked: " + frame.reason);
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Wretched Gryff".equals(o.sourceCardName)
+                && o.label != null && o.label.contains("{5}{U}"), "cast with emerge"));
+        boolean sacrificeFramed = false;
+        for (int i = 0; i < 20; i++) {
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            if (f.kind == DecisionFrame.Kind.PRIORITY && f.actorPlayerId.equals("p1")
+                    && !sacrificeFramed) {
+                throw new AssertionError("emerge cast returned to priority without a choice");
+            }
+            if (has(f, "sacrifice")) {
+                sacrificeFramed = true;
+                submit(session, f, pick(f, o -> o.label != null && o.label.contains(sacrificed)
+                        && !o.label.contains(";" + (sacrificed.equals("Craw Wurm")
+                                ? "Grizzly Bears" : "Craw Wurm")), "sacrifice " + sacrificed));
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                break;
+            } else {
+                throw new AssertionError("unexpected " + f.kind + " " + f.status + " " + f.reason);
+            }
+        }
+        Assert.assertTrue(sacrificeFramed, "the emerge sacrifice was the pilot's choice");
+        if (resolves) {
+            resolveStack(session);
+            Assert.assertNotNull(find(session, 0, "Wretched Gryff", ZoneType.Battlefield),
+                    "Gryff cast for {U} after sacrificing the mana value 6 Wurm");
+            Assert.assertNotNull(find(session, 0, "Craw Wurm", ZoneType.Graveyard), "Wurm sacrificed");
+            Assert.assertNotNull(find(session, 0, "Grizzly Bears", ZoneType.Battlefield), "Bears kept");
+        } else {
+            Assert.assertNotNull(find(session, 0, "Wretched Gryff", ZoneType.Hand),
+                    "{3}{U} unaffordable with one Island: the cast rolls back");
+            Assert.assertNotNull(find(session, 0, "Grizzly Bears", ZoneType.Battlefield),
+                    "and the Bears are not sacrificed");
+            Assert.assertNotNull(find(session, 0, "Craw Wurm", ZoneType.Battlefield), "Wurm kept");
+        }
+        session.shutdown(5000);
+    }
+
+    @Test(timeOut = 300000)
+    public void emergeSacrificesTheChosenCreatureAndReducesTheCost() {
+        emergeGryff("Craw Wurm", true);
+    }
+
+    @Test(timeOut = 300000)
+    public void unaffordableEmergeRollsBackWithoutSacrificing() {
+        emergeGryff("Grizzly Bears", false);
     }
 }
