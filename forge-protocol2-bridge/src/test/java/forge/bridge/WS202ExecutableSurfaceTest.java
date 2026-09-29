@@ -2213,6 +2213,11 @@ public class WS202ExecutableSurfaceTest {
                 session.playerById("p1").getController();
         Assert.assertTrue(raw instanceof ExternalPlayerController);
         final ExternalPlayerController controller = (ExternalPlayerController) raw;
+        // Let the live game park its own first decision before the direct
+        // call: the session shows only the latest park, so a game frame
+        // parked after the combo frame would hide it (a start-up race).
+        final DecisionFrame settled = BridgeTestSupport.awaitFrame(session, 30000);
+        Assert.assertNotNull(settled, "live game never parked its first decision");
         // The blocking controller call runs on a worker thread while the test
         // thread plays pilot: identical actor/revision/option discipline as
         // engine-driven parks.
@@ -2231,11 +2236,7 @@ public class WS202ExecutableSurfaceTest {
         worker.setDaemon(true);
         worker.start();
         DecisionFrame comboFrame = null;
-        long seenRevision = -1;
-        final DecisionFrame parked0 = session.getCurrentFrame();
-        if (parked0 != null) {
-            seenRevision = parked0.revision;
-        }
+        long seenRevision = settled.revision;
         for (int i = 0; i < 40 && comboFrame == null; i++) {
             final DecisionFrame parked = awaitNext(session, seenRevision, 15000);
             Assert.assertNotNull(parked);
