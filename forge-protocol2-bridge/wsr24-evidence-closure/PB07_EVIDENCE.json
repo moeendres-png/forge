@@ -13,7 +13,7 @@
     "construction": "WsR24Pb07ActualCardPreparationTest#testAll29ResolveAndConstruct (29/29 resolve + construct; Boseiju via front face, recorded)",
     "new_runtime": [
       "WsR24Pb07ActualCardPreparationTest#testSyphonMindMultiplayerDiscardRuntime",
-      "WsR24Pb07MechanicProbesTest (16/16 actual-card probes; Find and Finality rows re-derived)"
+      "WsR24Pb07MechanicProbesTest (17/17 actual-card probes; Find and Finality rows re-derived)"
     ]
   },
   "rows": [
@@ -157,7 +157,7 @@
       "status": "RUNTIME_QUALIFIED",
       "fixture": "CARD_28",
       "evidence": "runtime at this head: WsR24Pb07MechanicProbesTest#testFindFromHandAndGraveyardHalfRefused (Find cast from hand returns both graveyard creatures; the split card then exposes NO ability in the graveyard and the bridge offers no graveyard cast) and WsR24Pb07MechanicProbesTest#testFinalityFromHandResolvesAsymmetricPump (Finality half cast from hand by an exact engine-offered match on the half's own CardState, paid only from the six fixture-scripted payment sources obj:card_28-mana-p1-0..5, then the optional counter target chosen by an exact Serra Angel match: own 4/4 survives two +1/+1 counters plus -4/-4, opponent 2/2 dies, the card ends in the graveyard and NOT in exile). Engine-level regression: Ws234CleaveAftermathTest#testFindFinalityBothHalvesArePlainSplitSpells / #testFinalityIsHandCastableAndGraveyardCastRefused / #testFinalityResolvesFromHandAndReturnsToGraveyard plus the card-database invariants in AftermathKeywordOracleConsistencyTest.",
-      "oracle_semantics": "Find // Finality is an ordinary Double Feature split card. Neither face's Oracle text carries the Aftermath keyword, so under CR 108.1 (Oracle text governs wording) and CR 702.127a (Aftermath is a keyword ability found on some split cards) no half is graveyard-castable and no Aftermath exile-on-resolve replacement applies.",
+      "oracle_semantics": "Find // Finality is an ordinary split card (Guilds of Ravnica #225; reprinted in Ravnica Remastered #245; CR 709 Split Cards). Neither face's Oracle text carries the Aftermath keyword, so under CR 108.1 (Oracle text governs wording) and CR 702.127a (Aftermath is a keyword ability found on some split cards) no half is graveyard-castable and no Aftermath exile-on-resolve replacement applies.",
       "supersedes": "RUNTIME_QUALIFIED_FRONT_PLUS_ENGINE_GAP (recorded on Forge PR #4 at 76276a80175 and carried to PR #5/PR #6). That row was derived from the false card-script mutation bc347e62255e61d950154824b427251fdabcf5f6 and is RETRACTED, not carried forward. See forge-protocol2-bridge/wsr24-evidence-closure/FIND_FINALITY_SOURCE_TRUTH_20260929.md."
     },
     {
@@ -175,7 +175,7 @@
   },
   "source_truth_correction": {
     "defect": "Forge commit bc347e62255e61d950154824b427251fdabcf5f6 (Lab-fork card-script edit, now on Forge master ef958ee91ac6c9ce0152189f2654bf6e05abf273) added K:Aftermath to the Finality half of forge-gui/res/cardsfolder/f/find_finality.txt and rewrote that half's Oracle line to match.",
-    "authority": "Oracle: Find // Finality (Ravnica Remastered 245 / March of the Gathering, Double Feature) has keywords=[] and no Aftermath reminder on either face. CR 108.1 makes Oracle text the wording authority; CR 702.127a defines Aftermath as a keyword ability found on some split cards.",
+    "authority": "Oracle: Find // Finality (Guilds of Ravnica #225 original printing; Ravnica Remastered #245 reprint; Forge edition catalog forge-gui/res/editions/Guilds of Ravnica.txt line 239 and forge-gui/res/editions/Ravnica Remastered.txt line 254) is a plain split card with layout `split`, type line `Sorcery // Sorcery` and keywords=[]. No face carries the Aftermath reminder. CR 108.1 makes Oracle text the wording authority; CR 702.127a defines Aftermath as a keyword ability found on some split cards. It is NOT a March of the Gathering Double Feature card and does not appear in March of the Machine; the Aftermath keyword belongs to the Amonkhet, Kaladesh, Streets of New Capenna, Modern Horizons 2 and March of the Machine sets, all of which use a distinct aftermath split-card frame treatment that this card does not have.",
     "corroboration": "Pristine upstream Forge a37a865a53280dd8ad6fad3384d69611e8c5a42f scripts the card WITHOUT K:Aftermath; the corrected fork script is now byte-identical to it. The fork's Aftermath card set (27 scripts) is exactly the Oracle set of 27 Aftermath cards, and Find // Finality is not among them, so the mutation was the only false Aftermath in the card database.",
     "correction": "forge-gui/res/cardsfolder/f/find_finality.txt restored to the pristine Oracle script; no Rules-Core Java change was made or required.",
     "rules_core_mutation_disposition": "Forge PR #6 (b31d21df238) added forge-game Card.getAllPossibleAbilities split-half enumeration so the FALSE Aftermath half could be offered. With the false requirement removed that mutation has no independent purpose for this card, it is not carried into this branch, and it is not retained merely because its own tests were green.",

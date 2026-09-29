@@ -25,13 +25,19 @@ witness (Lab PR #294 / #292 line), not as an authority over Oracle.
 
 | Source | Statement |
 |---|---|
-| Oracle text, Find // Finality (Double Feature, `rvr` 245 reprint; `mom` original) | layout `split`, type line `Sorcery // Sorcery`, `keywords: []`; Find face "Return up to two target creature cards from your graveyard to your hand."; Finality face "You may put two +1/+1 counters on a creature you control. Then all creatures get -4/-4 until end of turn." **No Aftermath on either face.** |
+| Oracle text, Find // Finality — original printing **Guilds of Ravnica #225** (2018, Tomasz Jedruszek), reprinted in **Ravnica Remastered #245** (2024, Steve Ellis). Forge edition catalog: `forge-gui/res/editions/Guilds of Ravnica.txt` line 239 and `forge-gui/res/editions/Ravnica Remastered.txt` line 254. | layout `split` (a plain split card under CR 709, **not** a March of the Gathering Double Feature), type line `Sorcery // Sorcery`, `keywords: []`; Find face "Return up to two target creature cards from your graveyard to your hand."; Finality face "You may put two +1/+1 counters on a creature you control. Then all creatures get -4/-4 until end of turn." **No Aftermath on either face.** |
 | CR 108.1 | "Use the Oracle card reference when determining a card's wording." |
+| CR 709 | Split cards. (A split card's characteristics away from its mana cost are the combination of both halves; the halves are named `A // B`.) |
 | CR 702.127a | "Aftermath is an ability found on some split cards… 'You may cast this half of this split card from your graveyard,' 'This half of this split card can't be cast from any zone other than a graveyard,' and 'If this spell was cast from a graveyard, exile it instead of putting it anywhere else any time it would leave the stack.'" |
-| Oracle Aftermath corpus | 27 distinct cards print Aftermath (Amonkhet / Kaladesh / MH2 / SNC / March of the Machine). `Find // Finality` is a March of the Gathering Double Feature card and is not one of them. |
+| Oracle Aftermath corpus | 27 distinct cards print Aftermath, all from Amonkhet, Kaladesh, Streets of New Capenna, Modern Horizons 2 and March of the Machine, all printed on the distinct aftermath split-card frame treatment. `Find // Finality` is a Guilds of Ravnica split card on the ordinary split frame and is not one of them. It does not appear in March of the Machine at all. |
 
 Consequence: Find // Finality has no Aftermath half. Both halves are castable from the hand; neither
 half is castable from a graveyard; the Aftermath exile-on-resolve replacement does not apply.
+
+A plausible route into the original mistake is worth recording: the fork's card database contains
+`forge-gui/res/editions/March of the Machine The Aftermath.txt`, so a later-set card that really does
+carry Aftermath is present in the same data set as this one. That is a plausible confusion path, not
+an authorization, and it does not change the disposition.
 
 ## 3. Provenance of the false mutation
 
@@ -69,6 +75,14 @@ described as a one-sided-divergence detector, not as a substitute for Oracle rev
 | Fork at PR #5 (pre-correction) | `K:Aftermath`; Oracle with the Aftermath prefix (false) |
 | Fork at this branch | byte-identical to pristine upstream (verified with `git diff a37a865a` → empty) |
 | XMage `b1959698` (independent) | plain split card; Finality castable from hand; neither half from a graveyard |
+
+The card's set provenance matters for the record because it is what makes the mutation implausible on
+inspection: Find // Finality is a **Guilds of Ravnica** card from 2018, printed on the ordinary split
+frame, while the Aftermath keyword belongs to the Amonkhet/Kaladesh/SNC/MH2/March of the Machine era
+and its own distinct frame treatment. An earlier draft of this record wrongly described the card as a
+March of the Gathering Double Feature; that was a fabricated set attribution and is corrected here.
+The substantive conclusion is unchanged and is in fact strengthened: this card is from a different
+set, a different frame treatment and a different era than any Aftermath card.
 
 ### Aftermath card-set cross-check
 

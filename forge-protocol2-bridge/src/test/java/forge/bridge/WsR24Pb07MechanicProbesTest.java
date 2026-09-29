@@ -590,8 +590,9 @@ public class WsR24Pb07MechanicProbesTest {
     // ------------------------------------------------------------------
     // Find // Finality (PB-07 CARD_28) — Oracle-correct re-derivation.
     //
-    // Find // Finality is an ordinary Double Feature split card. It has no
-    // Aftermath keyword (CR 108.1: Oracle text governs wording; CR 702.127a:
+    // Find // Finality is an ordinary split card from Guilds of Ravnica #225
+    // (reprinted in Ravnica Remastered #245). It has no Aftermath keyword
+    // (CR 108.1: Oracle text governs wording; CR 702.127a:
     // Aftermath is a keyword found on some split cards), so BOTH halves are
     // castable only from the hand and NEITHER half is castable from a
     // graveyard. The previous probe on this row asserted the opposite because
