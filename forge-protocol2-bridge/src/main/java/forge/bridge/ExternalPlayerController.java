@@ -116,6 +116,9 @@ public final class ExternalPlayerController extends PlayerController {
         return session.playerIdOf(player);
     }
 
+    /** The ability whose prevention cost the pilot chose to pay, while paying. */
+    private SpellAbility preventionPaymentConsent;
+
     private BridgeUnsupportedDecision unsupported(String callback, String detail) {
         return new BridgeUnsupportedDecision(callback, actorId(), detail);
     }
@@ -896,6 +899,17 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public boolean confirmPayment(CostPart costPart, String message, SpellAbility sa) {
+        // Inside a prevention payment the pilot has already chosen to pay this
+        // exact cost (payCostToPreventEffect). The native payment path asks
+        // "Do you want to ...?" again for some parts; that is the same decision,
+        // so it is answered with the pilot's recorded choice, never a default.
+        if (preventionPaymentConsent != null && sa == preventionPaymentConsent) {
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("actor", actorId());
+            details.put("part", costPart == null ? "" : costPart.getClass().getSimpleName());
+            session.audit("prevention_payment_part_confirmed", details);
+            return true;
+        }
         // Decline rather than auto-confirm: the engine rolls the play back.
         // Optional cost-part confirms with real discretion (pay life/energy, exile
         // all/library, discard hand/random) are framed inline by the specific
@@ -4224,18 +4238,13 @@ public final class ExternalPlayerController extends PlayerController {
         // native path Forge's human controller uses
         // (PlaySpellAbility.payCostDuringAbilityResolve -> framed payManaCost with
         // pool and mid-payment taps). An attempt the payer cannot complete fails
-        // natively, is refunded, and counts as not paid. Costs with non-mana
-        // parts would reach confirmPayment, which the bridge never answers on
-        // the pilot's behalf, so they stay fail-closed here.
+        // natively, is refunded, and counts as not paid. Non-mana costs (shock
+        // lands' "pay 2 life", "unless that player sacrifices / discards") use
+        // the framed cost visits; the native path's re-confirmations of this
+        // same cost are answered with the pilot's choice (confirmPayment,
+        // scoped to this ability only).
         if (cost == null) {
             throw unsupported("payCostToPreventEffect", "no cost to pay");
-        }
-        for (CostPart part : cost.getCostParts()) {
-            if (!(part instanceof CostPartMana)) {
-                throw unsupported("payCostToPreventEffect",
-                        "non-mana prevention cost is not represented: "
-                                + part.getClass().getSimpleName());
-            }
         }
         String costText;
         try {
@@ -4265,8 +4274,22 @@ public final class ExternalPlayerController extends PlayerController {
             session.audit("prevention_payment_declined", details);
             return false;
         }
-        final boolean paid = forge.game.player.PlaySpellAbility.payCostDuringAbilityResolve(
-                this, player, cost, sa, null);
+        // Non-mana parts (sacrifice, discard, pay life, ...) are chosen through
+        // the framed cost-decision visits and chooseCardsForCost; the native
+        // path's own confirm prompts for this cost carry the pilot's choice.
+        final boolean paid;
+        preventionPaymentConsent = sa;
+        try {
+            paid = forge.game.player.PlaySpellAbility.payCostDuringAbilityResolve(
+                    this, player, cost, sa, null);
+        } catch (BridgeUnsupportedDecision e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw unsupported("payCostToPreventEffect",
+                    "native payment rejected the cost: " + e.getMessage());
+        } finally {
+            preventionPaymentConsent = null;
+        }
         details.put("paid", Boolean.toString(paid));
         session.audit("prevention_payment_attempted", details);
         return paid;
