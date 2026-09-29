@@ -314,6 +314,8 @@ public final class ExternalPlayerController extends PlayerController {
      * longer blocks offering. Optional additional costs (kicker, buyback,
      * entwine, ...) are chosen in a COST_SELECTION frame via
      * chooseOptionalCosts, so they no longer block offering either.
+     * Return-to-hand (ninjutsu), pay-energy, reveal (except SameColor), exert
+     * and mill costs are framed by BridgeCostDecisionMaker as well.
      * AnnounceType and the remaining non-framed cost parts still fail closed.
      */
     static String classifyComplex(SpellAbility sa) {
@@ -363,6 +365,19 @@ public final class ExternalPlayerController extends PlayerController {
                     continue;
                 }
                 if (part instanceof forge.game.cost.CostRemoveCounter) {
+                    continue;
+                }
+                if (part instanceof forge.game.cost.CostReturn
+                        || part instanceof forge.game.cost.CostPayEnergy
+                        || part instanceof forge.game.cost.CostExert) {
+                    continue;
+                }
+                if (part instanceof forge.game.cost.CostMill) {
+                    continue;
+                }
+                // SameColor reveals are not framed; the payment would roll back.
+                if (part instanceof forge.game.cost.CostReveal
+                        && !"SameColor".equals(((forge.game.cost.CostReveal) part).getType())) {
                     continue;
                 }
                 if (part instanceof forge.game.cost.CostTapType
