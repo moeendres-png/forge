@@ -2617,14 +2617,16 @@ public final class ExternalPlayerController extends PlayerController {
         return chosen;
     }
 
-    private static String entityLabel(GameEntity entity, String title) {
+    private String entityLabel(GameEntity entity, String title) {
         final String base = title == null || title.isEmpty() ? "Choose" : title;
         try {
             if (entity instanceof Card) {
                 return base + " [" + ((Card) entity).getName() + "]";
             }
             if (entity instanceof Player) {
-                return base + " [player]";
+                // Name the player: in multiplayer "choose an opponent" offers
+                // several players, which a bare "[player]" left indistinguishable.
+                return base + " [player " + session.playerIdOf((Player) entity) + "]";
             }
             return base + " [" + entity.toString() + "]";
         } catch (Throwable t) {

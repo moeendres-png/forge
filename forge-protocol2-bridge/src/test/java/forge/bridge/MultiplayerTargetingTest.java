@@ -104,6 +104,23 @@ public class MultiplayerTargetingTest {
                 if (targetFrames == 0) {
                     Assert.assertEquals(f.options.size(), 12,
                             "four players and eight creatures are legal");
+                    // Every option carries an identity reference, so equally
+                    // named objects of different players stay distinguishable.
+                    final java.util.Set<String> refs = new java.util.HashSet<>();
+                    for (com.google.gson.JsonElement e : StateProjection.legalActions(session)) {
+                        final com.google.gson.JsonArray r = e.getAsJsonObject()
+                                .getAsJsonObject("metadata").getAsJsonArray("object_refs");
+                        Assert.assertNotNull(r, "object_refs on every target option");
+                        Assert.assertEquals(r.size(), 1);
+                        final com.google.gson.JsonObject ref = r.get(0).getAsJsonObject();
+                        if ("card".equals(ref.get("kind").getAsString())) {
+                            Assert.assertTrue(ref.has("controller"), "creature controller named");
+                            refs.add("card:" + ref.get("card_id").getAsInt());
+                        } else {
+                            refs.add("player:" + ref.get("player_id").getAsString());
+                        }
+                    }
+                    Assert.assertEquals(refs.size(), 12, "12 distinct identities");
                 } else {
                     Assert.assertEquals(f.options.size(), 11,
                             "the other target excludes the first (TargetUnique)");

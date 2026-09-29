@@ -168,4 +168,86 @@ public class ChoiceSurfacesTest {
         Assert.assertNotNull(find(session, 1, "Grizzly Bears", ZoneType.Battlefield), "Bears stay");
         session.shutdown(5000);
     }
+
+    // ---- Piles (Fact or Fiction) in 4P: the caster picks the separating
+    // opponent, that opponent splits the five cards, the caster picks a pile.
+
+    @Test(timeOut = 300000)
+    public void factOrFictionOpponentSeparatesAndCasterChoosesAPile() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("pile-fof", 4);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Fact or Fiction", ZoneType.Hand);
+        for (int i = 0; i < 4; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Island", ZoneType.Battlefield);
+        }
+        for (String name : new String[] {"Grizzly Bears", "Craw Wurm", "Runeclaw Bear",
+            "Raging Goblin", "Elvish Mystic", "Llanowar Elves", "Palace Guard"}) {
+            BridgeTestSupport.addCard(constructed.game, 0, name, ZoneType.Library);
+        }
+        for (int seat = 1; seat < 4; seat++) {
+            for (int i = 0; i < 7; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        DecisionFrame frame = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        final forge.game.player.Player p1 = session.getGame().getPlayers().get(0);
+        final java.util.List<String> top5 = p1.getCardsIn(ZoneType.Library, 5).stream()
+                .map(Card::getName).toList();
+        final int hand = p1.getCardsIn(ZoneType.Hand).size();
+        for (int i = 0; i < 4; i++) {
+            submit(session, frame, pick(frame, o -> "activate_ability".equals(o.actionType)
+                    && "Island".equals(o.sourceCardName), "Island"));
+            frame = BridgeTestSupport.awaitFrame(session, 15000);
+        }
+        submit(session, frame, pick(frame, o -> "cast_spell".equals(o.actionType)
+                && "Fact or Fiction".equals(o.sourceCardName), "cast Fact or Fiction"));
+        String separator = null;
+        boolean piled = false;
+        for (int i = 0; i < 40 && (!piled || !session.getGame().getStack().isEmpty()); i++) {
+            final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
+            Assert.assertNotNull(f, "no frame");
+            Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,
+                    "blocked: " + f.kind + " " + f.reason + " for " + f.actorPlayerId);
+            if (has(f, "choose_pile")) {
+                Assert.assertEquals(f.actorPlayerId, "p1", "the caster chooses the pile");
+                Assert.assertEquals(f.options.size(), 2);
+                piled = true;
+                // Pile 1 is the one-card pile the separator made.
+                submit(session, f, pick(f, o -> o.label.startsWith("Pile 2"), "pile 2"));
+            } else if ("p1".equals(f.actorPlayerId) && f.kind != DecisionFrame.Kind.PRIORITY
+                    && f.kind != DecisionFrame.Kind.MANA_PAYMENT && separator == null
+                    && f.options.stream().anyMatch(o -> o.label != null && o.label.contains("p3"))) {
+                separator = "p3";
+                Assert.assertEquals(f.options.stream().map(o -> o.label).distinct().count(),
+                        (long) f.options.size(), "each opponent is distinguishable");
+                for (String opponent : new String[] {"p2", "p3", "p4"}) {
+                    Assert.assertTrue(f.options.stream().anyMatch(o -> o.label.contains(opponent)),
+                            opponent + " offered");
+                }
+                submit(session, f, pick(f, o -> o.label.contains("p3"), "p3 separates"));
+            } else if ("p3".equals(f.actorPlayerId) && !piled
+                    && f.kind != DecisionFrame.Kind.PRIORITY) {
+                // The separator puts only the top card into pile 1.
+                final String first = top5.get(0);
+                submit(session, f, pick(f, o -> o.label != null
+                        && o.label.endsWith("[" + first + ";]"), "pile 1 = " + first));
+            } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
+                submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
+                submit(session, f, pick(f, o -> o.isPass, "pass"));
+            } else {
+                throw new AssertionError("unexpected " + f.kind + " for " + f.actorPlayerId + ": "
+                        + f.options.stream().map(o -> o.actionType + "|" + o.label).toList());
+            }
+        }
+        Assert.assertTrue(piled, "the caster chose a pile");
+        Assert.assertEquals(separator, "p3", "the caster chose the separating opponent");
+        Assert.assertEquals(p1.getCardsIn(ZoneType.Hand).size(), hand - 1 + 4,
+                "cast Fact or Fiction, took the four-card pile");
+        Assert.assertNotNull(find(session, 0, top5.get(0), ZoneType.Graveyard),
+                "the one-card pile went to the graveyard");
+        session.shutdown(5000);
+    }
 }

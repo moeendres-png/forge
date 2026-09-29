@@ -381,7 +381,61 @@ public final class StateProjection {
         } catch (Throwable t) {
             throw new BridgeProjectionException("semantic_key", t);
         }
+        // Additive identity references for the option's payload. Labels carry
+        // names only, so on a multiplayer board two players' Sol Rings (or two
+        // opponents) were indistinguishable to the pilot. Not part of the
+        // semantic fingerprint; actor-scoped like the rest of the action.
+        final JsonArray refs = objectRefs(session, option.nativePayload);
+        if (refs.size() > 0) {
+            action.getAsJsonObject("metadata").add("object_refs", refs);
+        }
         return action;
+    }
+
+    static JsonArray objectRefs(BridgeSession session, Object payload) {
+        final JsonArray refs = new JsonArray();
+        if (payload instanceof Iterable) {
+            for (Object item : (Iterable<?>) payload) {
+                final JsonObject ref = objectRef(session, item);
+                if (ref != null) {
+                    refs.add(ref);
+                }
+            }
+        } else {
+            final JsonObject ref = objectRef(session, payload);
+            if (ref != null) {
+                refs.add(ref);
+            }
+        }
+        return refs;
+    }
+
+    private static JsonObject objectRef(BridgeSession session, Object item) {
+        try {
+            if (item instanceof Card) {
+                final Card card = (Card) item;
+                final JsonObject ref = new JsonObject();
+                ref.addProperty("kind", "card");
+                ref.addProperty("card_id", card.getId());
+                ref.addProperty("name", card.getName());
+                if (card.getController() != null) {
+                    ref.addProperty("controller", session.playerIdOf(card.getController()));
+                }
+                if (card.getZone() != null) {
+                    ref.addProperty("zone", card.getZone().getZoneType().name());
+                }
+                return ref;
+            }
+            if (item instanceof Player) {
+                final JsonObject ref = new JsonObject();
+                ref.addProperty("kind", "player");
+                ref.addProperty("player_id", session.playerIdOf((Player) item));
+                return ref;
+            }
+        } catch (Throwable t) {
+            throw new BridgeProjectionException("object_refs", t);
+        }
+        return null;
     }
 
     private static JsonObject playerState(BridgeSession session, Player player, Player observer,
