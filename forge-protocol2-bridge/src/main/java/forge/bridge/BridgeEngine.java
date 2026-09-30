@@ -679,11 +679,11 @@ public final class BridgeEngine {
         // never answer a request for an unsupported or stale decision class with
         // the current frame's options. Reject before projecting options; the
         // parked frame is left untouched.
-        final boolean hasDecisionClass = request.payload.has("decision_class")
-                && !request.payload.get("decision_class").isJsonNull();
+        final boolean hasDecisionClass = request.payload.has("decision_class");
         final String requestedDecisionClass;
         if (hasDecisionClass) {
-            if (!request.payload.get("decision_class").isJsonPrimitive()
+            if (request.payload.get("decision_class").isJsonNull()
+                    || !request.payload.get("decision_class").isJsonPrimitive()
                     || !request.payload.getAsJsonPrimitive("decision_class").isString()) {
                 return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
                         "decision_class must be a string", (int) session.auditSize());
