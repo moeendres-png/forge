@@ -58,6 +58,15 @@ public class Af01UnsupportedDecisionClassTest {
                         + "\"decision_class\":{\"unexpected\":true}}}");
         BridgeTestSupport.assertError(malformed, BridgeErrors.MALFORMED_REQUEST);
 
+        final JsonObject nullClass = BridgeTestSupport.rpc(engine,
+                "{\"protocol_version\":\"2.0.0\","
+                        + "\"request_id\":\"af01-null-class\","
+                        + "\"message_type\":\"get_legal_actions\","
+                        + "\"game_id\":\"" + gameId + "\","
+                        + "\"payload\":{\"actor_id\":\"" + actor + "\","
+                        + "\"decision_class\":null}}");
+        BridgeTestSupport.assertError(nullClass, BridgeErrors.MALFORMED_REQUEST);
+
         final DecisionFrame unchanged = session.getCurrentFrame();
         Assert.assertNotNull(unchanged, "rejection must not consume the pending decision");
         Assert.assertEquals(unchanged.revision, revision, "rejection mutated the decision revision");
