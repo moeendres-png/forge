@@ -38,17 +38,40 @@ public class DecisionDefaultHardeningTest {
     }
 
     @Test
-    public void unexpectedManaPaymentFailureCannotBecomeOrdinaryDecline() throws Exception {
-        final Path source = productionSource();
-        final String text = new String(Files.readAllBytes(source), StandardCharsets.UTF_8);
-        final int start = text.indexOf("public boolean applyManaToCost");
-        final int end = text.indexOf("public CostDecisionMakerBase getCostDecisionMaker", start);
-        Assert.assertTrue(start >= 0 && end > start, "applyManaToCost source not found");
+    public void unexpectedPaymentFailuresCannotBecomeOrdinaryDeclines() throws Exception {
+        final String text = new String(Files.readAllBytes(productionSource()), StandardCharsets.UTF_8);
+        assertFailClosedMethod(text, "public boolean applyManaToCost",
+                "public CostDecisionMakerBase getCostDecisionMaker", "applyManaToCost");
+        assertFailClosedMethod(text, "public boolean payManaCost",
+                "private boolean exileDelved", "payManaCost");
+        assertFailClosedMethod(text, "private boolean exileDelved",
+                "private boolean payFromPoolWithTaps", "exileDelved");
+    }
+
+    @Test
+    public void optionalCategoryDeclineDoesNotSkipLaterCategories() throws Exception {
+        final String text = new String(Files.readAllBytes(productionSource()), StandardCharsets.UTF_8);
+        final int start = text.indexOf("public CardCollection chooseCardsForEffectMultiple");
+        final int end = text.indexOf("public <T extends GameEntity> T chooseSingleEntityForEffect", start);
+        Assert.assertTrue(start >= 0 && end > start,
+                "chooseCardsForEffectMultiple source not found");
         final String method = text.substring(start, end);
-        Assert.assertTrue(method.contains("throw unsupported(\"applyManaToCost\""),
-                "unexpected native payment failures must fail closed explicitly");
+        Assert.assertFalse(method.contains("if (picked == null) {\n                return result;"),
+                "declining one optional category must not silently skip later categories");
+        Assert.assertTrue(method.contains("if (picked != null)"),
+                "each category must be processed independently");
+    }
+
+    private static void assertFailClosedMethod(String text, String startNeedle,
+            String endNeedle, String callback) {
+        final int start = text.indexOf(startNeedle);
+        final int end = text.indexOf(endNeedle, start);
+        Assert.assertTrue(start >= 0 && end > start, callback + " source not found");
+        final String method = text.substring(start, end);
+        Assert.assertTrue(method.contains("throw unsupported(\"" + callback + "\""),
+                callback + " unexpected failures must fail closed explicitly");
         Assert.assertFalse(method.contains("catch (Throwable t) {\n            return false;"),
-                "unexpected native payment failures must not look like an ordinary unpaid cost");
+                callback + " unexpected failures must not look like an ordinary unpaid cost");
     }
 
     private static Path productionSource() {
