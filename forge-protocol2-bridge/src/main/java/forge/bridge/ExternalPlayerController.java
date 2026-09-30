@@ -371,23 +371,53 @@ public final class ExternalPlayerController extends PlayerController {
                 continue;
             }
             if (part instanceof forge.game.cost.CostDiscard) {
+                final forge.game.cost.CostDiscard discard =
+                        (forge.game.cost.CostDiscard) part;
+                // Whole-hand payment can require graveyard ordering; the bridge
+                // does not yet expose that order surface. Block the shape before
+                // the legal action is offered instead of rolling it back later.
+                if (!discard.payCostFromSource() && "Hand".equals(discard.getType())) {
+                    return "CostDiscard:HandOrder";
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostExile) {
+                final forge.game.cost.CostExile exile = (forge.game.cost.CostExile) part;
+                final String type = exile.getType();
+                // BridgeCostDecisionMaker deliberately does not implement these
+                // aggregate/owner-choice shapes or a non-All multi-zone choice.
+                if (type == null
+                        || type.contains("FromTopGrave")
+                        || type.contains("+withTotalCMC")
+                        || type.contains("+withTotalManaSymbols_")
+                        || type.contains("+withSharedCardType")
+                        || type.contains("+withTypesGE")
+                        || (!exile.payCostFromSource() && !"OriginalHost".equals(type)
+                                && !"All".equals(type) && exile.getFrom().size() != 1)) {
+                    return "CostExile:" + String.valueOf(type);
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostPayLife) {
                 continue;
             }
-            // R12: loyalty-cost shapes (planeswalker AddCounter /
-            // SubCounter). From-source forced payments resolve through
-            // BridgeCostDecisionMaker; anything else fails there with
-            // rollback (audited), never silently. X arrives only via
-            // framed X_ANNOUNCE.
+            // R12: only from-source counter costs are represented. Do not let
+            // target-selection / All-counter variants reach the payment visitor
+            // and collapse to a silent null rollback after the action was offered.
             if (part instanceof forge.game.cost.CostPutCounter) {
+                if (!part.payCostFromSource()) {
+                    return "CostPutCounter:nonSource";
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostRemoveCounter) {
+                final forge.game.cost.CostRemoveCounter remove =
+                        (forge.game.cost.CostRemoveCounter) part;
+                if (!remove.payCostFromSource()
+                        || remove.counter == null
+                        || "All".equals(remove.getAmount())) {
+                    return "CostRemoveCounter:unrepresented";
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostReturn
@@ -735,7 +765,8 @@ public final class ExternalPlayerController extends PlayerController {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
-            return false;
+            throw unsupported("payManaCost",
+                    "native mana payment failed: " + t.getClass().getSimpleName());
         } finally {
             if (sacrificeReduces && !paid) {
                 // Release the chosen permanent unsacrificed (test = true resets).
@@ -758,17 +789,17 @@ public final class ExternalPlayerController extends PlayerController {
             final forge.game.Game game = player.getGame();
             final Card host = sa == null ? null : sa.getHostCard();
             if (game == null || host == null) {
-                return false;
+                throw unsupported("exileDelved", "game or host card unavailable");
             }
             final forge.game.card.CardZoneTable table = new forge.game.card.CardZoneTable();
             for (Card c : delved) {
                 if (c == null) {
-                    return false;
+                    throw unsupported("exileDelved", "selected delve card unavailable");
                 }
                 host.addDelved(c);
                 final Card d = game.getAction().exile(c, null, null);
                 if (d == null) {
-                    return false;
+                    throw unsupported("exileDelved", "native exile rejected selected delve card");
                 }
                 host.addExiledCard(d);
                 d.setExiledWith(host);
@@ -786,7 +817,8 @@ public final class ExternalPlayerController extends PlayerController {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
-            return false;
+            throw unsupported("exileDelved",
+                    "native delve exile failed: " + t.getClass().getSimpleName());
         }
     }
 
@@ -945,7 +977,8 @@ public final class ExternalPlayerController extends PlayerController {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
-            return false;
+            throw unsupported("applyManaToCost",
+                    "native mana payment failed: " + t.getClass().getSimpleName());
         }
     }
 
@@ -1138,9 +1171,81 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public List<CostPart> orderCosts(List<CostPart> costs) {
-        // WS202: mirror the Human default without the ChooseCostOrder full-control
-        // flag (which the bridge never sets): scripted order stands, no discretion.
-        return costs;
+        // Full-rules contract: CR 601.2h lets the player pay the total cost in any
+        // order. Forge's Human controller hides this behind the ChooseCostOrder
+        // UI/full-control preference, but a bridge preference must never become
+        // rules authority. Zero/one part is forced; every multi-part order remains
+        // externally reachable.
+        if (costs == null) {
+            throw unsupported("orderCosts", "null cost list");
+        }
+        if (costs.size() <= 1) {
+            return costs;
+        }
+
+        final List<CostPart> ordered;
+        if (costs.size() <= 5) {
+            final List<List<CostPart>> permutations = permutations(costs);
+            final List<DecisionFrame.Option> options = new ArrayList<>(permutations.size());
+            for (List<CostPart> permutation : permutations) {
+                final StringBuilder label = new StringBuilder("Pay order:");
+                for (CostPart part : permutation) {
+                    label.append(' ').append('#').append(indexOfIdentity(costs, part))
+                            .append(' ').append(costPartLabel(part)).append(';');
+                }
+                options.add(DecisionFrame.payloadOption("cost_order", label.toString(), null,
+                        new ArrayList<>(permutation), "COST_ORDER"));
+            }
+            final BridgeSession.FrameAnswer answer = session.parkFrame(
+                    DecisionFrame.Kind.ORDER_CHOICE, player,
+                    DecisionFrame.Status.SUPPORTED, "", options);
+            @SuppressWarnings("unchecked")
+            final List<CostPart> picked = (List<CostPart>) answer.selected.nativePayload;
+            if (picked == null || picked.size() != costs.size()) {
+                throw new IllegalStateException("cost-order option without complete order");
+            }
+            ordered = new ArrayList<>(picked);
+        } else {
+            // Avoid factorial materialization while keeping every ordering reachable:
+            // the pilot chooses the next cost part until only one forced part remains.
+            final List<CostPart> remaining = new ArrayList<>(costs);
+            ordered = new ArrayList<>(costs.size());
+            while (remaining.size() > 1) {
+                final List<DecisionFrame.Option> options = new ArrayList<>(remaining.size());
+                for (CostPart part : remaining) {
+                    options.add(DecisionFrame.payloadOption("cost_order_next",
+                            "Pay next: #" + indexOfIdentity(costs, part) + " " + costPartLabel(part),
+                            null, part, "COST_PART"));
+                }
+                final BridgeSession.FrameAnswer answer = session.parkFrame(
+                        DecisionFrame.Kind.ORDER_CHOICE, player,
+                        DecisionFrame.Status.SUPPORTED, "", options);
+                final CostPart picked = (CostPart) answer.selected.nativePayload;
+                if (picked == null) {
+                    throw new IllegalStateException("cost-order option without cost part");
+                }
+                final int index = indexOfIdentity(remaining, picked);
+                if (index < 0) {
+                    throw new IllegalStateException("cost-order option names an already placed part");
+                }
+                ordered.add(remaining.remove(index));
+            }
+            ordered.addAll(remaining);
+        }
+
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("actor", actorId());
+        details.put("count", Integer.toString(ordered.size()));
+        session.audit("costs_ordered", details);
+        return ordered;
+    }
+
+    private static String costPartLabel(CostPart part) {
+        try {
+            return part == null ? "?" : part.toString();
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     @Override
@@ -2495,7 +2600,11 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public boolean helpPayForAssistSpell(ManaCostBeingPaid cost, SpellAbility sa, int max, int requested) {
-        return false;
+        // Assist contribution is a discretionary choice (the Human controller asks
+        // how much to contribute). The bridge does not yet represent that flow;
+        // never turn an unexpected reach into an implicit "no"/cancel outcome.
+        throw unsupported("helpPayForAssistSpell",
+                "assist payment contribution is not represented");
     }
 
     @Override
@@ -2583,10 +2692,9 @@ public final class ExternalPlayerController extends PlayerController {
             final CardCollectionView picked = chooseCardsForEffect(entry.getValue(), sa,
                     (title == null ? "Choose cards" : title) + " (" + entry.getKey() + ")",
                     0, 1, isOptional, null);
-            if (picked == null) {
-                return result;
+            if (picked != null) {
+                result.addAll(picked);
             }
-            result.addAll(picked);
         }
         return result;
     }
