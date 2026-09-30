@@ -62,6 +62,23 @@ public class DecisionDefaultHardeningTest {
                 "each category must be processed independently");
     }
 
+    @Test
+    public void unrepresentedCostShapesAreBlockedBeforeOffering() throws Exception {
+        final String text = new String(Files.readAllBytes(productionSource()), StandardCharsets.UTF_8);
+        final int start = text.indexOf("static String unframedCostPart");
+        final int end = text.indexOf("static boolean isPlainTapTypeCost", start);
+        Assert.assertTrue(start >= 0 && end > start, "cost classifier source not found");
+        final String classifier = text.substring(start, end);
+        Assert.assertTrue(classifier.contains("CostDiscard:HandOrder"),
+                "whole-hand ordering must be blocked before offering");
+        Assert.assertTrue(classifier.contains("CostExile:"),
+                "unrepresented exile shapes must be blocked before offering");
+        Assert.assertTrue(classifier.contains("CostPutCounter:nonSource"),
+                "non-source put-counter costs must be blocked before offering");
+        Assert.assertTrue(classifier.contains("CostRemoveCounter:unrepresented"),
+                "unrepresented remove-counter costs must be blocked before offering");
+    }
+
     private static void assertFailClosedMethod(String text, String startNeedle,
             String endNeedle, String callback) {
         final int start = text.indexOf(startNeedle);
