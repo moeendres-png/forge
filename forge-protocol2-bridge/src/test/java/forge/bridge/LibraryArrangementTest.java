@@ -85,7 +85,7 @@ public class LibraryArrangementTest {
                 final String next = topOrder.get(ordered++);
                 submit(session, f, pick(f, o -> o.label.endsWith(": " + next), "top " + next));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
             } else {
@@ -220,7 +220,7 @@ public class LibraryArrangementTest {
                 submit(session, f, pick(f, o -> o.label.endsWith(": " + next)
                         && o.label.contains("1 = closest to the top"), "position " + placed));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
             } else {

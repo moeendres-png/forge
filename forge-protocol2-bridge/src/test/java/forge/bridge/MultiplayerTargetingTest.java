@@ -131,7 +131,7 @@ public class MultiplayerTargetingTest {
                 submit(session, f, pick(f, o -> o.label != null && o.label.endsWith("[" + want + "]"),
                         want));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 cast = true;
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
@@ -215,7 +215,7 @@ public class MultiplayerTargetingTest {
                 submit(session, f, pick(f, o -> Boolean.TRUE.equals(o.confirmValue),
                         "yes, choose new targets"));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY && f.actorPlayerId.equals("p1")
                     && shockCast && !redirectCast) {
                 redirectCast = true;

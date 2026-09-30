@@ -156,7 +156,7 @@ public class ChoiceSurfacesTest {
                 Assert.assertEquals(f.options.size(), 2, "both of p2's nonland permanents");
                 submit(session, f, pick(f, o -> o.label.contains("Craw Wurm"), "vote Wurm"));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
             } else {
@@ -234,7 +234,7 @@ public class ChoiceSurfacesTest {
                 submit(session, f, pick(f, o -> o.label != null
                         && o.label.endsWith("[" + first + ";]"), "pile 1 = " + first));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
             } else {

@@ -105,7 +105,8 @@ public class MultiplayerCombatTest {
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
             } else if (f.kind == DecisionFrame.Kind.COMBAT_DAMAGE) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.reachabilityOnlyChoice(f,
+                        "the test asserts block legality/assignment, not the damage division"));
             } else {
                 throw new AssertionError("unexpected " + f.kind + " for " + f.actorPlayerId + " "
                         + f.reason);
@@ -173,7 +174,7 @@ public class MultiplayerCombatTest {
             } else if (f.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS) {
                 submit(session, f, pick(f, o -> "No attacks".equals(o.label), "no attacks"));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
             } else {

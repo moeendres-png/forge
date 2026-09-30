@@ -31,6 +31,82 @@ import java.util.Map;
  * cards; every decision flows through the real controller boundary.
  */
 public final class BridgeTestSupport {
+
+    /**
+     * A mana payment choice whose candidates are proven outcome-equivalent.
+     *
+     * <p>Test drivers must never pick an engine-offered option by position
+     * (AGENTS.md section 2: no first-option fallback). A payment frame offers
+     * one "tap for mana" option per untapped source plus "Decline to tap".
+     * This helper excludes the decline, requires at least one candidate and
+     * requires every candidate to be the same kind of payment from a source of
+     * the same name (for example two untapped Plains), so the choice among
+     * them cannot change the outcome. Otherwise it fails and the test must
+     * choose explicitly. Disposition: OUTCOME_EQUIVALENT_PROVEN.</p>
+     */
+    public static DecisionFrame.Option equivalentPayment(final DecisionFrame frame) {
+        Assert.assertEquals(frame.kind, DecisionFrame.Kind.MANA_PAYMENT, "not a payment frame");
+        final List<DecisionFrame.Option> candidates = new ArrayList<>();
+        for (DecisionFrame.Option option : frame.options) {
+            if (option.confirmValue == null) {
+                candidates.add(option);
+            }
+        }
+        Assert.assertFalse(candidates.isEmpty(), "no payment offered, only: " + labels(frame));
+        final java.util.Set<String> kinds = new java.util.TreeSet<>();
+        for (DecisionFrame.Option option : candidates) {
+            kinds.add(option.actionType + "|"
+                    + (option.sourceCardName != null ? option.sourceCardName : option.label));
+        }
+        Assert.assertEquals(kinds.size(), 1,
+                "payment options are not outcome-equivalent; choose explicitly: " + labels(frame));
+        return lowestById(candidates);
+    }
+
+    /**
+     * An engine-offered choice the test needs only to get past, and whose
+     * result it never asserts: the evidence from such a test carries no
+     * behavioural credit for this decision. The choice is made by content
+     * (label, then option id), not by offer position, so it does not depend
+     * on the order the engine lists options in. Disposition:
+     * REACHABILITY_ONLY_NO_BEHAVIOR_CREDIT.
+     */
+    public static DecisionFrame.Option reachabilityOnlyChoice(final DecisionFrame frame,
+            final String whyNoBehaviourCredit) {
+        Assert.assertFalse(whyNoBehaviourCredit == null || whyNoBehaviourCredit.isBlank(),
+                "state why this decision earns no behavioural credit");
+        Assert.assertFalse(frame.options.isEmpty(), "nothing offered");
+        DecisionFrame.Option chosen = null;
+        for (DecisionFrame.Option option : frame.options) {
+            if (chosen == null || compareContent(option, chosen) < 0) {
+                chosen = option;
+            }
+        }
+        return chosen;
+    }
+
+    private static DecisionFrame.Option lowestById(final List<DecisionFrame.Option> options) {
+        DecisionFrame.Option chosen = null;
+        for (DecisionFrame.Option option : options) {
+            if (chosen == null || option.optionId.compareTo(chosen.optionId) < 0) {
+                chosen = option;
+            }
+        }
+        return chosen;
+    }
+
+    private static int compareContent(final DecisionFrame.Option a, final DecisionFrame.Option b) {
+        final int byLabel = String.valueOf(a.label).compareTo(String.valueOf(b.label));
+        return byLabel != 0 ? byLabel : a.optionId.compareTo(b.optionId);
+    }
+
+    private static List<String> labels(final DecisionFrame frame) {
+        final List<String> labels = new ArrayList<>();
+        for (DecisionFrame.Option option : frame.options) {
+            labels.add(option.label);
+        }
+        return labels;
+    }
     private static volatile boolean engineReady;
 
     private BridgeTestSupport() { }
