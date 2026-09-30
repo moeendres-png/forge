@@ -371,23 +371,53 @@ public final class ExternalPlayerController extends PlayerController {
                 continue;
             }
             if (part instanceof forge.game.cost.CostDiscard) {
+                final forge.game.cost.CostDiscard discard =
+                        (forge.game.cost.CostDiscard) part;
+                // Whole-hand payment can require graveyard ordering; the bridge
+                // does not yet expose that order surface. Block the shape before
+                // the legal action is offered instead of rolling it back later.
+                if (!discard.payCostFromSource() && "Hand".equals(discard.getType())) {
+                    return "CostDiscard:HandOrder";
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostExile) {
+                final forge.game.cost.CostExile exile = (forge.game.cost.CostExile) part;
+                final String type = exile.getType();
+                // BridgeCostDecisionMaker deliberately does not implement these
+                // aggregate/owner-choice shapes or a non-All multi-zone choice.
+                if (type == null
+                        || type.contains("FromTopGrave")
+                        || type.contains("+withTotalCMC")
+                        || type.contains("+withTotalManaSymbols_")
+                        || type.contains("+withSharedCardType")
+                        || type.contains("+withTypesGE")
+                        || (!exile.payCostFromSource() && !"OriginalHost".equals(type)
+                                && !"All".equals(type) && exile.getFrom().size() != 1)) {
+                    return "CostExile:" + String.valueOf(type);
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostPayLife) {
                 continue;
             }
-            // R12: loyalty-cost shapes (planeswalker AddCounter /
-            // SubCounter). From-source forced payments resolve through
-            // BridgeCostDecisionMaker; anything else fails there with
-            // rollback (audited), never silently. X arrives only via
-            // framed X_ANNOUNCE.
+            // R12: only from-source counter costs are represented. Do not let
+            // target-selection / All-counter variants reach the payment visitor
+            // and collapse to a silent null rollback after the action was offered.
             if (part instanceof forge.game.cost.CostPutCounter) {
+                if (!part.payCostFromSource()) {
+                    return "CostPutCounter:nonSource";
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostRemoveCounter) {
+                final forge.game.cost.CostRemoveCounter remove =
+                        (forge.game.cost.CostRemoveCounter) part;
+                if (!remove.payCostFromSource()
+                        || remove.counter == null
+                        || "All".equals(remove.getAmount())) {
+                    return "CostRemoveCounter:unrepresented";
+                }
                 continue;
             }
             if (part instanceof forge.game.cost.CostReturn
