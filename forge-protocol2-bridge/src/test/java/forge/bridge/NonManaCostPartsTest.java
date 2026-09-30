@@ -198,11 +198,19 @@ public class NonManaCostPartsTest {
         submit(session, main, pick(main, o -> "activate_ability".equals(o.actionType)
                 && "Fervent Paincaster".equals(o.sourceCardName)
                 && o.label != null && o.label.contains("Exert"), "exert ability"));
+        boolean costOrderFramed = false;
         boolean exertFramed = false;
         for (int i = 0; i < 20 && session.getGame().getStack().isEmpty(); i++) {
             final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
             Assert.assertNotNull(f, "no frame");
-            if (has(f, "cost_exert")) {
+            if (f.kind == DecisionFrame.Kind.ORDER_CHOICE && has(f, "cost_order")) {
+                costOrderFramed = true;
+                Assert.assertTrue(f.options.size() >= 2,
+                        "tap+exert must expose more than one payment order");
+                submit(session, f, pick(f, o -> o.label != null
+                        && o.label.startsWith("Pay order: #1 "),
+                        "reverse the scripted cost order"));
+            } else if (has(f, "cost_exert")) {
                 exertFramed = true;
                 submit(session, f, pick(f, o -> Boolean.TRUE.equals(o.confirmValue), "exert"));
             } else if (f.kind == DecisionFrame.Kind.TARGET_SELECTION) {
@@ -212,6 +220,7 @@ public class NonManaCostPartsTest {
                 throw new AssertionError("unexpected " + f.kind + " " + f.status + " " + f.reason);
             }
         }
+        Assert.assertTrue(costOrderFramed, "multi-part payment order was the pilot's choice");
         Assert.assertTrue(exertFramed, "exerting was the pilot's choice");
         resolveStack(session);
         Assert.assertTrue(paincaster.isTapped(), "tapped");
