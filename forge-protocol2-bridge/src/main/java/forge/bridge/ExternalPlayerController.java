@@ -786,8 +786,7 @@ public final class ExternalPlayerController extends PlayerController {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
-            throw unsupported("applyManaToCost",
-                    "native mana payment failed: " + t.getClass().getSimpleName());
+            return false;
         }
     }
 
@@ -946,7 +945,8 @@ public final class ExternalPlayerController extends PlayerController {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
-            return false;
+            throw unsupported("applyManaToCost",
+                    "native mana payment failed: " + t.getClass().getSimpleName());
         }
     }
 
