@@ -735,7 +735,8 @@ public final class ExternalPlayerController extends PlayerController {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
-            return false;
+            throw unsupported("payManaCost",
+                    "native mana payment failed: " + t.getClass().getSimpleName());
         } finally {
             if (sacrificeReduces && !paid) {
                 // Release the chosen permanent unsacrificed (test = true resets).
@@ -758,17 +759,17 @@ public final class ExternalPlayerController extends PlayerController {
             final forge.game.Game game = player.getGame();
             final Card host = sa == null ? null : sa.getHostCard();
             if (game == null || host == null) {
-                return false;
+                throw unsupported("exileDelved", "game or host card unavailable");
             }
             final forge.game.card.CardZoneTable table = new forge.game.card.CardZoneTable();
             for (Card c : delved) {
                 if (c == null) {
-                    return false;
+                    throw unsupported("exileDelved", "selected delve card unavailable");
                 }
                 host.addDelved(c);
                 final Card d = game.getAction().exile(c, null, null);
                 if (d == null) {
-                    return false;
+                    throw unsupported("exileDelved", "native exile rejected selected delve card");
                 }
                 host.addExiledCard(d);
                 d.setExiledWith(host);
@@ -786,7 +787,8 @@ public final class ExternalPlayerController extends PlayerController {
             session.setLastExecutionError(e.getMessage());
             throw e;
         } catch (Throwable t) {
-            return false;
+            throw unsupported("exileDelved",
+                    "native delve exile failed: " + t.getClass().getSimpleName());
         }
     }
 
@@ -2660,10 +2662,9 @@ public final class ExternalPlayerController extends PlayerController {
             final CardCollectionView picked = chooseCardsForEffect(entry.getValue(), sa,
                     (title == null ? "Choose cards" : title) + " (" + entry.getKey() + ")",
                     0, 1, isOptional, null);
-            if (picked == null) {
-                return result;
+            if (picked != null) {
+                result.addAll(picked);
             }
-            result.addAll(picked);
         }
         return result;
     }
