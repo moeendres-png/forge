@@ -128,6 +128,11 @@ public final class ExternalPlayerController extends PlayerController {
         return new BridgeUnsupportedDecision(callback, actorId(), detail);
     }
 
+    /** For cost decision makers: a legal cost whose choices cannot all be offered aborts loudly. */
+    BridgeUnsupportedDecision unsupportedCost(String actionType, String detail) {
+        return unsupported(actionType, detail);
+    }
+
     // ---- WS202 generic framing helpers ----
     //
     // Every helper parks a complete authoritative frame and returns the native
@@ -991,6 +996,12 @@ public final class ExternalPlayerController extends PlayerController {
             details.put("action", actionType);
             details.put("reason", sets.isEmpty() ? "no valid set" : "too many sets");
             session.audit("cost_unrepresentable", details);
+            if (!sets.isEmpty()) {
+                // The cost is payable, but not every legal set can be offered:
+                // abort loudly instead of leaving it unpaid (a silent rollback of
+                // an action that was offered as legal).
+                throw unsupported(actionType, "too many cost sets to offer completely: " + sets.size());
+            }
             return null;
         }
         if (sets.size() == 1 && !cancelAllowed) {
@@ -1055,6 +1066,12 @@ public final class ExternalPlayerController extends PlayerController {
             details.put("action", actionType);
             details.put("reason", subsets.isEmpty() ? "no valid set" : "too many sets");
             session.audit("cost_unrepresentable", details);
+            if (!subsets.isEmpty()) {
+                // The cost is payable, but not every legal set can be offered:
+                // abort loudly instead of leaving it unpaid (a silent rollback of
+                // an action that was offered as legal).
+                throw unsupported(actionType, "too many cost sets to offer completely: " + subsets.size());
+            }
             return null;
         }
         if (subsets.size() == 1 && !cancelAllowed) {

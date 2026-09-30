@@ -70,7 +70,7 @@ public class PayToPreventChoiceTest {
             frame = BridgeTestSupport.awaitFrame(session, 15000);
             while (frame.kind != DecisionFrame.Kind.PRIORITY || !frame.actorPlayerId.equals("p1")) {
                 Assert.assertEquals(frame.kind, DecisionFrame.Kind.MANA_PAYMENT, "after tap");
-                submit(session, frame, frame.options.get(0));
+                submit(session, frame, BridgeTestSupport.equivalentPayment(frame));
                 frame = BridgeTestSupport.awaitFrame(session, 15000);
             }
         }
@@ -94,7 +94,7 @@ public class PayToPreventChoiceTest {
                 submit(session, f, pick(f, o -> Boolean.valueOf(pay).equals(o.confirmValue),
                         pay ? "pay" : "do not pay"));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));
             } else if (f.actorPlayerId.equals("p2") && f.options.stream()

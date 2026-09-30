@@ -763,7 +763,11 @@ public final class BridgeCostDecisionMaker extends CostDecisionMakerBase {
             candidates.add(card);
         }
         if (candidates.size() > 7) {
-            return null;
+            // 2^7 - 1 = 127 non-empty sets fit the 128-option completeness cap;
+            // beyond that not every legal crew can be offered. Abort loudly
+            // instead of leaving the offered activation silently unpaid.
+            throw controller.unsupportedCost("cost_tap_total_power",
+                    "too many crew candidates to offer every set: " + candidates.size());
         }
         final java.util.List<java.util.List<Card>> sets = new java.util.ArrayList<>();
         for (java.util.List<Card> subset

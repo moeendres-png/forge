@@ -75,7 +75,7 @@ public class MultiplayerEliminationTest {
             if (f.kind == DecisionFrame.Kind.TARGET_SELECTION) {
                 submit(session, f, pick(f, o -> o.label != null && o.label.contains("p3"), "p3"));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 if (!session.getGame().getStack().isEmpty()) {
                     passesWhileOnStack.add(f.actorPlayerId);
@@ -184,7 +184,7 @@ public class MultiplayerEliminationTest {
             } else if (f.kind == DecisionFrame.Kind.TARGET_SELECTION) {
                 submit(session, f, pick(f, o -> o.label != null && o.label.contains("p2"), "p2"));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 resolved = !asked.isEmpty() && session.getGame().getStack().isEmpty();
                 if (!resolved) {
@@ -284,7 +284,7 @@ public class MultiplayerEliminationTest {
                 submit(session, f, pick(f, o -> o.label != null && o.label.contains(victim),
                         victim));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 if (session.getGame().getCardsIn(ZoneType.Battlefield).stream()
                         .noneMatch(c -> c.isCreature())) {
@@ -346,7 +346,7 @@ public class MultiplayerEliminationTest {
                     submit(session, f, pick(f, o -> o.isPass, "pass"));
                 }
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else {
                 choosers.add(f.actorPlayerId);
                 final String keepSmall = "p1".equals(f.actorPlayerId) ? "Craw Wurm"

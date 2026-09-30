@@ -110,7 +110,7 @@ public class TapTypeCostTest {
             final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
             Assert.assertNotNull(f, "no frame");
             if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
-                submit(session, f, f.options.get(0));
+                submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY
                     && f.status == DecisionFrame.Status.SUPPORTED) {
                 submit(session, f, pick(f, o -> o.isPass, "pass"));

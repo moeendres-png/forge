@@ -105,4 +105,45 @@ public class CrewCostTest {
         Assert.assertFalse(find(session, "Runeclaw Bear").isTapped(), "bear untouched");
         session.shutdown(5000);
     }
+
+    /**
+     * Eight creatures, Crew 1: 255 crews reach the threshold, more than the
+     * 128-option completeness cap. The activation was offered as legal, so the
+     * bridge must not leave the cost silently unpaid (before: a generic
+     * "engine declined the submitted option" rollback with no reason); it
+     * aborts loudly with the representability limit, and nothing is tapped.
+     */
+    @Test(timeOut = 300000)
+    public void crewBeyondTheCompletenessCapFailsClosed() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("crew-copter-8", 2);
+        final BridgeSession session = constructed.session;
+        BridgeTestSupport.addCard(constructed.game, 0, "Smuggler's Copter", ZoneType.Battlefield);
+        for (int i = 0; i < 8; i++) {
+            BridgeTestSupport.addCard(constructed.game, 0, "Raging Goblin", ZoneType.Battlefield);
+        }
+        for (int seat = 0; seat < 2; seat++) {
+            for (int i = 0; i < 7; i++) {
+                BridgeTestSupport.addCard(constructed.game, seat, "Plains", ZoneType.Library);
+            }
+        }
+        BridgeTestSupport.launchConstructed(constructed);
+        final DecisionFrame main = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 12);
+        Assert.assertEquals(main.status, DecisionFrame.Status.SUPPORTED,
+                "priority frame blocked: " + main.reason);
+        final DecisionFrame.Option crew = pick(main, o -> "activate_ability".equals(o.actionType)
+                && "Smuggler's Copter".equals(o.sourceCardName), "Crew activation");
+        final BridgeSession.SubmitOutcome outcome = session.submit(main.actorPlayerId,
+                crew.optionId, crew.actionType, main.revision);
+        final String error = String.valueOf(session.getLastExecutionError());
+        Assert.assertTrue(error.contains("too many crew candidates"),
+                "fails closed with the representability limit, not a silent rollback: applied="
+                        + outcome.applied + " executionOk=" + outcome.executionOk
+                        + " error=" + error + " " + outcome.errorCode + " " + outcome.errorMessage);
+        Assert.assertFalse(find(session, "Smuggler's Copter").isCreature(), "Copter not crewed");
+        for (Card card : session.getGame().getPlayers().get(0).getCardsIn(ZoneType.Battlefield)) {
+            Assert.assertFalse(card.isTapped(), card.getName() + " was tapped");
+        }
+        session.shutdown(5000);
+    }
 }

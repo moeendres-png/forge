@@ -53,7 +53,8 @@ public class CombatBlockLegalityTest {
             // CR 510.1d: a multi-blocker's controller divides its damage. Any
             // engine-offered division serves this test.
             Assert.assertFalse(frame.options.isEmpty(), "damage division offered");
-            submit(session, frame, frame.options.get(0));
+            submit(session, frame, BridgeTestSupport.reachabilityOnlyChoice(frame,
+                        "the test asserts block legality/assignment, not the damage division"));
         } else if (frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
                 || frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS) {
             submit(session, frame, pickOption(frame,
