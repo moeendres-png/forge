@@ -673,6 +673,22 @@ public final class BridgeEngine {
             return BridgeProtocol.error(request.requestId, BridgeErrors.WRONG_ACTOR,
                     "decision belongs to " + frame.actorPlayerId, (int) session.auditSize());
         }
+        // R-3 / AF01: when a caller scopes legal-action retrieval to a decision
+        // class, that class must identify the decision the Rules Core actually
+        // parked. The bridge may translate provider-native identity, but it must
+        // never answer a request for an unsupported or stale decision class with
+        // the current frame's options. Reject before projecting options; the
+        // parked frame is left untouched.
+        final String requestedDecisionClass =
+                BridgeProtocol.optString(request.payload, "decision_class", null);
+        if (requestedDecisionClass != null) {
+            final String actualDecisionClass = SemanticReplay.decisionClass(frame.kind);
+            if (!requestedDecisionClass.equals(actualDecisionClass)) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.UNSUPPORTED_DECISION,
+                        "requested decision_class is not the pending decision",
+                        (int) session.auditSize());
+            }
+        }
         final JsonObject payload = new JsonObject();
         try {
             payload.add("actions", StateProjection.legalActions(session));
