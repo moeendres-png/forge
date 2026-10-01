@@ -142,6 +142,7 @@ public class WS202SeparateProcessTest {
         String type;
         String source;
         String label;
+        String subtype;
     }
 
     private static final class Frame {
@@ -206,7 +207,10 @@ public class WS202SeparateProcessTest {
                 opt.id = action.get("action_id").getAsString();
                 opt.type = action.get("action_type").getAsString();
                 opt.source = str(action, "source_object_id");
-                opt.label = action.getAsJsonObject("metadata").get("label").getAsString();
+                final JsonObject metadata = action.getAsJsonObject("metadata");
+                opt.label = metadata.get("label").getAsString();
+                opt.subtype = metadata.has("decision_subtype")
+                        ? metadata.get("decision_subtype").getAsString() : null;
                 frame.opts.add(opt);
             }
             return frame;
@@ -440,9 +444,13 @@ public class WS202SeparateProcessTest {
         Assert.assertFalse(frame.opts.isEmpty(), "no cost order offered");
         Opt chosen = null;
         for (Opt option : frame.opts) {
-            Assert.assertTrue("cost_order".equals(option.type)
-                            || "cost_order_next".equals(option.type),
-                    "non-cost option in cost-order frame: " + option.type);
+            // Over the pipe a cost order is a shared Protocol-2 structural
+            // decision whose metadata names the cost-order subtype.
+            Assert.assertEquals(option.type, "structural_decision",
+                    "cost order must use the shared Protocol-2 ActionType");
+            Assert.assertTrue("cost_order".equals(option.subtype)
+                            || "cost_order_next".equals(option.subtype),
+                    "non-cost option in cost-order frame: " + option.subtype);
             if (chosen == null
                     || String.valueOf(option.label).compareTo(String.valueOf(chosen.label)) < 0
                     || (String.valueOf(option.label).equals(String.valueOf(chosen.label))

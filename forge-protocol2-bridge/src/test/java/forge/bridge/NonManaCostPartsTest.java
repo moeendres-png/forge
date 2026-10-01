@@ -205,12 +205,14 @@ public class NonManaCostPartsTest {
         for (int i = 0; i < 20 && session.getGame().getStack().isEmpty(); i++) {
             final DecisionFrame f = BridgeTestSupport.awaitFrame(session, 15000);
             Assert.assertNotNull(f, "no frame");
-            if (f.kind == DecisionFrame.Kind.ORDER_CHOICE && has(f, "cost_order")) {
+            if (f.kind == DecisionFrame.Kind.ORDER_CHOICE && f.options.stream()
+                    .allMatch(o -> "COST_ORDER".equals(o.payloadKind))) {
                 costOrderFramed = true;
                 Assert.assertTrue(f.options.size() >= 2,
                         "tap+exert must expose more than one payment order");
-                submit(session, f, pick(f, o -> o.label != null
-                        && o.label.startsWith("Pay order: #1 "),
+                // The structured native indices, not the label: part #1 first.
+                submit(session, f, pick(f, o -> !o.costOrderIndices.isEmpty()
+                        && o.costOrderIndices.get(0) == 1,
                         "reverse the scripted cost order"));
             } else if (has(f, "cost_exert")) {
                 exertFramed = true;
