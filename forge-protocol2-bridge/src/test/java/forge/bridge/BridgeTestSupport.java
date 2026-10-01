@@ -99,9 +99,13 @@ public final class BridgeTestSupport {
                 "not a cost-order frame");
         Assert.assertFalse(frame.options.isEmpty(), "no cost order offered");
         for (DecisionFrame.Option option : frame.options) {
-            Assert.assertTrue("cost_order".equals(option.actionType)
-                            || "cost_order_next".equals(option.actionType),
-                    "non-cost option in cost-order frame: " + option.actionType);
+            Assert.assertEquals(option.actionType, "structural_decision",
+                    "cost order must use the shared Protocol-2 ActionType");
+            Assert.assertTrue("COST_ORDER".equals(option.payloadKind)
+                            || "COST_PART".equals(option.payloadKind),
+                    "non-cost payload in cost-order frame: " + option.payloadKind);
+            Assert.assertFalse(option.costOrderIndices.isEmpty(),
+                    "cost-order option lacks structured native indices");
         }
         return reachabilityOnlyChoice(frame,
                 "this test only drives through CR 601.2h order; order behaviour is tested separately");

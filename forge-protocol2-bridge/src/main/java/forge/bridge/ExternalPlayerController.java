@@ -1199,7 +1199,7 @@ public final class ExternalPlayerController extends PlayerController {
                     label.append(' ').append('#').append(sourceIndex)
                             .append(' ').append(costPartLabel(part)).append(';');
                 }
-                options.add(DecisionFrame.costOrderOption("cost_order", label.toString(),
+                options.add(DecisionFrame.costOrderOption("structural_decision", label.toString(),
                         new ArrayList<>(permutation), "COST_ORDER", orderIndices));
             }
             final BridgeSession.FrameAnswer answer = session.parkFrame(
@@ -1223,7 +1223,7 @@ public final class ExternalPlayerController extends PlayerController {
                     if (sourceIndex < 0) {
                         throw unsupported("orderCosts", "remaining cost part missing from native list");
                     }
-                    options.add(DecisionFrame.costOrderOption("cost_order_next",
+                    options.add(DecisionFrame.costOrderOption("structural_decision",
                             "Pay next: #" + sourceIndex + " " + costPartLabel(part),
                             part, "COST_PART", Collections.singletonList(Integer.valueOf(sourceIndex))));
                 }

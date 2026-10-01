@@ -17,7 +17,7 @@ public class CostOrderProjectionTest {
     @Test
     public void projectsNativeCostOrderIndicesWithoutLabelParsing() {
         final DecisionFrame.Option option = DecisionFrame.costOrderOption(
-                "cost_order",
+                "structural_decision",
                 "Pay order: #1 second; #0 first;",
                 new ArrayList<>(),
                 "COST_ORDER",
@@ -40,7 +40,9 @@ public class CostOrderProjectionTest {
         Assert.assertEquals(indices.size(), 2);
         Assert.assertEquals(indices.get(0).getAsInt(), 1);
         Assert.assertEquals(indices.get(1).getAsInt(), 0);
-        Assert.assertEquals(action.get("action_type").getAsString(), "cost_order");
+        Assert.assertEquals(action.get("action_type").getAsString(), "structural_decision");
+        Assert.assertEquals(action.getAsJsonObject("metadata")
+                .get("decision_subtype").getAsString(), "cost_order");
     }
 
     @Test
@@ -59,5 +61,6 @@ public class CostOrderProjectionTest {
 
         final JsonObject action = StateProjection.legalAction(frame, option);
         Assert.assertFalse(action.getAsJsonObject("metadata").has("cost_order_indices"));
+        Assert.assertFalse(action.getAsJsonObject("metadata").has("decision_subtype"));
     }
 }

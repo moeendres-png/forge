@@ -351,6 +351,16 @@ public final class StateProjection {
         metadata.addProperty("frame_kind", frame.kind.name());
         metadata.addProperty("label", option.label);
         if (!option.costOrderIndices.isEmpty()) {
+            final String decisionSubtype;
+            if ("COST_ORDER".equals(option.payloadKind)) {
+                decisionSubtype = "cost_order";
+            } else if ("COST_PART".equals(option.payloadKind)) {
+                decisionSubtype = "cost_order_next";
+            } else {
+                throw new BridgeProjectionException("cost_order_indices",
+                        "cost-order metadata has unexpected payload kind");
+            }
+            metadata.addProperty("decision_subtype", decisionSubtype);
             final JsonArray costOrderIndices = new JsonArray();
             for (Integer index : option.costOrderIndices) {
                 costOrderIndices.add(index);
