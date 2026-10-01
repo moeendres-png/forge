@@ -565,6 +565,8 @@ public class WsR9RetargetBridgeFamilyTest {
                 submit(session, f, f.options.get(0));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
                 submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, f, BridgeTestSupport.reachabilityOnlyCostOrder(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pickOption(f, o -> o.isPass, "pass"));
             } else if ("COST_SELECTION".equals(f.kind.name())) {
