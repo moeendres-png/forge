@@ -85,6 +85,28 @@ public final class BridgeTestSupport {
         return chosen;
     }
 
+    /**
+     * Explicit test-pilot answer for CR 601.2h payment-order frames when the
+     * surrounding test is not claiming behaviour for the order itself.
+     *
+     * <p>Every option must be a bridge cost-order option. Selection is content
+     * ordered (label then option id), never by offer position, so this cannot
+     * regress into a first-option fallback. Disposition:
+     * REACHABILITY_ONLY_NO_BEHAVIOR_CREDIT.</p>
+     */
+    public static DecisionFrame.Option reachabilityOnlyCostOrder(final DecisionFrame frame) {
+        Assert.assertEquals(frame.kind, DecisionFrame.Kind.ORDER_CHOICE,
+                "not a cost-order frame");
+        Assert.assertFalse(frame.options.isEmpty(), "no cost order offered");
+        for (DecisionFrame.Option option : frame.options) {
+            Assert.assertTrue("cost_order".equals(option.actionType)
+                            || "cost_order_next".equals(option.actionType),
+                    "non-cost option in cost-order frame: " + option.actionType);
+        }
+        return reachabilityOnlyChoice(frame,
+                "this test only drives through CR 601.2h order; order behaviour is tested separately");
+    }
+
     private static DecisionFrame.Option lowestById(final List<DecisionFrame.Option> options) {
         DecisionFrame.Option chosen = null;
         for (DecisionFrame.Option option : options) {

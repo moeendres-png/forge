@@ -435,6 +435,24 @@ public class WS202SeparateProcessTest {
         throw new AssertionError("never reached " + kind + " for " + actor);
     }
 
+    private static Opt reachabilityOnlyCostOrder(Frame frame) {
+        Assert.assertEquals(frame.kind, "ORDER_CHOICE", "not a cost-order frame");
+        Assert.assertFalse(frame.opts.isEmpty(), "no cost order offered");
+        Opt chosen = null;
+        for (Opt option : frame.opts) {
+            Assert.assertTrue("cost_order".equals(option.type)
+                            || "cost_order_next".equals(option.type),
+                    "non-cost option in cost-order frame: " + option.type);
+            if (chosen == null
+                    || String.valueOf(option.label).compareTo(String.valueOf(chosen.label)) < 0
+                    || (String.valueOf(option.label).equals(String.valueOf(chosen.label))
+                            && option.id.compareTo(chosen.id) < 0)) {
+                chosen = option;
+            }
+        }
+        return chosen;
+    }
+
     private static void autoAnswer(Pipe pipe, String game, Frame frame, String actor,
             String targetKind) throws Exception {
         if ("PRIORITY".equals(frame.kind) && "SUPPORTED".equals(frame.status)) {
@@ -444,6 +462,11 @@ public class WS202SeparateProcessTest {
         if ("MANA_PAYMENT".equals(frame.kind)) {
             final Opt first = frame.opts.get(0);
             submit(pipe, game, frame.actor, first.id, first.type, frame.revision, null);
+            return;
+        }
+        if ("ORDER_CHOICE".equals(frame.kind)) {
+            final Opt order = reachabilityOnlyCostOrder(frame);
+            submit(pipe, game, frame.actor, order.id, order.type, frame.revision, null);
             return;
         }
         if (("COMBAT_DECLARE_ATTACKERS".equals(frame.kind)

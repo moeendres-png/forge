@@ -773,6 +773,10 @@ public class WS234S3BridgeTest {
                 submit(session, parked, parked.options.get(0));
                 continue;
             }
+            if (parked.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, parked, BridgeTestSupport.reachabilityOnlyCostOrder(parked));
+                continue;
+            }
             // Any cost-selection for sac: pick Memnite if offered.
             boolean picked = false;
             for (DecisionFrame.Option o : parked.options) {

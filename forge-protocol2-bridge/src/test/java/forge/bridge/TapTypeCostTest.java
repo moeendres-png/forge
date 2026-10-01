@@ -95,6 +95,8 @@ public class TapTypeCostTest {
             } else if (frame.kind == DecisionFrame.Kind.COLOR_CHOICE) {
                 submit(session, frame, pick(frame, o -> o.label != null
                         && o.label.toLowerCase().contains("green"), "green"));
+            } else if (frame.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, frame, BridgeTestSupport.reachabilityOnlyCostOrder(frame));
             } else {
                 throw new AssertionError("unexpected " + frame.kind + " " + frame.status
                         + " " + frame.reason);

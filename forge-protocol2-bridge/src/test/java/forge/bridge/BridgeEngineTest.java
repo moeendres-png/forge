@@ -438,6 +438,13 @@ public class BridgeEngineTest {
             Assert.assertNotNull(parked);
             if (parked.kind == DecisionFrame.Kind.COST_SELECTION) {
                 costFrame = parked;
+            } else if (parked.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                final DecisionFrame.Option order =
+                        BridgeTestSupport.reachabilityOnlyCostOrder(parked);
+                final BridgeSession.SubmitOutcome ordered = session.submit(
+                        parked.actorPlayerId, order.optionId, order.actionType, parked.revision);
+                Assert.assertTrue(ordered.applied,
+                        "cost-order choice failed: " + ordered.errorCode);
             } else {
                 Assert.assertEquals(parked.kind, DecisionFrame.Kind.MANA_PAYMENT,
                         "unexpected frame kind during payment");

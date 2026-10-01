@@ -142,6 +142,10 @@ public class WS202ExecutableSurfaceTest {
                 submit(session, frame, first);
                 continue;
             }
+            if (frame.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, frame, BridgeTestSupport.reachabilityOnlyCostOrder(frame));
+                continue;
+            }
             if ((frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
                     || frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS)
                     && !frame.actorPlayerId.equals(actorId)) {
@@ -1238,6 +1242,10 @@ public class WS202ExecutableSurfaceTest {
             }
             if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
                 submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, parked, BridgeTestSupport.reachabilityOnlyCostOrder(parked));
                 continue;
             }
             if (parked.kind == DecisionFrame.Kind.PRIORITY
@@ -2412,6 +2420,10 @@ public class WS202ExecutableSurfaceTest {
                         o -> o.confirmValue != null && o.confirmValue, "sacrifice Lotus"));
                 continue;
             }
+            if (parked.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, parked, BridgeTestSupport.reachabilityOnlyCostOrder(parked));
+                continue;
+            }
             if (parked.kind == DecisionFrame.Kind.PRIORITY
                     && parked.status == DecisionFrame.Status.SUPPORTED) {
                 submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));
@@ -2467,6 +2479,10 @@ public class WS202ExecutableSurfaceTest {
             }
             if (parked.kind == DecisionFrame.Kind.MANA_PAYMENT) {
                 submit(session, parked, parked.options.get(0));
+                continue;
+            }
+            if (parked.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, parked, BridgeTestSupport.reachabilityOnlyCostOrder(parked));
                 continue;
             }
             if (parked.kind == DecisionFrame.Kind.PRIORITY

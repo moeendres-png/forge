@@ -407,6 +407,12 @@ public final class WsR24Pb08ReplayTwinChild {
             step = recordEnumerated(session, frame, first);
             outcome = session.submit(frame.actorPlayerId, first.optionId, first.actionType,
                     frame.revision);
+        } else if (frame.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+            final DecisionFrame.Option order =
+                    BridgeTestSupport.reachabilityOnlyCostOrder(frame);
+            step = recordEnumerated(session, frame, order);
+            outcome = session.submit(frame.actorPlayerId, order.optionId,
+                    order.actionType, frame.revision);
         } else if (frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
                 || frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS) {
             DecisionFrame.Option decline = null;

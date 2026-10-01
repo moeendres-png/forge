@@ -168,6 +168,8 @@ public class NonManaCostPartsTest {
             } else if (f.kind == DecisionFrame.Kind.TARGET_SELECTION) {
                 submit(session, f, pick(f, o -> o.label != null && o.label.contains("Craw Wurm"),
                         "target the opposing Craw Wurm"));
+            } else if (f.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, f, BridgeTestSupport.reachabilityOnlyCostOrder(f));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
                 submit(session, f, BridgeTestSupport.equivalentPayment(f));
             } else {
@@ -265,6 +267,8 @@ public class NonManaCostPartsTest {
                         && o.label.contains("Raging Goblin"), "return the goblin"));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
                 submit(session, f, BridgeTestSupport.equivalentPayment(f));
+            } else if (f.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, f, BridgeTestSupport.reachabilityOnlyCostOrder(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY && f.actorPlayerId.equals("p1")
                     && attacked && !ninjutsu && phase == PhaseType.COMBAT_DECLARE_BLOCKERS) {
                 Assert.assertEquals(f.status, DecisionFrame.Status.SUPPORTED,

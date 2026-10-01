@@ -975,6 +975,10 @@ public class WS216GapClosureTest {
                 submit(session, parked, parked.options.get(0));
                 continue;
             }
+            if (parked.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, parked, BridgeTestSupport.reachabilityOnlyCostOrder(parked));
+                continue;
+            }
             if (parked.kind == DecisionFrame.Kind.PRIORITY
                     && parked.status == DecisionFrame.Status.SUPPORTED) {
                 submit(session, parked, pickOption(parked, o -> o.isPass, "pass"));

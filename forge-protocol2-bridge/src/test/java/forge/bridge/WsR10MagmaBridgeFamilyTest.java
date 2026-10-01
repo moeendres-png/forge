@@ -94,6 +94,8 @@ public class WsR10MagmaBridgeFamilyTest {
             submit(session, frame, frame.options.get(0));
         } else if (frame.kind == DecisionFrame.Kind.TARGET_SELECTION) {
             submit(session, frame, frame.options.get(0));
+        } else if (frame.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+            submit(session, frame, BridgeTestSupport.reachabilityOnlyCostOrder(frame));
         } else if (frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
                 || frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS) {
             submit(session, frame, pickOption(frame,

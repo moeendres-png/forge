@@ -105,6 +105,8 @@ public class WsR9RetargetBridgeFamilyTest {
                 submit(session, frame, frame.options.get(0));
             } else if (frame.kind == DecisionFrame.Kind.TARGET_SELECTION) {
                 submit(session, frame, frame.options.get(0));
+            } else if (frame.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, frame, BridgeTestSupport.reachabilityOnlyCostOrder(frame));
             } else if ((frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
                     || frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_BLOCKERS)) {
                 submit(session, frame, pickOption(frame,
@@ -349,6 +351,8 @@ public class WsR9RetargetBridgeFamilyTest {
                 submit(session, f, f.options.get(0));
             } else if (f.kind == DecisionFrame.Kind.MANA_PAYMENT) {
                 submit(session, f, f.options.get(0));
+            } else if (f.kind == DecisionFrame.Kind.ORDER_CHOICE) {
+                submit(session, f, BridgeTestSupport.reachabilityOnlyCostOrder(f));
             } else if (f.kind == DecisionFrame.Kind.PRIORITY) {
                 submit(session, f, pickOption(f, o -> o.isPass, "pass"));
             } else {
