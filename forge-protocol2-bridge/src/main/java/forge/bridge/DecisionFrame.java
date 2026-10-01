@@ -84,6 +84,8 @@ public final class DecisionFrame {
         public final String stringValue;
         public final Object nativePayload;
         public final String payloadKind;
+        /** Structured provider metadata for CR 601.2h cost-order options. */
+        public final List<Integer> costOrderIndices;
         private boolean consumed;
 
         Option(String actionType, String label, String sourceCardName,
@@ -98,13 +100,22 @@ public final class DecisionFrame {
                 Object nativePayload, String payloadKind) {
             this(null, actionType, label, sourceCardName, nativeBinding, nativePlayer, isPass,
                     isKeep, isConcede, confirmValue, intValue, stringValue, nativePayload,
-                    payloadKind);
+                    payloadKind, Collections.emptyList());
         }
 
         Option(String optionId, String actionType, String label, String sourceCardName,
                 SpellAbility nativeBinding, Player nativePlayer, boolean isPass, boolean isKeep,
                 boolean isConcede, Boolean confirmValue, Integer intValue, String stringValue,
                 Object nativePayload, String payloadKind) {
+            this(optionId, actionType, label, sourceCardName, nativeBinding, nativePlayer,
+                    isPass, isKeep, isConcede, confirmValue, intValue, stringValue,
+                    nativePayload, payloadKind, Collections.emptyList());
+        }
+
+        Option(String optionId, String actionType, String label, String sourceCardName,
+                SpellAbility nativeBinding, Player nativePlayer, boolean isPass, boolean isKeep,
+                boolean isConcede, Boolean confirmValue, Integer intValue, String stringValue,
+                Object nativePayload, String payloadKind, List<Integer> costOrderIndices) {
             this.optionId = optionId == null ? "opt-" + UUID.randomUUID() : optionId;
             this.actionType = actionType;
             this.label = label;
@@ -119,6 +130,8 @@ public final class DecisionFrame {
             this.stringValue = stringValue;
             this.nativePayload = nativePayload;
             this.payloadKind = payloadKind == null ? "" : payloadKind;
+            this.costOrderIndices = Collections.unmodifiableList(new ArrayList<>(
+                    costOrderIndices == null ? Collections.emptyList() : costOrderIndices));
             this.consumed = false;
         }
 
@@ -265,6 +278,16 @@ public final class DecisionFrame {
             Object payload, String payloadKind) {
         return new Option(actionType, label, sourceCardName, null, null, false, false,
                 false, null, null, null, payload, payloadKind);
+    }
+
+    /**
+     * Cost-order option with machine-readable indices into the exact native
+     * CostPart list whose legal ordering the Rules Core exposed.
+     */
+    public static Option costOrderOption(String actionType, String label, Object payload,
+            String payloadKind, List<Integer> costOrderIndices) {
+        return new Option(null, actionType, label, null, null, null, false, false,
+                false, null, null, null, payload, payloadKind, costOrderIndices);
     }
 
     /**

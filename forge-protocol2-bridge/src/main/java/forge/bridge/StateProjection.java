@@ -350,6 +350,13 @@ public final class StateProjection {
         metadata.addProperty("revision", frame.revision);
         metadata.addProperty("frame_kind", frame.kind.name());
         metadata.addProperty("label", option.label);
+        if (!option.costOrderIndices.isEmpty()) {
+            final JsonArray costOrderIndices = new JsonArray();
+            for (Integer index : option.costOrderIndices) {
+                costOrderIndices.add(index);
+            }
+            metadata.add("cost_order_indices", costOrderIndices);
+        }
         action.add("metadata", metadata);
         return action;
     }

@@ -1189,12 +1189,18 @@ public final class ExternalPlayerController extends PlayerController {
             final List<DecisionFrame.Option> options = new ArrayList<>(permutations.size());
             for (List<CostPart> permutation : permutations) {
                 final StringBuilder label = new StringBuilder("Pay order:");
+                final List<Integer> orderIndices = new ArrayList<>(permutation.size());
                 for (CostPart part : permutation) {
-                    label.append(' ').append('#').append(indexOfIdentity(costs, part))
+                    final int sourceIndex = indexOfIdentity(costs, part);
+                    if (sourceIndex < 0) {
+                        throw unsupported("orderCosts", "cost part missing from native list");
+                    }
+                    orderIndices.add(Integer.valueOf(sourceIndex));
+                    label.append(' ').append('#').append(sourceIndex)
                             .append(' ').append(costPartLabel(part)).append(';');
                 }
-                options.add(DecisionFrame.payloadOption("cost_order", label.toString(), null,
-                        new ArrayList<>(permutation), "COST_ORDER"));
+                options.add(DecisionFrame.costOrderOption("cost_order", label.toString(),
+                        new ArrayList<>(permutation), "COST_ORDER", orderIndices));
             }
             final BridgeSession.FrameAnswer answer = session.parkFrame(
                     DecisionFrame.Kind.ORDER_CHOICE, player,
@@ -1213,9 +1219,13 @@ public final class ExternalPlayerController extends PlayerController {
             while (remaining.size() > 1) {
                 final List<DecisionFrame.Option> options = new ArrayList<>(remaining.size());
                 for (CostPart part : remaining) {
-                    options.add(DecisionFrame.payloadOption("cost_order_next",
-                            "Pay next: #" + indexOfIdentity(costs, part) + " " + costPartLabel(part),
-                            null, part, "COST_PART"));
+                    final int sourceIndex = indexOfIdentity(costs, part);
+                    if (sourceIndex < 0) {
+                        throw unsupported("orderCosts", "remaining cost part missing from native list");
+                    }
+                    options.add(DecisionFrame.costOrderOption("cost_order_next",
+                            "Pay next: #" + sourceIndex + " " + costPartLabel(part),
+                            part, "COST_PART", Collections.singletonList(Integer.valueOf(sourceIndex))));
                 }
                 final BridgeSession.FrameAnswer answer = session.parkFrame(
                         DecisionFrame.Kind.ORDER_CHOICE, player,
