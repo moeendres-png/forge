@@ -20,12 +20,12 @@ jobs:
       WS40_BASELINE_COMMIT: ef4c834dbbca21a099ae751fb52b2326abdf1e02
       WS40_BASELINE_TREE: abd80b8e9ba1178bcd8e8fb3147ed6df292b4597
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: foundry/ws40-af04-core-remediation
           fetch-depth: 0
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '17'
@@ -179,7 +179,7 @@ jobs:
           PY
           find artifacts/ws40-patch-repro -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > artifacts/ws40-patch-repro/SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: ws40-forge-patch-repro-${{ github.sha }}
