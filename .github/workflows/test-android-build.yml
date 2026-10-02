@@ -10,9 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      deployments: write
-      packages: write
+      contents: read
     strategy:
       matrix:
         java: [ '17' ]
