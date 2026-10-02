@@ -8,10 +8,13 @@ on:
 jobs:
   remove-stale-branches:
     if: github.repository_owner == 'Card-Forge'
+    # explicit: deleting stale branches upstream needs write; never runs in forks
+    permissions:
+      contents: write
     name: Remove Stale Branches
     runs-on: ubuntu-latest
     steps:
-      - uses: fpicalausa/remove-stale-branches@v2.1.0
+      - uses: fpicalausa/remove-stale-branches@8d7c410eb145f6f2daf40f2f7a8a249515a40f18 # v2.1.0
         with:
           dry-run: false # Check out the console output before setting this to false
           ignore-unknown-authors: true
