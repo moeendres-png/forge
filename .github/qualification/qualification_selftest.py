@@ -30,6 +30,7 @@ RED       a wrong or trivialized candidate state must fail closed. Every RED
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -199,6 +200,32 @@ def required_surface(modules=None, totals=None, classes=None, base=None, class_c
     }
 
 
+#: The separate account candidate code runs as; never the trusted identity.
+SANDBOX_USER = "d17cand"
+#: Ledger path -> digest of the bytes the trusted listener wrote and the trusted
+#: orchestrator authenticated. Bytes written later by any other route (a test
+#: simulating candidate tampering) do not match, exactly as in production.
+_AUTHENTICATED_LEDGERS: "dict[str, str]" = {}
+
+
+def integrity_ok(user=SANDBOX_USER) -> dict:
+    """INTEGRITY.json as sandbox.py verify writes it for an untampered run."""
+    return {"schema": qualify.INTEGRITY_SCHEMA, "status": "OK", "user": user, "violations": []}
+
+
+def authenticate(manifest: dict, witness_dir: Path) -> dict:
+    """Record, as the trusted orchestrator does, which ledger copies it authenticated."""
+    import copy
+
+    out = copy.deepcopy(manifest)
+    for module, entry in (out.get("modules") or {}).items():
+        digest = _AUTHENTICATED_LEDGERS.get(str(Path(witness_dir) / (module + ".witness.jsonl")))
+        if digest and "ledger_authentication" not in entry:
+            entry["ledger_authentication"] = qualify.LEDGER_AUTHENTICATED
+            entry["ledger_sha256"] = digest
+    return out
+
+
 def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes=None,
                        nonce=NONCE, base=None):
     """A trusted execution manifest as written by the trusted orchestrator."""
@@ -214,11 +241,14 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
         "witness_class": WITNESS_CLASS,
         "witness_source": "witness/forge/d17/witness/QualifiedExecutionListener.java",
         "candidate_artifacts_used_as_evidence": False,
+        "candidate_execution_identity": SANDBOX_USER,
+        "test_bytecode_origin": "trusted_compile_of_locked_git_export",
         "modules": {
             module: {
                 "module": module,
                 "required_classes": ["pkg.C{}".format(i) for i in range(2)],
                 "launch_exit_code": launch_codes[module],
+                "execution_identity": SANDBOX_USER,
                 "classpath_digest": "d" * 64,
                 "testng_totals": {"total": 3, "passed": 3, "failed": 0, "skipped": 0},
                 "testng_version_entry": "testng-7.8.0.jar",
@@ -265,6 +295,7 @@ def write_witness(witness_dir: Path, module: str, invocations, nonce=NONCE,
         lines.extend(raw_extra)
     path = witness_dir / (module + ".witness.jsonl")
     path.write_text("\n".join(lines) + "\n")
+    _AUTHENTICATED_LEDGERS[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
     return path
 
 
@@ -331,13 +362,19 @@ class EvidenceCase(unittest.TestCase):
                                              ([STRESS_CLASS] if out_of_band else ())))
         return modules, totals
 
-    def verdict(self, surface=None, manifest=None, out_of_band=None, witness_dir=None):
+    def verdict(self, surface=None, manifest=None, out_of_band=None, witness_dir=None,
+                integrity="ok", authenticated=True):
+        witness_dir = witness_dir if witness_dir is not None else self.witness_dir
+        manifest = manifest if manifest is not None else self.manifest
+        if authenticated:
+            manifest = authenticate(manifest, witness_dir)
         return qualify.build_evidence(
             self.lock,
             surface if surface is not None else self.surface,
-            manifest if manifest is not None else self.manifest,
-            witness_dir if witness_dir is not None else self.witness_dir,
+            manifest,
+            witness_dir,
             out_of_band or [],
+            integrity_ok() if integrity == "ok" else integrity,
         )
 
     def assertNotPass(self, evidence: dict, expected: str) -> None:
@@ -866,6 +903,145 @@ class RedVerdictDerivation(EvidenceCase):
 # --------------------------------------------------------------------------- #
 
 
+class RedTrustDomain(EvidenceCase):
+    """Coordinator finding at 17d42d7e: the candidate shared the validator's identity.
+
+    Credit now requires an orchestrator-authenticated ledger copy, candidate
+    execution as the separate sandbox account, and a verified INTEGRITY.json.
+    """
+
+    def test_an_honest_but_unauthenticated_ledger_is_not_credit(self) -> None:
+        self.honest()
+        evidence = self.verdict(authenticated=False)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("orchestrator-authenticated", evidence["reason"])
+
+    def test_a_ledger_rewritten_after_authentication_is_not_credit(self) -> None:
+        self.honest()
+        manifest = authenticate(self.manifest, self.witness_dir)
+        # Candidate-side rewrite with self-consistent, inflated content: every
+        # content check passes, only the authenticated digest can tell.
+        path = self.witness_dir / "forge-game.witness.jsonl"
+        records = honest_invocations("forge-game", 6)
+        lines = [json.dumps({"kind": "header", "schema": qualify.WITNESS_SCHEMA,
+                             "module": "forge-game", "nonce": NONCE}, sort_keys=True)]
+        for index, (klass, method, status) in enumerate(records):
+            lines.append(json.dumps({"kind": "invocation", "seq": index, "class": klass, "method": method,
+                                     "status": status, "context": "TestNG", "thread": "TestNG-0"},
+                                    sort_keys=True))
+        per = {}
+        for klass, _, _ in records:
+            per[klass] = per.get(klass, 0) + 1
+        lines.append(json.dumps({"kind": "summary", "tests": len(records), "failed": 0, "skipped": 0,
+                                 "per_class_total": per, "skip_classes": {}, "fail_classes": {},
+                                 "last_seq": len(records) - 1}, sort_keys=True))
+        path.write_text("\n".join(lines) + "\n")
+        evidence = self.verdict(manifest=manifest, authenticated=False)
+        self.assertNotPass(evidence, qualify.FAIL)
+        signals = {s["signal"]: s for s in qualification_of(evidence)["signals"]}
+        self.assertIn("digest_mismatch", signals["witness_ledgers_authenticated"]["detail"])
+
+    def test_candidate_code_run_as_a_trusted_identity_is_not_credit(self) -> None:
+        self.honest()
+        for identity in ("root", "runner", "", None):
+            with self.subTest(identity=identity):
+                manifest = dict(self.manifest, candidate_execution_identity=identity)
+                self.assertNotPass(self.verdict(manifest=manifest, integrity=integrity_ok(identity or "x")),
+                                   qualify.FAIL)
+
+    def test_a_launch_under_another_identity_is_not_credit(self) -> None:
+        import copy
+
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["modules"]["forge-game"]["execution_identity"] = "runner"
+        self.assertNotPass(self.verdict(manifest=manifest), qualify.FAIL)
+
+    def test_integrity_violation_is_fail_whatever_else_holds(self) -> None:
+        self.honest()
+        violated = dict(integrity_ok(), status="VIOLATION",
+                        violations=["trusted_state_integrity_violation: qualify.py differs from Git"])
+        evidence = self.verdict(integrity=violated)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("integrity was violated", evidence["reason"])
+
+    def test_missing_or_foreign_integrity_is_never_pass(self) -> None:
+        self.honest()
+        self.assertNotPass(self.verdict(integrity=None), qualify.UNKNOWN)
+        self.assertNotPass(self.verdict(integrity=dict(integrity_ok(), schema="other/1")), qualify.UNKNOWN)
+        self.assertNotPass(self.verdict(integrity=integrity_ok("someone-else")), qualify.FAIL)
+
+
+def _mac_ledger(bodies, key: bytes, nonce: str) -> bytes:
+    """Write a ledger exactly as QualifiedExecutionListener chains it."""
+    import hmac as _hmac
+
+    chain, out = nonce, []
+    for body in bodies:
+        chain = _hmac.new(key, (chain + "\n" + body).encode("utf-8"), hashlib.sha256).hexdigest()
+        out.append(body[:-1] + ',"mac":"' + chain + '"}')
+    return ("\n".join(out) + "\n").encode("utf-8")
+
+
+class TrustedLedgerAuthentication(unittest.TestCase):
+    """The orchestrator accepts only an unbroken HMAC chain under this run's key."""
+
+    KEY = bytes(range(32))
+    BODIES = [
+        '{"kind":"header","schema":"forge.d17.witness/1","module":"forge-game","nonce":"n1"}',
+        '{"kind":"invocation","seq":0,"class":"pkg.C0","method":"a","status":"PASS"}',
+        '{"kind":"summary","tests":1,"failed":0,"skipped":0}',
+    ]
+
+    def test_an_unbroken_chain_verifies(self) -> None:
+        lines, problem = trusted_execution.verify_ledger(_mac_ledger(self.BODIES, self.KEY, "n1"), self.KEY, "n1")
+        self.assertIsNone(problem)
+        self.assertEqual(len(lines), 3)
+
+    def test_every_forgery_is_rejected(self) -> None:
+        good = _mac_ledger(self.BODIES, self.KEY, "n1")
+        lines = good.decode().splitlines()
+        forged_tail = '{"kind":"invocation","seq":1,"class":"pkg.C1","method":"b","status":"PASS"}'
+        cases = {
+            "appended_unauthenticated_line": good + (forged_tail + "\n").encode(),
+            "line_altered": good.replace(b'"status":"PASS"', b'"status":"SKIP"'),
+            "lines_reordered": ("\n".join([lines[0], lines[2], lines[1]]) + "\n").encode(),
+            "other_key": _mac_ledger(self.BODIES, bytes(32), "n1"),
+            "replayed_from_another_run": _mac_ledger(self.BODIES, self.KEY, "n0"),
+            "middle_line_dropped": ("\n".join([lines[0], lines[2]]) + "\n").encode(),
+            "empty": b"",
+            "not_utf8": b"\xff\xfe",
+        }
+        for name, data in cases.items():
+            with self.subTest(case=name):
+                accepted, problem = trusted_execution.verify_ledger(data, self.KEY, "n1")
+                self.assertIsNone(accepted, name)
+                self.assertTrue(problem, name)
+
+    def test_the_trusted_testng_closure_is_pinned(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-pins-"))
+        self.addCleanup(shutil.rmtree, str(tmp), True)
+        jar = tmp / "testng-7.10.2.jar"
+        jar.write_bytes(b"not the pinned testng")
+        with self.assertRaises(trusted_execution.ExecutionError):
+            trusted_execution.verify_trusted_testng([jar])
+        other = tmp / "evil-testng.jar"
+        other.write_bytes(b"x")
+        with self.assertRaises(trusted_execution.ExecutionError):
+            trusted_execution.verify_trusted_testng([other])
+
+    def test_candidate_test_output_and_installed_siblings_never_reach_the_classpath(self) -> None:
+        root = Path("/srv/d17-sandbox/candidate")
+        entries = [
+            "/srv/d17-sandbox/candidate/forge-game/target/test-classes",
+            "/srv/d17-sandbox/home/.m2/repository/forge/forge-core/2.0/forge-core-2.0.jar",
+            "/srv/d17-sandbox/home/.m2/repository/org/testng/testng/7.10.2/testng-7.10.2.jar",
+        ]
+        kept, dropped = trusted_execution.sanitize_classpath(entries, root, [])
+        self.assertEqual(kept, ["/srv/d17-sandbox/home/.m2/repository/org/testng/testng/7.10.2/testng-7.10.2.jar"])
+        self.assertEqual(sorted(dropped), sorted(entries[:2]))
+
+
 class RedForgedCandidateArtifacts(EvidenceCase):
     """The property the reviewed head failed: forged reports must earn nothing."""
 
@@ -1067,14 +1243,19 @@ class VerdictCli(EvidenceCase):
         lock_path.write_text(json.dumps(self.lock))
         surface_path = self.root / "surface.json"
         surface_path.write_text(json.dumps(surface if surface is not None else self.surface))
+        witness_dir = witness_dir if witness_dir is not None else self.witness_dir
         manifest_path = self.root / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest if manifest is not None else self.manifest))
+        manifest_path.write_text(json.dumps(authenticate(manifest if manifest is not None else self.manifest,
+                                                         witness_dir)))
+        integrity_path = self.root / "INTEGRITY.json"
+        integrity_path.write_text(json.dumps(integrity_ok()))
         out = self.root / "evidence-out" / "qual.json"
         argv = [
             "--lock", str(lock_path),
             "--required-surface", str(surface_path),
             "--execution-manifest", str(manifest_path),
-            "--witness-dir", str(witness_dir if witness_dir is not None else self.witness_dir),
+            "--witness-dir", str(witness_dir),
+            "--integrity", str(integrity_path),
             "--output", str(out),
         ]
         for klass in out_of_band or []:
@@ -1132,6 +1313,7 @@ class VerdictCli(EvidenceCase):
             "--required-surface", str(self.root / "s.json"),
             "--execution-manifest", str(self.root / "m.json"),
             "--witness-dir", str(self.witness_dir),
+            "--integrity", str(self.root / "i.json"),
             "--output", str(out),
         ])
         self.assertEqual(code, qualify.EXIT_CODES[qualify.FAIL])
@@ -1359,6 +1541,38 @@ class WorkflowContractControls(unittest.TestCase):
         self.assertIn("execution-manifest.json", self.text)
         self.assertIn("witness", self.text)
 
+
+    def test_candidate_code_runs_only_as_the_sandbox_account(self) -> None:
+        """Coordinator finding at 17d42d7e: no candidate execution as the runner."""
+        prepare = self._step_run_block(self.text, "Prepare candidate sandbox (separate OS identity)")
+        for required in ('sandbox.py prepare', '--user "$D17_SANDBOX_USER"', "--harden-world-writable",
+                         "--stage-jdk", "--stage-maven", '--probe "$GITHUB_WORKSPACE"', '--probe "$RUNNER_TEMP"',
+                         'sandbox.py seal'):
+            with self.subTest(prepare=required):
+                self.assertIn(required, prepare)
+        execute = self._step_run_block(self.text, "Run trusted witnessed execution as the sandbox account")
+        for required in ("trusted_execution.py execute", '--sandbox-user "$D17_SANDBOX_USER"',
+                         '--mvn "$D17_TRUSTED_MAVEN/bin/mvn"', '--java "$D17_TRUSTED_JDK/bin/java"',
+                         "--trusted-testng", 'export PATH="$D17_TRUSTED_PATH"', "sandbox.py seal"):
+            with self.subTest(execute=required):
+                self.assertIn(required, execute)
+        verify = self._step_run_block(self.text, "Verify trusted state integrity")
+        self.assertIn("sandbox.py verify", verify)
+        self.assertIn("INTEGRITY.json", verify)
+        verdict = self._step_run_block(self.text, "Derive the exact-SHA qualification verdict")
+        self.assertIn("--integrity", verdict)
+        # The candidate tree is never checked out into a runner-owned workspace.
+        self.assertNotIn("git clone --quiet --no-checkout --shared", self.text)
+        self.assertNotRegex(self.text, r"-Dforge\.d17\.(nonce|witness)")
+        # Trusted steps after candidate code never resolve python from PATH.
+        for step in (execute, verify):
+            self.assertNotRegex(step, r"(^|\s)python3 ")
+
+    def test_trusted_state_lives_outside_world_writable_opt(self) -> None:
+        for key in ("D17_BUNDLE_DIR", "D17_RUNTIME_DIR", "D17_TRUSTED_JDK", "D17_TRUSTED_MAVEN"):
+            match = re.search(r"^\s*{}:\s*(\S+)".format(key), self.text, re.MULTILINE)
+            self.assertIsNotNone(match, key)
+            self.assertTrue(match.group(1).startswith("/var/lib/"), key)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

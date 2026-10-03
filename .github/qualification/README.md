@@ -44,20 +44,23 @@ provenance.** That revision was rejected at review and replaced.
 | Candidate identity is exact | Full lowercase 40-hex only; the fetched ref must resolve to exactly that commit; the TREE is re-proven inside the candidate workspace before any candidate code runs. |
 | No synthetic-merge fallback | `refs/pull/<n>/merge` is not an acceptable fetch ref. No merge is computed and no mergeability field is read anywhere. |
 | Execution is witnessed, not reported | A trusted listener, compiled here and placed first on the classpath, records every dispatch. Candidate reports are never consulted. |
+| Candidate code never runs as the validator | The candidate build and every candidate test JVM run as the separate account `d17cand` (`sandbox.py`). The environment is allowlisted, and every candidate process is reaped after each run. A probe run as that account must find no writable trusted path (the checkout, evidence, the runner's Maven cache, workflow command files, staged bundles), or the sandbox refuses to start. |
+| Trusted bytecode and toolchains are out of reach | Before any candidate code runs, the driver and listener are compiled against the digest-pinned TestNG 7.10.2 closure. They are staged root-owned and read-only under `/var/lib/d17-trusted` (`/opt` is world-writable on hosted runners), together with the JDK and Maven that later trusted steps use. |
+| The executed test bytecode is not the candidate's build output | Test sources are exported from the locked commit with `git archive` and compiled by trusted code with `-proc:none`. No `.class` file or TestNG service registration is copied from test resources, and compiled classes must stay byte-identical. The candidate's own `target/test-classes` and installed Forge sibling jars are dropped from the launch classpath. |
+| The ledger is authenticated | The key reaches the trusted driver on stdin only, never as a property, argument, environment variable or file. Every ledger line is HMAC-chained. The orchestrator verifies the chain before copying the ledger into trusted evidence and records the copy's digest. `qualify.py` credits only that copy. A line that candidate code adds, alters, reorders or replays rejects the ledger. |
+| Candidate listeners cannot change what runs or counts | TestNG's default listeners are off, and its service-loader discovery sees only the trusted jars, so a candidate `META-INF/services/org.testng.ITestNGListener` is never loaded. |
+| Integrity is verified, not assumed | `sandbox.py verify` re-derives every trusted file from Git, re-checks the evidence seals and checks that no candidate process is alive. `qualify.py` turns a violation into `FAIL` and a missing or foreign `INTEGRITY.json` into `UNKNOWN`. |
 | Stale evidence cannot be reused | The evidence directory is deleted and recreated each run; every witness ledger is bound to a fresh nonce and a gap-free sequence, and its summary is recomputed from its records. |
 | Non-PASS is never green | `PASS` exits 0. `FAIL`, `PARTIAL`, `NOT_RUN`, `UNKNOWN` exit 1, 2, 3, 4. |
 | Absurd identity claims are rejected | A lock that does not assert `candidate_code_executed_as_validator=false`, `verdict_read_from_candidate=false`, `synthetic_merge_consulted=false`, `pr_mergeability_consulted=false`, or whose comparison base claims a synthetic merge, is rejected on load. |
 
 ### Bounded influence of candidate-controlled inputs
 
-The candidate's POMs, sources, `mvn test-compile` and
-`dependency:build-classpath` are candidate-controlled because the code under
-qualification must be compiled. Their influence is bounded and **fail-closed by
-construction**: each can only *reduce* the set of required methods observed as
-dispatched. None can increase it, and none is read as evidence. If any is
-subverted, the run records fewer invocations than the trusted denominator
-requires, and the verdict is not `PASS`. Subverting the witness itself also only
-reduces observations.
+The candidate's POMs, main sources and dependency resolution stay
+candidate-controlled because the code under qualification must be built. They
+run only as the sandbox account. They decide which main and dependency classes
+load. They do not decide which test bytecode runs, whether an invocation counts,
+or the verdict rule.
 
 ## Separately reported evidence classes
 
@@ -115,7 +118,25 @@ This gate qualifies the Java 21 leg only. The Java 17 leg remains covered by the
 ```
 python3 .github/qualification/qualification_selftest.py
 python3 .github/qualification/qualification_mutation_check.py
+D17_REQUIRE_TOOLCHAIN=1 python3 -m unittest qualification_runtime_controls   # from .github/qualification
 ```
+
+`forge-candidate-qualification-selftest.yml` runs all three on every pull
+request that changes the gate.
+
+`qualification_runtime_controls.py` runs the real trusted driver and TestNG:
+
+* a candidate test that appends a forged PASS line to its ledger mid-run gets
+  the whole ledger rejected;
+* a candidate service listener that flips a failure to success is never loaded;
+* the key is not a system property;
+* run as the sandbox account, candidate test code cannot write trusted files.
+
+`RedTrustDomain` and `TrustedLedgerAuthentication` cover the verdict side. They
+reject an unauthenticated or rewritten ledger, candidate code run as `root` or
+`runner`, a launch under another identity, an integrity violation, missing
+integrity, and every MAC forgery: an appended line, an altered line, reordered
+lines, another key, a replay from another run, or a dropped line.
 
 `qualification_selftest.py` builds real Git repositories in temporary
 directories and asserts the **specific** non-`PASS` class for every red control,
@@ -145,14 +166,14 @@ used deliberately rather than adding a dependency.
 
 Stated as part of the evidence, not hidden.
 
-* **No in-JVM channel is unforgeable against adversarial candidate test code.**
-  Candidate tests run in the same JVM as the trusted listener, so a candidate
-  could in principle append witness records directly. That is a strictly harder
-  threat than forging build artifacts, requires a deliberate act in the
-  candidate's own test code (visible in its diff), and is not claimed as
-  prevented. What *is* prevented is everything in the enumerated attack list:
-  build/plugin/lifecycle suppression, Maven success with no execution, forged
-  or copied or committed reports, and manipulated report counts.
+* **The same JVM is shared.** Candidate test code runs in the trusted driver's
+  JVM, as the sandbox account. Deliberate in-process tampering, such as
+  reflecting on the driver's memory to read the key while the run is live, is
+  not ruled out. It would have to come from the candidate's own reviewable test
+  source. What the design guarantees: candidate code cannot write trusted state,
+  cannot change which test bytecode runs, cannot register a listener
+  declaratively, cannot forge a ledger line from outside the process, and cannot
+  make a forged ledger pass the orchestrator's verification.
 * **It cannot prove a candidate-owned test method is semantically strong.** That
   is review, not CI.
 * **It is not a required status check.** It is informational until a separate

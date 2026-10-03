@@ -17,9 +17,18 @@ any qualification signal. Credit is derived from two trusted ledgers:
 
 ``execution-manifest.json`` + ``witness/*.witness.jsonl``
     The trusted observation: the trusted orchestrator launched each module's
-    required classes itself, with a trusted listener compiled from the trusted
-    branch placed ahead of every candidate class, and that listener recorded each
-    dispatched method with its outcome.
+    required classes itself, as the separate sandbox account, with a trusted
+    driver and listener compiled from the trusted branch placed ahead of every
+    candidate class, and that listener recorded each dispatched method with its
+    outcome. Each ledger is HMAC-chained with a key only the trusted driver held;
+    the orchestrator verified the chain before copying the ledger into trusted
+    evidence and recorded the copy's digest in the manifest.
+
+``INTEGRITY.json``
+    Written by ``sandbox.py verify`` after every candidate execution: trusted
+    files re-derived from Git, evidence seals intact, no candidate process alive,
+    no trusted path writable by the candidate account. Anything but ``OK`` denies
+    PASS.
 
 Fail-closed contract
 --------------------
@@ -44,6 +53,7 @@ candidate-authored build artifacts from manufacturing PASS.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -69,6 +79,12 @@ VERDICT_KEYS = ("verdict", "status", "result", "outcome", "passed", "success")
 #: its failures are judged by the trusted witness rather than by the exit code.
 #: Any other code (or unparseable totals) means the launch itself did not finish.
 TESTNG_LAUNCH_COMPLETED_CODES = (0, 2)
+
+#: The orchestrator's verdict on a ledger's HMAC chain; nothing else is credit.
+LEDGER_AUTHENTICATED = "HMAC_CHAIN_VERIFIED"
+INTEGRITY_SCHEMA = "forge.candidate-qualification.integrity/1"
+#: Accounts that must never be the identity that executed candidate code.
+TRUSTED_IDENTITIES = ("root", "runner")
 
 _NOT_APPLICABLE = "NOT_APPLICABLE"
 _NOT_CLAIMED = "NOT_CLAIMED"
@@ -223,6 +239,8 @@ def derive_verdict(
     present_modules: "list[str]",
     out_of_band_classes: "list[str]",
     problems: "list[str]",
+    integrity: "dict | None" = None,
+    ledger_digests: "dict[str, str] | None" = None,
 ) -> dict:
     """Derive the verdict from trusted ledgers only. Pure function."""
     signals: "list[dict]" = []
@@ -353,9 +371,62 @@ def derive_verdict(
         ),
     )
 
+    # --- 10. Candidate code ran as the separate sandbox account -------------- #
+    identity = manifest.get("candidate_execution_identity")
+    launched_as = sorted({
+        str(entry.get("execution_identity"))
+        for module, entry in launch_entries.items()
+        if module in expected_modules
+    })
+    isolated = (
+        isinstance(identity, str) and bool(identity) and identity not in TRUSTED_IDENTITIES
+        and launched_as == [identity]
+        # When integrity was verified, it must have probed this same account.
+        and (not isinstance(integrity, dict) or integrity.get("user") == identity)
+    )
+    signal(
+        "candidate_executed_as_sandbox_account",
+        isolated,
+        "manifest identity={!r} launches={} integrity user={!r}".format(
+            identity, launched_as, (integrity or {}).get("user") if isinstance(integrity, dict) else None
+        ),
+    )
+
+    # --- 11. Trusted state integrity held across every candidate execution -- #
+    integrity_status = integrity.get("status") if isinstance(integrity, dict) else None
+    integrity_ok = (
+        isinstance(integrity, dict)
+        and integrity.get("schema") == INTEGRITY_SCHEMA
+        and integrity_status == "OK"
+    )
+    signal(
+        "trusted_state_integrity",
+        integrity_ok,
+        "integrity status={!r} violations={}".format(
+            integrity_status, (integrity or {}).get("violations") if isinstance(integrity, dict) else None
+        ),
+    )
+
+    # --- 12. Every credited ledger is the orchestrator-authenticated copy --- #
+    digests = ledger_digests or {}
+    unauthenticated = {}
+    for module in expected_modules:
+        entry = launch_entries.get(module) or {}
+        if entry.get("ledger_authentication") != LEDGER_AUTHENTICATED:
+            unauthenticated[module] = entry.get("ledger_authentication") or "absent"
+        elif not isinstance(entry.get("ledger_sha256"), str) or entry.get("ledger_sha256") != digests.get(module):
+            unauthenticated[module] = "digest_mismatch"
+    signal(
+        "witness_ledgers_authenticated",
+        not unauthenticated,
+        "unauthenticated ledgers: {}".format(json.dumps(unauthenticated, sort_keys=True) if unauthenticated else "none"),
+    )
+
     by_name = {item["signal"]: item for item in signals}
 
-    if not by_name["candidate_identity_bound"]["satisfied"]:
+    if integrity_status == "VIOLATION":
+        verdict, reason = FAIL, "trusted state integrity was violated during candidate execution"
+    elif not by_name["candidate_identity_bound"]["satisfied"]:
         verdict, reason = FAIL, "candidate identity is not bound to the locked exact SHA/TREE"
     elif not by_name["required_surface_bound_to_comparison_base"]["satisfied"]:
         verdict, reason = FAIL, "the required surface is not bound to the locked comparison base"
@@ -385,6 +456,19 @@ def derive_verdict(
         verdict, reason = PARTIAL, (
             "test cases inside the qualified surface were skipped and are not declared "
             "out of band by the trusted contract: {}".format(undeclared)
+        )
+    elif not by_name["witness_ledgers_authenticated"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "a credited witness ledger is not the orchestrator-authenticated copy; "
+            "see witness_ledgers_authenticated"
+        )
+    elif not by_name["candidate_executed_as_sandbox_account"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "candidate code was not shown to run as the separate sandbox account"
+        )
+    elif not by_name["trusted_state_integrity"]["satisfied"]:
+        verdict, reason = UNKNOWN, (
+            "trusted state integrity was not verified after candidate execution"
         )
     else:
         verdict, reason = PASS, (
@@ -434,8 +518,10 @@ def build_evidence(
     manifest: dict,
     witness_dir: Path,
     out_of_band_classes: "list[str]",
+    integrity: "dict | None" = None,
 ) -> dict:
     witness_by_module: "dict[str, dict]" = {}
+    ledger_digests: "dict[str, str]" = {}
     present_modules: "list[str]" = []
     problems: "list[str]" = []
     nonce = manifest.get("nonce")
@@ -445,6 +531,7 @@ def build_evidence(
         ledger = Path(witness_dir) / (module + ".witness.jsonl")
         if ledger.is_file():
             present_modules.append(module)
+            ledger_digests[module] = hashlib.sha256(ledger.read_bytes()).hexdigest()
         if not isinstance(nonce, str) or not nonce:
             problems.append("execution manifest carries no trusted run nonce")
             break
@@ -455,7 +542,7 @@ def build_evidence(
 
     outcome = derive_verdict(
         lock, surface, manifest, witness_by_module, present_modules,
-        out_of_band_classes, problems,
+        out_of_band_classes, problems, integrity, ledger_digests,
     )
 
     return {
@@ -516,6 +603,9 @@ def build_evidence(
             "candidate_reports_read_for_credit": False,
             "execution_observed_by": manifest.get("witness_class"),
             "execution_observed_from": "trusted listener compiled from the trusted default branch",
+            "candidate_execution_identity": manifest.get("candidate_execution_identity"),
+            "test_bytecode_origin": manifest.get("test_bytecode_origin"),
+            "trusted_state_integrity": (integrity or {}).get("status") if isinstance(integrity, dict) else None,
             "candidate_definition_divergent": lock["candidate_definition_divergence"]["divergent"],
             "candidate_definition_note": lock["candidate_definition_divergence"]["note"],
             "ignored_candidate_verdict_keys": list(VERDICT_KEYS),
@@ -541,6 +631,7 @@ def main(argv=None) -> int:
     parser.add_argument("--required-surface", required=True, help="trusted required surface ledger")
     parser.add_argument("--execution-manifest", required=True, help="trusted execution manifest")
     parser.add_argument("--witness-dir", required=True, help="directory of trusted witness ledgers")
+    parser.add_argument("--integrity", required=True, help="INTEGRITY.json written by sandbox.py verify")
     parser.add_argument(
         "--out-of-band-test-class", action="append", default=[],
         help="test class declared outside the qualified surface by the trusted contract; repeatable",
@@ -578,8 +669,12 @@ def main(argv=None) -> int:
         sys.stderr.write("qualify: {}\n".format(exc))
         return EXIT_CODES[FAIL]
 
+    try:
+        integrity = json.loads(Path(args.integrity).read_text())
+    except (OSError, ValueError):
+        integrity = None
     evidence = build_evidence(
-        lock, surface, manifest, Path(args.witness_dir), args.out_of_band_test_class
+        lock, surface, manifest, Path(args.witness_dir), args.out_of_band_test_class, integrity
     )
     write_evidence(evidence, Path(args.output))
     sys.stdout.write(

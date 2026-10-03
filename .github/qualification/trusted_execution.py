@@ -29,13 +29,32 @@ The replacement has two trusted halves:
     here from trusted source and placed ahead of every candidate class on the
     classpath.  It records each dispatched method with its outcome.
 
-Candidate-controlled inputs exist (POMs, sources, ``mvn test-compile``,
-``dependency:build-classpath``) because the code under qualification must be
-compiled.  Their influence is bounded and fail-closed by construction: each can
-only *reduce* the set of required methods observed as dispatched.  None can
-increase it, and none is read as evidence.  If any of them is subverted the run
-records fewer invocations than the trusted denominator requires, and the verdict
-is not PASS.
+Trust domain (Coordinator finding at ``17d42d7e``)
+-------------------------------------------------
+Candidate code never runs as the identity that owns trusted state:
+
+* the required surface is enumerated, and the trusted driver and listener are
+  compiled against a pinned, digest-checked TestNG, before any candidate code
+  runs; that bytecode is staged root-owned and read-only;
+* the candidate build (``mvn test-compile`` and ``dependency:build-classpath``)
+  and every candidate test JVM run as the separate sandbox account
+  (``sandbox.py``) with an allowlisted environment, and every candidate process
+  is reaped after each run;
+* the executed test bytecode is compiled here, by trusted code, from a
+  ``git archive`` export of the locked candidate commit with annotation
+  processing disabled (``-proc:none``); the candidate's ``target/test-classes``
+  is never executed, and test resources never contribute ``.class`` files or
+  TestNG service registrations;
+* the witness ledger is HMAC-chained with a per-module key that reaches the
+  trusted driver on stdin only; this orchestrator verifies every line before
+  copying the ledger into trusted evidence, so a ledger line the candidate
+  writes, alters, reorders or replays is rejected;
+* ``sandbox.py verify`` later re-derives every trusted file from Git and checks
+  the evidence seals (``INTEGRITY.json``), which ``qualify.py`` requires.
+
+The candidate's POMs, main sources and dependency resolution stay candidate
+influenced: they decide which dependency and main classes load, never which
+test bytecode runs, whether an invocation counts, or the verdict rule.
 
 Scope boundary
 --------------
@@ -51,6 +70,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -301,25 +321,81 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
 # Candidate compilation and trusted execution
 # --------------------------------------------------------------------------- #
 
+#: The TestNG the trusted driver and listener are compiled against and launched
+#: with, pinned by file digest. Resolved by a trusted step before any candidate
+#: code runs; a candidate's own TestNG on the classpath comes later and never
+#: loads first.
+TRUSTED_TESTNG_PINS = {
+    "testng-7.10.2.jar": "225fd56447f2e5e439db3b483a79cd9f294fad9f357f8352b12ee6a3411ebb15",
+    "jcommander-1.82.jar": "deeac157c8de6822878d85d0c7bc8467a19cc8484d37788f7804f039dde280b1",
+    "jquery-3.7.1.jar": "262016dd3a559df87aefbe392804e9bf620787c9204c0ab8522d4c231ea65097",
+    "slf4j-api-1.7.36.jar": "d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0",
+}
+DRIVER_CLASS = "forge.d17.witness.TrustedTestNGDriver"
+LEDGER_AUTHENTICATED = "HMAC_CHAIN_VERIFIED"
+#: Forge's own reactor artifacts, as installed in a Maven repository. A sibling
+#: resolved from an installed jar is not the candidate's code; the candidate's
+#: reactor output replaces it.
+STALE_SIBLING_MARKERS = ("/.m2/repository/forge/",)
+_MAC_SUFFIX = re.compile(r',"mac":"([0-9a-f]{64})"\}$')
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_trusted_testng(jars) -> "list[Path]":
+    """Exactly the pinned TestNG closure, each file matching its pinned digest."""
+    found = {}
+    for jar in jars:
+        path = Path(jar)
+        if path.name not in TRUSTED_TESTNG_PINS:
+            raise ExecutionError("unpinned trusted TestNG input {}".format(path.name))
+        if sha256_file(path) != TRUSTED_TESTNG_PINS[path.name]:
+            raise ExecutionError("trusted TestNG input {} does not match its pinned digest".format(path.name))
+        found[path.name] = path
+    missing = sorted(set(TRUSTED_TESTNG_PINS) - set(found))
+    if missing:
+        raise ExecutionError("trusted TestNG closure incomplete: {}".format(",".join(missing)))
+    return [found[name] for name in sorted(found)]
+
+
+def javac_of(java: str) -> str:
+    if java.endswith("/bin/java"):
+        return java[: -len("java")] + "javac"
+    home = os.environ.get("JAVA_HOME", "")
+    candidate = Path(home) / "bin" / "javac" if home else None
+    if candidate and candidate.is_file():
+        return str(candidate)
+    found = shutil.which("javac", path="/usr/sbin:/usr/bin:/sbin:/bin")
+    if not found:
+        raise ExecutionError("javac not found in JAVA_HOME or system directories")
+    return found
+
 
 def compile_witness(trusted_repo: Path, classes_dir: Path, java: str, testng_jar: str):
-    """Compile the trusted witness from trusted source with the trusted JDK."""
-    classes_dir.mkdir(parents=True, exist_ok=True)
+    """Compile the trusted driver and listener from trusted source against trusted TestNG."""
+    if classes_dir.exists():
+        shutil.rmtree(classes_dir)
+    classes_dir.mkdir(parents=True)
     # The witness source lives beside this trusted script, not at the repo root.
     witness_root = Path(__file__).resolve().parent / "witness"
     sources = sorted(str(p) for p in witness_root.rglob("*.java"))
     if not sources:
         raise ExecutionError("trusted witness source is missing")
-    code, _, err = run([java.replace("bin/java", "bin/javac") if java.endswith("/bin/java") else "javac",
-                        "-cp", testng_jar, "-d", str(classes_dir)] + sources,
-                       trusted_repo, timeout=900)
+    code, _, err = run([javac_of(java), "-proc:none", "-nowarn", "-cp", testng_jar, "-d", str(classes_dir)]
+                       + sources, trusted_repo, timeout=900)
     if code != 0:
         raise ExecutionError("trusted witness compilation failed: {}".format(err[-800:]))
     return classes_dir
 
 
 def assemble_classpath(witness_classes, entries) -> str:
-    """Assemble a launch classpath with the trusted listener classes first.
+    """Assemble a launch classpath with the trusted driver and listener first.
 
     The trusted witness must precede every candidate class so no candidate class
     of the same name can shadow it and capture the TestNG callbacks. This is a
@@ -328,145 +404,342 @@ def assemble_classpath(witness_classes, entries) -> str:
     return ":".join([str(witness_classes)] + list(entries))
 
 
-def execute_module(candidate_dir: Path, module: str, classes, witness_dir: Path,
-                   witness_classes: Path, nonce: str, java: str, argline, xvfbrun, cp_rel):
-    """Launch one module's required classes under the trusted witness."""
-    module_dir = candidate_dir / module
-    entries = module_classpath(module_dir, cp_rel)
-    testng = resolve_testng_jar(entries)
-    full_cp = assemble_classpath(witness_classes, entries)
-    out_dir = witness_dir / ("testng-" + module)
-    shutil.rmtree(out_dir, ignore_errors=True)
-    cmd = [java] + list(argline) + [
-        "-cp", full_cp,
-        "-Dforge.d17.module=" + module,
-        "-Dforge.d17.nonce=" + nonce,
-        "-Dforge.d17.witness.dir=" + str(witness_dir),
-        "org.testng.TestNG", "-d", str(out_dir),
-        "-listener", WITNESS_CLASS,
-        "-testclass", ",".join(classes),
+def class_file_digests(root: Path) -> dict:
+    if not root.is_dir():
+        return {}
+    return {p.relative_to(root).as_posix(): sha256_file(p) for p in root.rglob("*.class") if p.is_file()}
+
+
+def trusted_compile_tests(export_root: Path, module: str, classpath, out: Path, java: str) -> dict:
+    """Compile a module's test sources from the exact-SHA Git export, in trusted code.
+
+    ``-proc:none``: no annotation processor, and so no candidate or dependency
+    code, runs during compilation. Test resources are copied afterwards without
+    any ``.class`` file or TestNG service registration, and every compiled class
+    must be byte-identical after the copy.
+    """
+    module_dir = export_root / module
+    root = module_dir / "src" / "test" / "java"
+    sources = sorted(str(p) for p in root.rglob("*.java") if p.is_file() and not p.is_symlink()) if root.is_dir() else []
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    record = {"module": module, "sources": len(sources), "exit_code": None, "stderr_tail": "",
+              "dropped_test_resources": []}
+    if not sources:
+        record["exit_code"] = 0
+        return record
+    argfile = out.parent / "{}.sources".format(out.name)
+    argfile.write_text("\n".join('"{}"'.format(s.replace("\\", "\\\\")) for s in sources) + "\n")
+    code, _, err = run([javac_of(java), "-proc:none", "-nowarn", "-encoding", "UTF-8", "-d", str(out),
+                        "-cp", ":".join(classpath), "@{}".format(argfile)], module_dir, timeout=3600)
+    record["exit_code"] = code
+    record["stderr_tail"] = err.strip()[-2000:]
+    compiled = class_file_digests(out)
+    resources = module_dir / "src" / "test" / "resources"
+    if resources.is_dir():
+        def ignore(directory, names, base=resources):
+            dropped = []
+            for name in names:
+                path = Path(directory) / name
+                rel = path.relative_to(base).as_posix()
+                if path.is_symlink() or name.endswith(".class") or rel.startswith("META-INF/services/org.testng"):
+                    dropped.append(name)
+                    record["dropped_test_resources"].append(rel)
+            return dropped
+        shutil.copytree(resources, out, dirs_exist_ok=True, symlinks=False, ignore=ignore)
+    if class_file_digests(out) != compiled:
+        raise ExecutionError("test resources altered trusted-compiled bytecode in {}".format(module))
+    return record
+
+
+def compiled_class_names(root: Path) -> set:
+    return {".".join(p.relative_to(root).with_suffix("").parts) for p in root.rglob("*.class")
+            if "$" not in p.name} if root.is_dir() else set()
+
+
+def sanitize_classpath(entries, candidate_root: Path, modules) -> "tuple[list[str], list[str]]":
+    """Drop installed Forge sibling jars and the candidate's own test output.
+
+    The module's tests run from trusted-compiled bytecode, so every
+    ``target/test-classes`` directory the candidate build produced is dropped.
+    """
+    kept, dropped = [], []
+    for entry in entries:
+        normalized = entry.replace("\\", "/")
+        if any(marker in normalized for marker in STALE_SIBLING_MARKERS) or normalized.rstrip("/").endswith(
+            "/target/test-classes"
+        ):
+            dropped.append(entry)
+        else:
+            kept.append(entry)
+    reactor = [str(candidate_root / m / "target" / "classes") for m in modules
+               if (candidate_root / m / "target" / "classes").is_dir()]
+    return reactor + [e for e in kept if e not in reactor], dropped
+
+
+def candidate_classpath(candidate_root: Path, module: str, cp_rel: str) -> "list[str]":
+    path = candidate_root / module / cp_rel
+    raw = read_candidate_bytes(path)
+    if raw is None:
+        raise ExecutionError("candidate classpath missing for module {} (did the module build?)".format(module))
+    return [e for e in raw.decode("utf-8", "replace").strip().split(":") if e]
+
+
+def read_candidate_bytes(path: Path):
+    """Read a file the candidate account could have written, refusing symlinks."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read(64 * 1024 * 1024)
+
+
+def verify_ledger(data: bytes, key: bytes, nonce: str) -> "tuple[list[str] | None, str | None]":
+    """Authenticate a ledger line by line against the per-module HMAC chain.
+
+    Returns the verified lines, or the reason the ledger is rejected. Any line
+    that is not part of the unbroken chain from the header rejects the ledger.
+    """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "ledger_not_utf8"
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if not lines:
+        return None, "ledger_empty"
+    chain = nonce
+    for number, line in enumerate(lines, 1):
+        match = _MAC_SUFFIX.search(line)
+        if not match:
+            return None, "ledger_line_{}_unauthenticated".format(number)
+        body = line[: match.start()] + "}"
+        expected = hmac.new(key, (chain + "\n" + body).encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, match.group(1)):
+            return None, "ledger_line_{}_mac_mismatch".format(number)
+        chain = expected
+    return lines, None
+
+
+def execute_module(candidate_root: Path, module: str, classes, launch_dir: Path, bundle: Path,
+                   testng_jars, nonce: str, java: str, argline, xvfbrun, cp_rel, modules,
+                   user: str, home: Path, evidence_witness: Path):
+    """Launch one module's required classes as the sandbox account, under the trusted driver."""
+    import sandbox
+
+    entries, dropped = sanitize_classpath(candidate_classpath(candidate_root, module, cp_rel), candidate_root, modules)
+    staged_testng = [str(bundle / "testng" / Path(j).name) for j in testng_jars]
+    tests = bundle / "tests" / module
+    full_cp = assemble_classpath(bundle / "witness", staged_testng + [str(tests)] + entries)
+    ledger = launch_dir / (module + ".witness.jsonl")
+    cmd = list(xvfbrun) + [java] + list(argline) + [
+        "-XX:+DisableAttachMechanism", "-cp", full_cp, DRIVER_CLASS,
+        "--module", module, "--nonce", nonce, "--ledger", str(ledger),
+        "--output-dir", str(launch_dir / ("testng-" + module)),
     ]
-    code, stdout, stderr = run(xvfbrun + cmd, module_dir, timeout=7200)
-    digest = hashlib.sha256(full_cp.encode("utf-8")).hexdigest()
-    totals = _parse_testng_totals(stdout + stderr)
-    return {
+    for jar in staged_testng:
+        cmd += ["--trusted-jar", jar]
+    for name in classes:
+        cmd += ["--class", name]
+    key = secrets.token_bytes(32)
+    try:
+        proc = sandbox.run_candidate(user, home, candidate_root / module, cmd, timeout=7200,
+                                     stdin_bytes=key.hex().encode("ascii") + b"\n")
+        code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
+    except sandbox.SandboxError as exc:
+        code, stdout, stderr = 125, "", "sandbox failure: {}".format(exc)
+    raw = read_candidate_bytes(ledger)
+    entry = {
         "module": module,
         "required_classes": list(classes),
         "launch_exit_code": code,
-        "classpath_digest": digest,
-        "testng_totals": totals,
-        "testng_version_entry": os.path.basename(testng),
+        "execution_identity": user,
+        "classpath_digest": hashlib.sha256(full_cp.encode("utf-8")).hexdigest(),
+        "testng_totals": _parse_testng_totals(stdout + stderr),
+        "testng_version_entry": os.path.basename(staged_testng[0]) if staged_testng else None,
+        "stale_or_candidate_test_entries_dropped": dropped,
         "log_tail": (stdout + stderr)[-4000:],
     }
+    if raw is None:
+        entry["ledger_authentication"] = "MISSING"
+        return entry
+    lines, problem = verify_ledger(raw, key, nonce)
+    if problem:
+        entry["ledger_authentication"] = "REJECTED:" + problem
+        return entry
+    evidence_witness.mkdir(parents=True, exist_ok=True)
+    trusted_copy = evidence_witness / (module + ".witness.jsonl")
+    trusted_copy.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    entry["ledger_authentication"] = LEDGER_AUTHENTICATED
+    entry["ledger_sha256"] = sha256_file(trusted_copy)
+    entry["ledger_lines"] = len(lines)
+    return entry
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--trusted-repo", default=".", help="trusted default-branch checkout")
-    parser.add_argument("--candidate-dir", required=True, help="exact candidate working tree")
-    parser.add_argument("--evidence-dir", required=True, help="trusted evidence directory")
-    parser.add_argument("--modules", required=True, help="space separated required modules")
-    parser.add_argument("--java", default="java")
-    parser.add_argument("--xvfb-run", default="", help="prefix such as 'xvfb-run -a'")
-    parser.add_argument("--cp-rel", default="target/d17-cp.txt")
-    parser.add_argument("--candidate-sha", required=True,
-                        help="exact locked candidate SHA this execution is bound to")
-    parser.add_argument("--candidate-tree", required=True,
-                        help="exact locked candidate TREE this execution is bound to")
-    parser.add_argument("--comparison-base", required=True,
-                        help="exact trusted comparison base SHA to enumerate the required surface from")
-    parser.add_argument("--skip-required-surface", action="store_true",
-                        help="reuse an existing required-surface ledger")
-    args = parser.parse_args(argv)
-
+def cmd_surface(args) -> int:
     trusted_repo = Path(args.trusted_repo).resolve()
-    candidate_dir = Path(args.candidate_dir).resolve()
     evidence_dir = Path(args.evidence_dir).resolve()
     modules = args.modules.split()
     argline = list(DEFAULT_TRUSTED_ARGLINE)
     xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
-
-    # Reusing a previously computed denominator must survive the wipe below, so it
-    # is captured before the directory is reset.
-    surface_path = evidence_dir / "required-surface.json"
-    reusable_surface = None
-    if args.skip_required_surface and surface_path.is_file():
-        try:
-            reusable_surface = json.loads(surface_path.read_text())
-        except ValueError:
-            reusable_surface = None
-
     # A stale evidence directory must never be mistaken for this run's evidence.
     shutil.rmtree(evidence_dir, ignore_errors=True)
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    witness_dir = evidence_dir / "witness"
-    witness_dir.mkdir(parents=True, exist_ok=True)
-    nonce = secrets.token_hex(16)
-    log("evidence dir {} nonce {}".format(evidence_dir, nonce))
-
     try:
-        # 1. Trusted denominator from the trusted comparison base.
-        if reusable_surface is not None:
-            surface = reusable_surface
-            log("reusing required surface ({})".format(surface_path))
-            surface_path.write_text(json.dumps(surface, indent=2, sort_keys=True) + "\n")
-        else:
-            surface = build_required_surface(
-                trusted_repo, args.comparison_base,
-                modules, args.java, argline, xvfbrun, args.cp_rel,
-            )
-            surface_path.write_text(json.dumps(surface, indent=2, sort_keys=True) + "\n")
-        log("required surface total={}".format(
-            sum(m["required_total"] for m in surface["modules"].values())))
-
-        # 2. Compile the candidate. Candidate-influenced; can only reduce coverage.
-        compile_and_resolve(candidate_dir, modules, args.cp_rel, "candidate")
-
-        # 3. Compile the trusted witness against the candidate-resolved TestNG API.
-        probe_entries = module_classpath(candidate_dir / modules[0], args.cp_rel)
-        testng_jar = resolve_testng_jar(probe_entries)
-        witness_classes = compile_witness(
-            trusted_repo, evidence_dir / "witness-classes", args.java, testng_jar
-        )
-        log("trusted witness compiled against {}".format(os.path.basename(testng_jar)))
-
-        # 4. Launch each module's required classes under the trusted witness.
-        results = {}
-        for module in modules:
-            required = surface["modules"][module]["classes"]
-            if not required:
-                results[module] = {"module": module, "required_classes": [],
-                                   "launch_exit_code": 0, "skipped_no_required_tests": True}
-                continue
-            log("executing {} ({} required classes)".format(module, len(required)))
-            results[module] = execute_module(
-                candidate_dir, module, required, witness_dir, witness_classes,
-                nonce, args.java, argline, xvfbrun, args.cp_rel,
-            )
-            log("  {} launch exit={} testng totals={}".format(
-                module, results[module]["launch_exit_code"], results[module]["testng_totals"]))
-
-        manifest = {
-            "schema": EXECUTION_MANIFEST_SCHEMA,
-            "nonce": nonce,
-            "candidate_sha": args.candidate_sha,
-            "candidate_tree": args.candidate_tree,
-            "comparison_base_sha": args.comparison_base,
-            "candidate_dir_name": candidate_dir.name,
-            "trusted_argline": argline,
-            "witness_class": WITNESS_CLASS,
-            "witness_source": WITNESS_SOURCE,
-            "candidate_artifacts_used_as_evidence": False,
-            "modules": results,
-        }
-        (evidence_dir / "execution-manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-        )
+        surface = build_required_surface(trusted_repo, args.comparison_base, modules, args.java,
+                                         argline, xvfbrun, args.cp_rel)
     except ExecutionError as exc:
         sys.stderr.write("d17-exec: {}\n".format(exc))
         return 1
+    (evidence_dir / "required-surface.json").write_text(json.dumps(surface, indent=2, sort_keys=True) + "\n")
+    log("required surface total={}".format(sum(m["required_total"] for m in surface["modules"].values())))
     return 0
 
+
+def cmd_execute(args) -> int:
+    import sandbox
+
+    trusted_repo = Path(args.trusted_repo).resolve()
+    evidence_dir = Path(args.evidence_dir).resolve()
+    sandbox_dir = Path(args.sandbox_dir).resolve()
+    candidate_root = sandbox_dir / "candidate"
+    bundle = Path(args.bundle_dir)
+    work = Path(args.work_dir).resolve()
+    modules = args.modules.split()
+    argline = list(DEFAULT_TRUSTED_ARGLINE)
+    xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
+    nonce = secrets.token_hex(16)
+    manifest = {
+        "schema": EXECUTION_MANIFEST_SCHEMA,
+        "nonce": nonce,
+        "candidate_sha": args.candidate_sha,
+        "candidate_tree": args.candidate_tree,
+        "comparison_base_sha": args.comparison_base,
+        "trusted_argline": argline,
+        "witness_class": WITNESS_CLASS,
+        "witness_source": WITNESS_SOURCE,
+        "driver_class": DRIVER_CLASS,
+        "candidate_execution_identity": args.sandbox_user,
+        "test_bytecode_origin": "trusted_compile_of_locked_git_export",
+        "ledger_authentication_scheme": "HMAC-SHA256 chain, per-module key on driver stdin",
+        "candidate_artifacts_used_as_evidence": False,
+        "modules": {},
+    }
+    manifest_path = evidence_dir / "execution-manifest.json"
+    try:
+        surface = json.loads((evidence_dir / "required-surface.json").read_text())
+        prepared = json.loads(Path(args.sandbox_prepare).read_text())
+        if prepared.get("status") != "READY" or prepared.get("user") != args.sandbox_user:
+            raise ExecutionError("sandbox is not READY for {}: {}".format(args.sandbox_user, prepared.get("error")))
+        if prepared.get("candidate_sha") != args.candidate_sha:
+            raise ExecutionError("sandbox candidate {} is not the locked {}".format(
+                prepared.get("candidate_sha"), args.candidate_sha))
+        testng_jars = verify_trusted_testng(args.trusted_testng)
+        manifest["trusted_testng"] = {p.name: TRUSTED_TESTNG_PINS[p.name] for p in testng_jars}
+        home = sandbox.sandbox_home(sandbox_dir)
+
+        # 1. Trusted bytecode first: driver and listener, before any candidate code.
+        staging = work / "bundle"
+        if staging.exists():
+            shutil.rmtree(staging)
+        (staging / "testng").mkdir(parents=True)
+        for jar in testng_jars:
+            shutil.copy2(jar, staging / "testng" / jar.name)
+        testng_main = str(staging / "testng" / "testng-7.10.2.jar")
+        compile_witness(trusted_repo, staging / "witness", args.java, testng_main)
+
+        # 2. The candidate build, as the sandbox account. Candidate influenced.
+        build = sandbox.run_candidate(
+            args.sandbox_user, home, candidate_root,
+            [args.mvn, "-B", "-q", "-DskipTests", "test-compile", "dependency:build-classpath",
+             "-Dmdep.outputFile=" + args.cp_rel, "-DincludeScope=test", "-pl", ",".join(modules), "-am"],
+            timeout=14400,
+        )
+        manifest["candidate_build"] = {"exit_code": build.returncode, "user": args.sandbox_user,
+                                       "stderr_tail": build.stderr[-2000:]}
+        if build.returncode != 0:
+            raise ExecutionError("candidate build failed (exit {})".format(build.returncode))
+
+        # 3. Trusted compilation of the exact-SHA test sources.
+        export = work / "export"
+        sandbox.export_commit(trusted_repo, args.candidate_sha, export)
+        records = {}
+        for module in modules:
+            entries, _ = sanitize_classpath(candidate_classpath(candidate_root, module, args.cp_rel),
+                                            candidate_root, modules)
+            out = staging / "tests" / module
+            records[module] = trusted_compile_tests(export, module, [str(j) for j in testng_jars] + entries,
+                                                    out, args.java)
+            records[module]["compiled_required"] = sorted(
+                set(surface["modules"][module]["classes"]) & compiled_class_names(out))
+        manifest["trusted_test_compilation"] = records
+        sandbox.stage_readonly(staging, bundle)
+
+        # 4. One trusted-driver launch per module, as the sandbox account.
+        launch_dir = sandbox_dir / "witness-out"
+        sandbox.run_candidate(args.sandbox_user, home, sandbox_dir,
+                              ["/bin/sh", "-c", 'rm -rf "$1" && mkdir -p "$1"', "d17", str(launch_dir)])
+        for module in modules:
+            required = surface["modules"][module]["classes"]
+            if not required:
+                manifest["modules"][module] = {"module": module, "required_classes": [],
+                                               "launch_exit_code": 0, "skipped_no_required_tests": True}
+                continue
+            log("executing {} ({} required classes) as {}".format(module, len(required), args.sandbox_user))
+            manifest["modules"][module] = execute_module(
+                candidate_root, module, required, launch_dir, bundle, testng_jars, nonce,
+                args.java, argline, xvfbrun, args.cp_rel, modules, args.sandbox_user, home,
+                evidence_dir / "witness",
+            )
+            log("  {} exit={} ledger={} totals={}".format(
+                module, manifest["modules"][module]["launch_exit_code"],
+                manifest["modules"][module]["ledger_authentication"],
+                manifest["modules"][module]["testng_totals"]))
+    except (ExecutionError, sandbox.SandboxError, OSError, KeyError, ValueError) as exc:
+        manifest["error"] = str(exc)
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        sys.stderr.write("d17-exec: {}\n".format(exc))
+        return 1
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def common(p):
+        p.add_argument("--trusted-repo", default=".", help="trusted default-branch checkout")
+        p.add_argument("--evidence-dir", required=True, help="trusted evidence directory")
+        p.add_argument("--modules", required=True, help="space separated required modules")
+        p.add_argument("--java", default="java")
+        p.add_argument("--xvfb-run", default="", help="prefix such as '/usr/bin/xvfb-run -a'")
+        p.add_argument("--cp-rel", default="target/d17-cp.txt")
+        p.add_argument("--comparison-base", required=True,
+                       help="exact trusted comparison base SHA to enumerate the required surface from")
+
+    s = sub.add_parser("surface", help="enumerate the required surface from the trusted comparison base")
+    common(s)
+
+    e = sub.add_parser("execute", help="build and run the exact candidate as the sandbox account")
+    common(e)
+    e.add_argument("--candidate-sha", required=True, help="exact locked candidate SHA")
+    e.add_argument("--candidate-tree", required=True, help="exact locked candidate TREE")
+    e.add_argument("--sandbox-dir", required=True)
+    e.add_argument("--sandbox-user", required=True)
+    e.add_argument("--sandbox-prepare", required=True, help="SANDBOX_PREPARE.json written by sandbox.py prepare")
+    e.add_argument("--bundle-dir", required=True, help="root-owned read-only directory for trusted bytecode")
+    e.add_argument("--work-dir", required=True)
+    e.add_argument("--mvn", required=True, help="staged trusted Maven launcher (absolute path)")
+    e.add_argument("--trusted-testng", action="append", required=True,
+                   help="pinned TestNG closure jar resolved by a trusted step; repeatable")
+
+    args = parser.parse_args(argv)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    return cmd_surface(args) if args.command == "surface" else cmd_execute(args)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

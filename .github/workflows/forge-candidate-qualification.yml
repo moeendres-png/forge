@@ -65,6 +65,20 @@ env:
   # excluded here.
   QUALIFY_OUT_OF_BAND_CLASSES: "forge.net.NetworkPlayIntegrationTest"
   QUALIFY_JAVA: "21"
+  # Trust domain. Candidate Maven and candidate test JVMs run only as this
+  # separate account, in this sandbox; trusted bytecode and toolchains are
+  # staged root-owned and read-only under /var/lib (on hosted runners /opt is
+  # world-writable and not sticky, so nothing trusted may live there).
+  D17_SANDBOX_USER: d17cand
+  D17_SANDBOX_DIR: /srv/d17-sandbox
+  D17_BUNDLE_DIR: /var/lib/d17-trusted/bundle
+  D17_RUNTIME_DIR: /var/lib/d17-trusted/runtime
+  D17_TRUSTED_JDK: /var/lib/d17-trusted/jdk
+  D17_TRUSTED_MAVEN: /var/lib/d17-trusted/maven
+  D17_TRUSTED_PATH: /var/lib/d17-trusted/jdk/bin:/var/lib/d17-trusted/maven/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  # The TestNG the trusted driver and listener are compiled and launched with.
+  # trusted_execution.py pins each jar of this closure by digest.
+  D17_TESTNG_VERSION: "7.10.2"
 
 jobs:
   # ------------------------------------------------------------------------ #
@@ -188,8 +202,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Materialize the exact candidate commit
-        id: candidate
+      - name: Fetch the exact candidate commit into the trusted object store
         shell: bash
         env:
           CANDIDATE_SHA: ${{ needs.candidate-identity.outputs.candidate_sha }}
@@ -197,13 +210,9 @@ jobs:
           TRUSTED_CANDIDATE_TREE: ${{ needs.candidate-identity.outputs.candidate_tree }}
         run: |
           set -euo pipefail
-          candidate_dir="$RUNNER_TEMP/candidate"
-
-          # Fetch the exact object into the trusted checkout first.  Any failure
-          # here is fatal: there is no fallback to a branch tip, to another SHA,
-          # or to a synthetic merge.  The locked `fetched_from` is a real ref only
-          # when it starts with `refs/`; otherwise the candidate came from an
-          # explicit SHA.
+          # Any failure here is fatal: there is no fallback to a branch tip, to
+          # another SHA, or to a synthetic merge. The candidate is never checked
+          # out here; sandbox.py exports it with `git archive` into the sandbox.
           if [[ "$CANDIDATE_REF" == refs/* ]]; then
             git fetch --quiet --no-tags origin "$CANDIDATE_REF"
           else
@@ -214,21 +223,7 @@ jobs:
             echo "::error::fetched $fetched but the locked candidate is $CANDIDATE_SHA"
             exit 1
           fi
-
-          # The candidate working tree is a separate repository: its own HEAD,
-          # index, config and refs, borrowing the object database read-only via
-          # alternates so that a 1 GiB pack is not duplicated.  It shares no ref
-          # with the trusted checkout and never replaces the trusted workspace.
-          git clone --quiet --no-checkout --shared "$GITHUB_WORKSPACE" "$candidate_dir"
-          git -C "$candidate_dir" checkout --quiet --detach "$CANDIDATE_SHA"
-
-          # Re-prove the exact identity from inside the candidate workspace.
-          observed="$(git -C "$candidate_dir" rev-parse HEAD)"
-          tree="$(git -C "$candidate_dir" rev-parse HEAD^{tree})"
-          if [[ "$observed" != "$CANDIDATE_SHA" ]]; then
-            echo "::error::candidate checkout is $observed, expected $CANDIDATE_SHA"
-            exit 1
-          fi
+          tree="$(git rev-parse "$CANDIDATE_SHA^{tree}")"
           if [[ "$tree" != "$TRUSTED_CANDIDATE_TREE" ]]; then
             echo "::error::candidate TREE $tree does not match locked TREE $TRUSTED_CANDIDATE_TREE"
             exit 1
@@ -241,40 +236,152 @@ jobs:
           java-version: ${{ env.QUALIFY_JAVA }}
           cache: maven
 
-      # The trusted orchestrator enumerates the required surface by dry-running
-      # the trusted comparison base, compiles the candidate, compiles its own
-      # listener from trusted source, and launches each module's required
-      # classes with that listener first on the classpath.
-      - name: Run trusted witnessed execution
-        id: execute
+      # Before any candidate code runs: resolve the pinned TestNG closure (its
+      # digests are checked by trusted_execution.py) and enumerate the trusted
+      # denominator from the trusted comparison base.
+      - name: Resolve the pinned trusted TestNG closure
         shell: bash
+        run: |
+          set -euo pipefail
+          mvn -B -q dependency:get -Dartifact=org.testng:testng:${D17_TESTNG_VERSION} -Dtransitive=true
+          dest="$RUNNER_TEMP/d17-testng"
+          mkdir -p "$dest"
+          m2="$HOME/.m2/repository"
+          cp "$m2/org/testng/testng/${D17_TESTNG_VERSION}/testng-${D17_TESTNG_VERSION}.jar" \
+             "$m2/com/beust/jcommander/1.82/jcommander-1.82.jar" \
+             "$m2/org/webjars/jquery/3.7.1/jquery-3.7.1.jar" \
+             "$m2/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar" "$dest/"
+          sha256sum "$dest"/*.jar
+
+      - name: Enumerate the trusted required surface
+        shell: bash
+        env:
+          COMPARISON_BASE: ${{ needs.candidate-identity.outputs.comparison_base_sha }}
+          EXPECTED_MODULES: ${{ env.QUALIFY_EXPECTED_MODULES }}
+          EVIDENCE_DIR: ${{ runner.temp }}/d17-evidence
+        run: |
+          set -euo pipefail
+          /usr/bin/python3 -I -B .github/qualification/trusted_execution.py surface \
+            --trusted-repo . \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --modules "$EXPECTED_MODULES" \
+            --comparison-base "$COMPARISON_BASE" \
+            --java java \
+            --xvfb-run "xvfb-run -a"
+
+      - name: Prepare candidate sandbox (separate OS identity)
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ needs.candidate-identity.outputs.candidate_sha }}
+          EVIDENCE_DIR: ${{ runner.temp }}/d17-evidence
+        run: |
+          set -euo pipefail
+          command_files="$(dirname "$GITHUB_ENV")"
+          testng=()
+          for jar in "$RUNNER_TEMP"/d17-testng/*.jar; do testng+=(--bundle-file "$jar"); done
+          /usr/bin/python3 -I -B .github/qualification/sandbox.py prepare \
+            --user "$D17_SANDBOX_USER" \
+            --repo "$GITHUB_WORKSPACE" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --sandbox-dir "$D17_SANDBOX_DIR" \
+            --bundle-dir "$D17_RUNTIME_DIR" \
+            "${testng[@]}" \
+            --seed-maven-repo "$HOME/.m2/repository" \
+            --work-dir "$RUNNER_TEMP" \
+            --probe "$GITHUB_WORKSPACE" \
+            --probe "$RUNNER_TEMP" \
+            --probe "$HOME/.m2" \
+            --probe "$command_files" \
+            --stage-jdk "$JAVA_HOME" \
+            --jdk-dest "$D17_TRUSTED_JDK" \
+            --stage-maven "$(dirname "$(dirname "$(readlink -f "$(command -v mvn)")")")" \
+            --maven-dest "$D17_TRUSTED_MAVEN" \
+            --harden-world-writable \
+            --out "$EVIDENCE_DIR/SANDBOX_PREPARE.json"
+          # Every later step, trusted or sandboxed, uses the staged read-only JDK.
+          echo "JAVA_HOME=$D17_TRUSTED_JDK" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/d17-seals"
+          /usr/bin/python3 -I -B .github/qualification/sandbox.py seal \
+            --out "$RUNNER_TEMP/d17-seals/before-candidate.json" \
+            "$EVIDENCE_DIR/required-surface.json" \
+            "$EVIDENCE_DIR/SANDBOX_PREPARE.json" \
+            "$RUNNER_TEMP"/d17-testng/*.jar
+
+      # The orchestrator compiles the trusted driver and listener against the
+      # pinned TestNG, builds the candidate as the sandbox account, compiles the
+      # candidate's test sources itself from the locked Git export, launches
+      # each module's required classes as the sandbox account with the ledger
+      # key on stdin, and copies only HMAC-verified ledgers into evidence.
+      - name: Run trusted witnessed execution as the sandbox account
+        id: execute
+        shell: /usr/bin/bash --noprofile --norc {0}
         env:
           CANDIDATE_SHA: ${{ needs.candidate-identity.outputs.candidate_sha }}
           CANDIDATE_TREE: ${{ needs.candidate-identity.outputs.candidate_tree }}
           COMPARISON_BASE: ${{ needs.candidate-identity.outputs.comparison_base_sha }}
           EXPECTED_MODULES: ${{ env.QUALIFY_EXPECTED_MODULES }}
-          CANDIDATE_DIR: ${{ runner.temp }}/candidate
           EVIDENCE_DIR: ${{ runner.temp }}/d17-evidence
         run: |
+          export PATH="$D17_TRUSTED_PATH"
           set -uo pipefail
-          python3 .github/qualification/trusted_execution.py \
+          testng=()
+          for jar in "$RUNNER_TEMP"/d17-testng/*.jar; do testng+=(--trusted-testng "$jar"); done
+          /usr/bin/python3 -I -B .github/qualification/trusted_execution.py execute \
             --trusted-repo . \
-            --candidate-dir "$CANDIDATE_DIR" \
             --evidence-dir "$EVIDENCE_DIR" \
             --modules "$EXPECTED_MODULES" \
             --candidate-sha "$CANDIDATE_SHA" \
             --candidate-tree "$CANDIDATE_TREE" \
             --comparison-base "$COMPARISON_BASE" \
-            --java java \
-            --xvfb-run "xvfb-run -a"
+            --sandbox-dir "$D17_SANDBOX_DIR" \
+            --sandbox-user "$D17_SANDBOX_USER" \
+            --sandbox-prepare "$EVIDENCE_DIR/SANDBOX_PREPARE.json" \
+            --bundle-dir "$D17_BUNDLE_DIR" \
+            --work-dir "$RUNNER_TEMP/d17-work" \
+            --mvn "$D17_TRUSTED_MAVEN/bin/mvn" \
+            --java "$D17_TRUSTED_JDK/bin/java" \
+            --xvfb-run "/usr/bin/xvfb-run -a" \
+            "${testng[@]}"
           rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          seal_files=("$EVIDENCE_DIR/execution-manifest.json")
+          if [[ -d "$EVIDENCE_DIR/witness" ]]; then
+            while IFS= read -r -d '' ledger; do seal_files+=("$ledger"); done \
+              < <(find "$EVIDENCE_DIR/witness" -type f -name '*.witness.jsonl' -print0)
+          fi
+          /usr/bin/python3 -I -B .github/qualification/sandbox.py seal \
+            --out "$RUNNER_TEMP/d17-seals/after-execution.json" "${seal_files[@]}"
           exit "$rc"
 
-      # The evidence directory is trusted-owned: required-surface.json,
-      # execution-manifest.json, the compiled trusted listener classes and the
-      # witness ledgers it produced.  It is created fresh by the orchestrator and
-      # never sourced from the candidate tree.
+      - name: Verify trusted state integrity
+        if: always()
+        shell: /usr/bin/bash --noprofile --norc {0}
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/d17-evidence
+        run: |
+          export PATH="$D17_TRUSTED_PATH"
+          set -uo pipefail
+          command_files="$(dirname "$GITHUB_ENV")"
+          seals=()
+          for seal in "$RUNNER_TEMP"/d17-seals/*.json; do seals+=(--seal "$seal"); done
+          /usr/bin/python3 -I -B .github/qualification/sandbox.py verify \
+            --user "$D17_SANDBOX_USER" \
+            --repo "$GITHUB_WORKSPACE" \
+            --trusted-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" \
+            "${seals[@]}" \
+            --probe "$GITHUB_WORKSPACE" \
+            --probe "$RUNNER_TEMP" \
+            --probe "$HOME/.m2" \
+            --probe "$command_files" \
+            --probe "$D17_BUNDLE_DIR" \
+            --probe "$D17_RUNTIME_DIR" \
+            --probe "$D17_TRUSTED_JDK" \
+            --out "$EVIDENCE_DIR/INTEGRITY.json"
+          exit 0
+
+      # The evidence directory is trusted-owned and was probed unwritable by the
+      # sandbox account: required-surface.json, execution-manifest.json, the
+      # HMAC-verified ledger copies, the sandbox record and INTEGRITY.json.
       - name: Upload trusted execution evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -283,6 +390,8 @@ jobs:
           path: |
             ${{ runner.temp }}/d17-evidence/required-surface.json
             ${{ runner.temp }}/d17-evidence/execution-manifest.json
+            ${{ runner.temp }}/d17-evidence/SANDBOX_PREPARE.json
+            ${{ runner.temp }}/d17-evidence/INTEGRITY.json
             ${{ runner.temp }}/d17-evidence/witness
           if-no-files-found: warn
           retention-days: 30
@@ -332,6 +441,7 @@ jobs:
             --required-surface "$RUNNER_TEMP/d17-evidence/required-surface.json" \
             --execution-manifest "$RUNNER_TEMP/d17-evidence/execution-manifest.json" \
             --witness-dir "$RUNNER_TEMP/d17-evidence/witness" \
+            --integrity "$RUNNER_TEMP/d17-evidence/INTEGRITY.json" \
             "${out_of_band[@]}" \
             --output "$RUNNER_TEMP/evidence/FORGE_CANDIDATE_QUALIFICATION.json"
           rc=$?

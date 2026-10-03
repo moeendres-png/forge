@@ -6,8 +6,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 import org.testng.IInvokedMethod;
 import org.testng.IInvokedMethodListener;
@@ -37,6 +42,14 @@ import org.testng.ITestResult;
  *   <li>Output is JSON Lines: a header record, one record per dispatched test
  *       method, and a closing summary. The trusted verifier recomputes every
  *       aggregate from the invocation records rather than trusting the summary.</li>
+ *   <li>Every line is authenticated: it ends with {@code "mac"}, an HMAC-SHA256
+ *       over the previous line's MAC and this line's body, keyed by a secret the
+ *       trusted orchestrator hands to {@link TrustedTestNGDriver} on stdin. The
+ *       key never appears in a system property, argument, environment variable
+ *       or file. The ledger directory is writable by the candidate account, so
+ *       candidate code can delete or truncate a ledger (which only removes
+ *       credit) but cannot add, alter, reorder or replay a line the orchestrator
+ *       accepts.</li>
  * </ul>
  *
  * <p>Scope. The witness proves that required tests were dispatched and how they
@@ -64,13 +77,29 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
     private long failures = 0L;
     private long skips = 0L;
 
-    public QualifiedExecutionListener() {
-        this.module = required("forge.d17.module");
-        this.nonce = required("forge.d17.nonce");
-        Path dir = Paths.get(required("forge.d17.witness.dir"));
+    private final Mac mac;
+    private String chain;
+
+    /**
+     * Constructed only by the trusted driver, never by TestNG reflection: the
+     * listener has no public no-argument constructor, so a {@code -listener}
+     * argument or service registration cannot instantiate an unkeyed copy.
+     */
+    QualifiedExecutionListener(String module, String nonce, Path output, byte[] key) {
+        this.module = module;
+        this.nonce = nonce;
+        this.output = output;
         try {
-            Files.createDirectories(dir);
-            this.output = dir.resolve(module + ".witness.jsonl");
+            this.mac = Mac.getInstance("HmacSHA256");
+            this.mac.init(new SecretKeySpec(key, "HmacSHA256"));
+        } catch (GeneralSecurityException exc) {
+            throw new IllegalStateException("witness cannot key its ledger", exc);
+        } finally {
+            Arrays.fill(key, (byte) 0);
+        }
+        this.chain = nonce;
+        try {
+            Files.createDirectories(output.getParent());
             // A stale witness must never be mistaken for this run's evidence.
             Files.deleteIfExists(this.output);
             write("{\"kind\":\"header\",\"schema\":\"" + SCHEMA + "\",\"module\":"
@@ -78,14 +107,6 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
         } catch (IOException exc) {
             throw new IllegalStateException("witness cannot initialise", exc);
         }
-    }
-
-    private static String required(String key) {
-        String value = System.getProperty(key);
-        if (value == null || value.isEmpty()) {
-            throw new IllegalStateException("witness requires system property " + key);
-        }
-        return value;
     }
 
     private static String quote(String raw) {
@@ -108,7 +129,16 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
         counts.put(key, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
     }
 
-    private void write(String line) {
+    private synchronized void write(String body) {
+        // body is one complete JSON object. The authenticated line is that
+        // object with a final "mac" member: HMAC(previous mac + "\n" + body).
+        byte[] digest = mac.doFinal((chain + "\n" + body).getBytes(StandardCharsets.UTF_8));
+        StringBuilder hex = new StringBuilder();
+        for (byte b : digest) {
+            hex.append(String.format("%02x", Integer.valueOf(b & 0xff)));
+        }
+        chain = hex.toString();
+        String line = body.substring(0, body.length() - 1) + ",\"mac\":\"" + chain + "\"}";
         try {
             Files.write(this.output, (line + "\n").getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
@@ -117,11 +147,19 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
         }
     }
 
-    /**
-     * Records one dispatched test method. Only genuine TestNG dispatches
-     * carrying a live context and instance are counted.
-     */
-    private void record(ITestResult result) {
+    long invocations() {
+        return sequence;
+    }
+
+    long failures() {
+        return failures;
+    }
+
+    long skips() {
+        return skips;
+    }
+
+    private synchronized void record(ITestResult result) {
         if (result == null) {
             return;
         }
