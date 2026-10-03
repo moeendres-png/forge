@@ -65,6 +65,15 @@ Signals are evaluated strongest-negative-first:
 report, and `QUALIFY_OUT_OF_BAND_CLASSES` declares test classes outside the
 qualified surface.
 
+The surface is intentionally identical to the existing `test-build.yaml` gate:
+`xvfb-run -a mvn -U -B clean test` over the whole reactor. Measured on Forge
+master `b95c07b3436bf582274ea458520ca30aa379d6e7` with Java 21 that is **666
+tests** in **17:04 min** — `forge-game` 3, `forge-gui-desktop` 450 and
+`forge-protocol2-bridge` 213. Those three are the only modules with test sources
+in the default reactor, and each must report or the qualification is `PARTIAL`.
+Qualifying a narrower subset would silently drop 213 existing tests from the
+candidate's qualification, so the surface is not narrowed.
+
 Only a skip in a declared out-of-band class is excluded. A skip in any other
 class is `PARTIAL`, and a skipped count that cannot be attributed to a class is
 always `PARTIAL` (`<unattributable>`), so an exemption cannot be laundered
@@ -73,6 +82,9 @@ through an opaque report. `skipped_total`, `observed_skipped_classes`,
 reported, so the exclusion list is an auditable scope statement rather than a
 silent suppression. Adding a class to that list is a change to the trusted
 definition on `master` and is therefore visible in review.
+
+This gate qualifies the Java 21 leg only. The Java 17 leg remains covered by the
+`test-build.yaml` matrix; JDK battery scope belongs to D21/#502.
 
 ## Controls
 

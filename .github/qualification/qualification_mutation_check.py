@@ -30,6 +30,27 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PRODUCT = ("source_lock.py", "qualify.py", "qualification_selftest.py")
 
+#: Workflow files the workflow-contract controls read.  They must be staged next
+#: to the product copy so those controls are exercised rather than erroring out.
+WORKFLOWS = ("forge-candidate-qualification.yml", "test-build.yaml")
+
+
+def stage(root: Path) -> Path:
+    """Materialize a runnable copy of the real qualification layout under ``root``.
+
+    The copy mirrors ``.github/`` so the workflow-contract controls resolve the
+    same paths they do in the repository instead of erroring out.
+    """
+    qualification = root / ".github" / "qualification"
+    workflows = root / ".github" / "workflows"
+    qualification.mkdir(parents=True, exist_ok=True)
+    workflows.mkdir(parents=True, exist_ok=True)
+    for name in PRODUCT:
+        shutil.copy2(HERE / name, qualification / name)
+    for name in WORKFLOWS:
+        shutil.copy2(HERE.parent / "workflows" / name, workflows / name)
+    return qualification
+
 
 class Mutation:
     """One deliberate violation of one qualification safety property."""
@@ -218,10 +239,7 @@ def main() -> int:
     try:
         # Baseline: the unmutated suite must be green, otherwise "detected" is
         # meaningless.
-        baseline_root = scratch / "baseline"
-        baseline_root.mkdir()
-        for name in PRODUCT:
-            shutil.copy2(HERE / name, baseline_root / name)
+        baseline_root = stage(scratch / "baseline")
         code, output = run_controls(baseline_root)
         if code != 0:
             sys.stderr.write("baseline control suite is not green:\n{}\n".format(output[-4000:]))
@@ -229,10 +247,7 @@ def main() -> int:
         print("baseline           : GREEN ({} controls)".format(output.count(" ... ")))
 
         for index, mutation in enumerate(MUTATIONS):
-            root = scratch / "mutant-{}".format(index)
-            root.mkdir()
-            for name in PRODUCT:
-                shutil.copy2(HERE / name, root / name)
+            root = stage(scratch / "mutant-{}".format(index))
             mutation.apply(root)
             code, output = run_controls(root)
             if code == 0:

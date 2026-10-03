@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1012,6 +1013,164 @@ class SourceLockCli(FixtureCase):
         )
         self.assertEqual(code, 1)
         self.assertFalse(out.exists(), "no partially proven lock may be emitted")
+
+
+class WorkflowContractControls(unittest.TestCase):
+    """Assert the trust-critical properties of the trusted workflow definition.
+
+    These are executable assertions rather than prose, because each one protects
+    a property that is invisible from the Python verifier alone: if the workflow
+    stops triggering on the trusted event, gains a default write token, or stops
+    uploading a declared module's evidence, the gate silently stops qualifying
+    anything.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.workflow_path = HERE.parent / "workflows" / "forge-candidate-qualification.yml"
+        cls.text = cls.workflow_path.read_text()
+        match = re.search(
+            r'^\s*QUALIFY_EXPECTED_MODULES:\s*"([^"]+)"', cls.text, re.MULTILINE
+        )
+        assert match, "QUALIFY_EXPECTED_MODULES is not declared in the workflow"
+        cls.modules = match.group(1).split()
+        out_of_band = re.search(
+            r'^\s*QUALIFY_OUT_OF_BAND_CLASSES:\s*"([^"]*)"', cls.text, re.MULTILINE
+        )
+        assert out_of_band, "QUALIFY_OUT_OF_BAND_CLASSES is not declared in the workflow"
+        cls.out_of_band = out_of_band.group(1).split()
+
+    @staticmethod
+    def _step_run_block(text: str, step_name: str) -> str:
+        """Extract the ``run:`` body of the named step.
+
+        Assertions must be made against the executed command, never against a
+        substring that a comment could satisfy.  The body is taken by
+        indentation relative to its own ``run:`` key, so it is independent of how
+        deeply the step happens to be nested.
+        """
+        lines = text.splitlines()
+        try:
+            start = next(
+                i for i, line in enumerate(lines) if line.strip() == "- name: {}".format(step_name)
+            )
+        except StopIteration:
+            raise AssertionError("step {!r} not found".format(step_name))
+        run_index = None
+        for index in range(start + 1, len(lines)):
+            stripped = lines[index].strip()
+            if stripped.startswith("- ") or stripped.startswith("#"):
+                break
+            if stripped == "run:" or re.match(r"^run:\s*[|>][-+]?[0-9]*$", stripped):
+                run_index = index
+                break
+        if run_index is None:
+            raise AssertionError("step {!r} has no run: block".format(step_name))
+        indent = len(lines[run_index]) - len(lines[run_index].lstrip())
+        body = []
+        for line in lines[run_index + 1:]:
+            if not line.strip():
+                body.append("")
+                continue
+            if len(line) - len(line.lstrip()) <= indent:
+                break
+            body.append(line.strip())
+        return "\n".join(body).strip()
+
+    def test_verdict_is_surfaced_verbatim_and_never_hardcoded(self) -> None:
+        """The recorded verdict must be the verifier's own exit code.
+
+        A hardcoded `exit_code=0` would turn every non-PASS class green, which is
+        the single most dangerous edit to this workflow.
+        """
+        verdict = self._step_run_block(self.text, "Derive the exact-SHA qualification verdict")
+        self.assertIn("exit_code=$rc", verdict)
+        for forbidden in ("exit_code=0", "exit_code=1", "|| true", "|| exit 0", "exit 0\n"):
+            with self.subTest(token=forbidden.strip()):
+                self.assertNotIn(forbidden, verdict)
+        # The python invocation must not be masked either.
+        self.assertNotRegex(verdict, r"qualify\.py[^\n]*\|\|")
+
+        surface = self._step_run_block(self.text, "Surface classification")
+        self.assertIn('exit "$EXIT_CODE"', surface)
+        self.assertIn('if: always()', self.text)
+        # An absent exit code must fail closed rather than default to success.
+        self.assertRegex(surface, r'if \[\[ -z "\$EXIT_CODE" \]\][\s\S]{0,200}exit 4')
+        self.assertNotIn('echo "exit_code=0"', self.text)
+
+    def test_expected_surface_is_declared_and_not_empty(self) -> None:
+        self.assertTrue(self.modules)
+        for module in self.modules:
+            self.assertRegex(module, r"^[a-z0-9][a-z0-9-]*$")
+
+    def test_every_declared_module_is_uploaded_as_evidence(self) -> None:
+        """A declared module that is not uploaded can never report evidence.
+
+        This is a real failure mode: the module would silently read as missing
+        on every run. It is asserted here so the two lists cannot drift.
+        """
+        for module in self.modules:
+            with self.subTest(module=module):
+                self.assertIn(
+                    "/candidate/{}/target/surefire-reports".format(module),
+                    self.text,
+                    "module {} is declared but never uploaded".format(module),
+                )
+
+    def test_qualification_runs_the_same_surface_as_the_existing_gate(self) -> None:
+        """D17 must not quietly narrow or diverge from test-build.yaml.
+
+        The comparison is made against the executed command of each gate's own
+        run step, so a comment that merely mentions the command cannot satisfy
+        this control.
+        """
+        ours = self._step_run_block(self.text, "Run bounded candidate test surface")
+        self.assertIn("mvn -U -B clean test", ours)
+        # No module selection or `-am` narrowing: the whole reactor must run.
+        self.assertNotIn("-pl ", ours)
+        self.assertNotIn("--settings", ours)
+
+        existing_text = (HERE.parent / "workflows" / "test-build.yaml").read_text()
+        existing = self._step_run_block(existing_text, "Run tests in virtual framebuffer")
+        self.assertIn("mvn -U -B clean test", existing)
+        self.assertEqual(
+            ours.split()[-3:],
+            existing.split()[-3:],
+            "D17 and test-build.yaml must invoke the same maven command",
+        )
+
+    def test_trigger_is_the_trusted_event_not_the_untrusted_one(self) -> None:
+        self.assertIn("pull_request_target:", self.text)
+        # A bare `pull_request:` trigger would let the candidate supply the
+        # definition that qualifies it.
+        self.assertIsNone(
+            re.search(r"^\s{2}pull_request:\s*$", self.text, re.MULTILINE),
+            "an untrusted pull_request trigger is present",
+        )
+
+    def test_no_default_token_capability(self) -> None:
+        self.assertIsNotNone(
+            re.search(r"^permissions:\s*\{\}\s*$", self.text, re.MULTILINE),
+            "top-level permissions must be an explicit empty map",
+        )
+        for forbidden in ("write-all", "contents: write", "actions: write"):
+            with self.subTest(capability=forbidden):
+                self.assertNotIn(forbidden, self.text)
+
+    def test_no_continue_on_error(self) -> None:
+        self.assertNotIn("continue-on-error", self.text)
+
+    def test_out_of_band_declarations_are_explicit_and_well_formed(self) -> None:
+        self.assertTrue(self.out_of_band, "out-of-band list must be explicit, not implicit")
+        for klass in self.out_of_band:
+            self.assertRegex(klass, r"^[a-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
+
+    def test_verifier_is_read_from_the_trusted_checkout(self) -> None:
+        """The verifier is invoked from the checkout, never from the candidate."""
+        self.assertIn(".github/qualification/qualify.py", self.text)
+        self.assertIn(".github/qualification/source_lock.py", self.text)
+        # The verdict step must run before any `cd` into the candidate tree.
+        self.assertNotRegex(self.text, r"cd \"\$RUNNER_TEMP/candidate\"[\s\S]{0,400}qualify\.py")
 
 
 if __name__ == "__main__":

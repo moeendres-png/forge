@@ -41,9 +41,17 @@ permissions: {}
 
 env:
   PYTHONHASHSEED: "0"
-  # Bounded qualification surface.  A module that reports no evidence makes the
-  # qualification PARTIAL rather than silently narrower.
-  QUALIFY_EXPECTED_MODULES: "forge-game forge-gui-desktop"
+  # Bounded qualification surface.
+  #
+  # The surface is deliberately identical to the existing `test-build.yaml` gate
+  # (`mvn -U -B clean test` over the whole reactor) so that this gate qualifies
+  # exactly what Forge already gates and no module can be quietly dropped from it.
+  # Measured on Forge master b95c07b3436bf582274ea458520ca30aa379d6e7 with
+  # Java 21: 666 tests -- forge-game 3, forge-gui-desktop 450, and
+  # forge-protocol2-bridge 213 -- in 17:04 min.  These three are the only modules
+  # with test sources in the default reactor, so each must report or the
+  # qualification is PARTIAL.
+  QUALIFY_EXPECTED_MODULES: "forge-game forge-gui-desktop forge-protocol2-bridge"
   # Test classes the trusted contract declares outside the qualified surface.
   # Only skips in these classes are excluded from the completeness requirement;
   # a skip anywhere else, or a skip that cannot be attributed to a class, makes
@@ -54,7 +62,8 @@ env:
   # forge.net.NetworkPlayIntegrationTest stress cases are opt-in by design: they
   # self-report "Stress tests skipped. Use -Drun.stress.tests=true to run." and
   # exercise network play, not the bounded qualification surface. Measured on
-  # Forge master b95c07b3436bf582274ea458520ca30aa379d6e7: 6 such skips.
+  # Forge master b95c07b3436bf582274ea458520ca30aa379d6e7: 6 such skips, and no
+  # other skipped case in the whole reactor.
   # Adding a class here is a change to the trusted definition on master and is
   # therefore visible in review.  No Rules or card-behavior test class is
   # excluded here.
@@ -243,9 +252,8 @@ jobs:
         run: |
           set -o pipefail
           cd "$CANDIDATE_DIR"
-          xvfb-run -a mvn -B \
-            --settings ./.mvn/local-settings.xml \
-            -pl forge-gui-desktop -am test
+          # Same command and surface as the existing test-build.yaml gate.
+          xvfb-run -a mvn -U -B clean test
 
       - name: Record the trusted run report
         if: always()
@@ -269,10 +277,7 @@ jobs:
               "schema": "forge.candidate-qualification.run-report/1",
               "candidate_sha": os.environ["CANDIDATE_SHA"],
               "candidate_tree": os.environ["CANDIDATE_TREE"],
-              "maven_command": (
-                  "xvfb-run -a mvn -B --settings ./.mvn/local-settings.xml "
-                  "-pl forge-gui-desktop -am test"
-              ),
+              "maven_command": "xvfb-run -a mvn -U -B clean test",
               "completed": os.environ["RUN_EXIT_CODE"] == "0",
               "step_exit_codes": {
                   "materialize_candidate": 0 if os.environ["CANDIDATE_STEP_OUTCOME"] == "success" else 1,
@@ -289,7 +294,8 @@ jobs:
       # paths, i.e. $RUNNER_TEMP, so the archive contains exactly:
       #   run-report.json                                        (trusted)
       #   candidate/<module>/target/surefire-reports/TEST-*.xml  (candidate data)
-      # Job 3 depends on that layout.
+      # Job 3 depends on that layout.  Every module named in
+      # QUALIFY_EXPECTED_MODULES must be listed here.
       - name: Upload candidate qualification inputs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -299,6 +305,7 @@ jobs:
             ${{ runner.temp }}/run-report.json
             ${{ runner.temp }}/candidate/forge-game/target/surefire-reports
             ${{ runner.temp }}/candidate/forge-gui-desktop/target/surefire-reports
+            ${{ runner.temp }}/candidate/forge-protocol2-bridge/target/surefire-reports
           if-no-files-found: warn
           retention-days: 30
 
