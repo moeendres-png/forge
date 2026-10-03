@@ -111,7 +111,7 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
     private void write(String line) {
         try {
             Files.write(this.output, (line + "\n").getBytes(StandardCharsets.UTF_8),
-                    StandardOpenOption.APPEND);
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException exc) {
             throw new IllegalStateException("witness cannot record", exc);
         }

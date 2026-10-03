@@ -63,6 +63,13 @@ EXIT_CODES = {PASS: 0, FAIL: 1, PARTIAL: 2, NOT_RUN: 3, UNKNOWN: 4}
 
 VERDICT_KEYS = ("verdict", "status", "result", "outcome", "passed", "success")
 
+#: TestNG's own process exit codes: 0 = all passed, 1 = suite had failures,
+#: 2 = suite completed but some tests were skipped. A skipped-but-complete run is
+#: not a broken launch; its skips are judged separately by the skip policy, and
+#: its failures are judged by the trusted witness rather than by the exit code.
+#: Any other code (or unparseable totals) means the launch itself did not finish.
+TESTNG_LAUNCH_COMPLETED_CODES = (0, 2)
+
 _NOT_APPLICABLE = "NOT_APPLICABLE"
 _NOT_CLAIMED = "NOT_CLAIMED"
 
@@ -251,22 +258,35 @@ def derive_verdict(
     required_classes = {
         module: list(entry.get("classes", [])) for module, entry in modules.items()
     }
+    # Per-class floors come from the trusted dry run, so a class that the trusted
+    # lineage itself never executes is not demanded of the candidate, and a class
+    # it does execute cannot be partially suppressed.
+    required_class_counts = {
+        module: dict(entry.get("class_counts") or {}) for module, entry in modules.items()
+    }
     signal(
         "required_surface_non_empty",
         required_total > 0 and any(required_classes.values()),
         "{} required invocation(s) across {} module(s)".format(required_total, len(modules)),
     )
 
-    # --- 4. Trusted launches succeeded -------------------------------------- #
-    launch_codes = {
-        module: entry.get("launch_exit_code")
-        for module, entry in (manifest.get("modules") or {}).items()
+    # --- 4. Trusted launches completed -------------------------------------- #
+    launch_entries = manifest.get("modules") or {}
+    launch_codes = {module: entry.get("launch_exit_code") for module, entry in launch_entries.items()}
+    incomplete = {
+        module: code
+        for module, entry in launch_entries.items()
+        for code in [entry.get("launch_exit_code")]
+        if not (isinstance(code, int) and not isinstance(code, bool)
+                and code in TESTNG_LAUNCH_COMPLETED_CODES
+                and isinstance(entry.get("testng_totals"), dict))
     }
-    launches_ok = bool(launch_codes) and all(
-        isinstance(code, int) and not isinstance(code, bool) and code == 0
-        for code in launch_codes.values()
+    launches_ok = bool(launch_codes) and not incomplete
+    signal(
+        "trusted_launches_completed",
+        launches_ok,
+        "launch_exit_codes={} incomplete={}".format(launch_codes, incomplete),
     )
-    signal("trusted_launches_succeeded", launches_ok, "launch_exit_codes={}".format(launch_codes))
 
     # --- 5. Witness ledgers are present and authentic ----------------------- #
     expected_modules = sorted(m for m, classes in required_classes.items() if classes)
@@ -283,11 +303,16 @@ def derive_verdict(
     dead_classes: "dict[str, list]" = {}
     for module in expected_modules:
         observed = witness_by_module.get(module)
+        floors = required_class_counts.get(module, {})
+        wanted = required_classes.get(module, [])
         if observed is None:
-            dead_classes[module] = list(required_classes.get(module, []))
+            dead_classes[module] = list(wanted)
             continue
         alive = observed["per_class_total"]
-        missing = [name for name in required_classes.get(module, []) if alive.get(name, 0) < 1]
+        missing = [
+            name for name in wanted
+            if alive.get(name, 0) < max(1, int(floors.get(name, 1)))
+        ]
         if missing:
             dead_classes[module] = missing
     signal(
@@ -334,8 +359,10 @@ def derive_verdict(
         verdict, reason = FAIL, "candidate identity is not bound to the locked exact SHA/TREE"
     elif not by_name["required_surface_bound_to_comparison_base"]["satisfied"]:
         verdict, reason = FAIL, "the required surface is not bound to the locked comparison base"
-    elif not by_name["trusted_launches_succeeded"]["satisfied"]:
-        verdict, reason = FAIL, "a trusted test launch reported a nonzero exit code"
+    elif not by_name["trusted_launches_completed"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "a trusted test launch did not complete cleanly; see trusted_launches_completed"
+        )
     elif not by_name["no_failed_cases"]["satisfied"]:
         verdict, reason = FAIL, "trusted execution witness observed failing tests"
     elif not by_name["required_surface_non_empty"]["satisfied"]:
@@ -345,7 +372,10 @@ def derive_verdict(
     elif not by_name["witness_ledgers_parsed"]["satisfied"]:
         verdict, reason = UNKNOWN, "trusted witness evidence is malformed; execution is ambiguous"
     elif not by_name["required_classes_executed"]["satisfied"]:
-        verdict, reason = FAIL, "required test classes were never observed executing"
+        verdict, reason = FAIL, (
+            "required test methods were not observed executing at the trusted "
+            "per-class denominator"
+        )
     elif not by_name["required_invocations_met"]["satisfied"]:
         verdict, reason = PARTIAL, (
             "observed execution is below the trusted required surface; the candidate "
@@ -377,6 +407,7 @@ def derive_verdict(
             "comparison_base_sha": surface.get("comparison_base_sha"),
             "denominator_source": surface.get("denominator_source"),
             "modules": required_classes,
+            "required_class_counts": required_class_counts,
             "required_total": required_total,
         },
         "dead_classes": dead_classes,

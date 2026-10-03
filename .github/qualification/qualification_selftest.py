@@ -169,11 +169,15 @@ def build_lock(fixture: Fixture, **overrides) -> dict:
 NONCE = "0123456789abcdef0123456789abcdef"
 
 
-def required_surface(modules=None, totals=None, classes=None, base=None):
+def required_surface(modules=None, totals=None, classes=None, base=None, class_counts=None):
     """A trusted required-surface ledger as produced from the comparison base."""
     modules = modules or EXPECTED_MODULES
     totals = totals or {module: 3 for module in modules}
     classes = classes or {module: ["pkg.C{}".format(i) for i in range(2)] for module in modules}
+    # Default floor is liveness (1); the per-class floor controls set it explicitly.
+    class_counts = class_counts or {
+        module: {name: 1 for name in classes[module]} for module in modules
+    }
     return {
         "schema": qualify.REQUIRED_SURFACE_SCHEMA,
         "comparison_base_sha": base or "b" * 40,
@@ -184,6 +188,7 @@ def required_surface(modules=None, totals=None, classes=None, base=None):
             module: {
                 "module": module,
                 "classes": list(classes[module]),
+                "class_counts": dict(class_counts[module]),
                 "required_total": totals[module],
                 "required_passed": totals[module],
                 "required_failed": 0,
@@ -761,7 +766,8 @@ class RedVerdictDerivation(EvidenceCase):
         self.assertNotPass(evidence, qualify.FAIL)
         self.assertIn("not bound to the locked comparison base", evidence["reason"])
 
-    def test_nonzero_launch_is_fail(self) -> None:
+    def test_failed_launch_is_fail(self) -> None:
+        """TestNG exit 1 means the suite had failures."""
         self.honest()
         manifest = execution_manifest(
             self.lock["candidate"]["sha"], self.lock["candidate"]["tree"],
@@ -770,7 +776,29 @@ class RedVerdictDerivation(EvidenceCase):
         )
         evidence = self.verdict(manifest=manifest)
         self.assertNotPass(evidence, qualify.FAIL)
-        self.assertIn("nonzero exit code", evidence["reason"])
+        self.assertIn("did not complete cleanly", evidence["reason"])
+
+    def test_launch_completing_with_skips_is_not_a_broken_launch(self) -> None:
+        """TestNG exit 2 means completed-with-skips, which the skip policy judges."""
+        self.honest(out_of_band=[STRESS_CLASS])
+        manifest = execution_manifest(
+            self.lock["candidate"]["sha"], self.lock["candidate"]["tree"],
+            launch_codes={"forge-game": 0, "forge-gui-desktop": 2},
+            base=self.lock["comparison_base"]["sha"],
+        )
+        evidence = self.verdict(manifest=manifest, out_of_band=[STRESS_CLASS])
+        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+
+    def test_crashed_launch_without_totals_is_fail(self) -> None:
+        self.honest()
+        manifest = execution_manifest(
+            self.lock["candidate"]["sha"], self.lock["candidate"]["tree"],
+            launch_codes={"forge-game": 0, "forge-gui-desktop": 137},
+            base=self.lock["comparison_base"]["sha"],
+        )
+        manifest["modules"]["forge-gui-desktop"]["testng_totals"] = None
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
 
     def test_witnessed_failure_is_fail(self) -> None:
         records = [("pkg.C0", "a", "FAIL"), ("pkg.C0", "b", "PASS"), ("pkg.C1", "c", "PASS")]
@@ -862,7 +890,8 @@ class RedForgedCandidateArtifacts(EvidenceCase):
                       [("pkg.Other", "x", "PASS")])
         evidence = self.verdict()
         self.assertNotPass(evidence, qualify.FAIL)
-        self.assertIn("never observed executing", evidence["reason"])
+        self.assertIn("not observed executing at the trusted per-class denominator",
+                      evidence["reason"])
 
     def test_B_maven_success_with_zero_required_execution_never_passes(self) -> None:
         """Control B: candidate claims success, forges expected counts, runs nothing."""
@@ -966,6 +995,54 @@ class RedForgedCandidateArtifacts(EvidenceCase):
         evidence = self.verdict(surface=surface)
         self.assertNotPass(evidence, qualify.PARTIAL)
         self.assertIn("reduced the qualified test volume", evidence["reason"])
+
+    def test_partial_class_suppression_below_the_trusted_floor_fails(self) -> None:
+        """G, refined: the trusted per-class floor must be met, not just liveness."""
+        floors = {"pkg.C0": 5, "pkg.C1": 1}
+        surface = required_surface(
+            totals={"forge-game": 6, "forge-gui-desktop": 6},
+            class_counts={"forge-game": floors, "forge-gui-desktop": floors},
+            base=self.lock["comparison_base"]["sha"],
+        )
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, [
+                ("pkg.C0", "t0", "PASS"), ("pkg.C0", "t1", "PASS"),
+                ("pkg.C1", "t2", "PASS"),
+            ])
+        evidence = self.verdict(surface=surface)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertEqual(qualification_of(evidence)["dead_classes"]["forge-game"], ["pkg.C0"])
+
+    def test_exactly_meeting_the_trusted_per_class_floor_passes(self) -> None:
+        floors = {"pkg.C0": 2, "pkg.C1": 1}
+        surface = required_surface(
+            totals={"forge-game": 3, "forge-gui-desktop": 3},
+            class_counts={"forge-game": floors, "forge-gui-desktop": floors},
+            base=self.lock["comparison_base"]["sha"],
+        )
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, [
+                ("pkg.C0", "t0", "PASS"), ("pkg.C0", "t1", "PASS"),
+                ("pkg.C1", "t2", "PASS"),
+            ])
+        evidence = self.verdict(surface=surface)
+        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+
+    def test_candidate_inflating_one_class_cannot_paper_over_another(self) -> None:
+        """Padding one class must not satisfy another class's trusted floor."""
+        floors = {"pkg.C0": 2, "pkg.C1": 4}
+        surface = required_surface(
+            totals={"forge-game": 10, "forge-gui-desktop": 10},
+            class_counts={"forge-game": floors, "forge-gui-desktop": floors},
+            base=self.lock["comparison_base"]["sha"],
+        )
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, [
+                ("pkg.C0", "t{}".format(i), "PASS") for i in range(9)
+            ] + [("pkg.C1", "x", "PASS")])
+        evidence = self.verdict(surface=surface)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertEqual(qualification_of(evidence)["dead_classes"]["forge-game"], ["pkg.C1"])
 
     def test_forged_reports_alone_never_change_a_failing_verdict(self) -> None:
         """Absolute property: candidate artifacts have zero influence."""

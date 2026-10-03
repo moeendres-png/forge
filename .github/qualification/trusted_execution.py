@@ -58,6 +58,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/1"
@@ -187,6 +188,33 @@ def compile_and_resolve(repo: Path, modules, cp_rel, label: str):
             )
 
 
+def _dryrun_class_counts(out_dir: Path) -> "dict[str, int]":
+    """Per-class executable test counts from a TestNG dry run.
+
+    TestNG's ``testng-results.xml`` from a dry run lists every test method it
+    would invoke, grouped by class. That is the trusted per-class denominator.
+    Filename-matched classes that contain no runnable tests are therefore
+    excluded by trusted observation rather than by heuristic.
+    """
+    results = out_dir / "testng-results.xml"
+    if not results.is_file():
+        raise ExecutionError("dry run produced no testng-results.xml in {}".format(out_dir))
+    try:
+        root = ET.parse(str(results)).getroot()
+    except ET.ParseError as exc:
+        raise ExecutionError("dry-run results are malformed: {}".format(exc))
+    counts: "dict[str, int]" = {}
+    for element in root.iter("class"):
+        name = element.get("name")
+        if not name:
+            continue
+        for method in element.iter("test-method"):
+            if method.get("is-config") == "true":
+                continue
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 def dryrun_module(repo: Path, module: str, base: str, java: str, argline, xvfbrun, cp_rel):
     """Run TestNG ``-dryrun`` over the trusted comparison base for one module.
 
@@ -212,9 +240,13 @@ def dryrun_module(repo: Path, module: str, base: str, java: str, argline, xvfbru
     totals = _parse_testng_totals(stdout + stderr)
     if totals is None:
         raise ExecutionError("could not read TestNG dry-run totals for {}".format(module))
+    class_counts = _dryrun_class_counts(out_dir)
+    executable = sorted(class_counts)
     return {
         "module": module,
-        "classes": classes,
+        "classes": executable,
+        "candidate_classes_considered": len(classes),
+        "class_counts": class_counts,
         "required_total": totals["total"],
         "required_passed": totals["passed"],
         "required_failed": totals["failed"],
@@ -354,6 +386,16 @@ def main(argv=None) -> int:
     argline = list(DEFAULT_TRUSTED_ARGLINE)
     xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
 
+    # Reusing a previously computed denominator must survive the wipe below, so it
+    # is captured before the directory is reset.
+    surface_path = evidence_dir / "required-surface.json"
+    reusable_surface = None
+    if args.skip_required_surface and surface_path.is_file():
+        try:
+            reusable_surface = json.loads(surface_path.read_text())
+        except ValueError:
+            reusable_surface = None
+
     # A stale evidence directory must never be mistaken for this run's evidence.
     shutil.rmtree(evidence_dir, ignore_errors=True)
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -364,10 +406,10 @@ def main(argv=None) -> int:
 
     try:
         # 1. Trusted denominator from the trusted comparison base.
-        surface_path = evidence_dir / "required-surface.json"
-        if args.skip_required_surface and surface_path.is_file():
-            surface = json.loads(surface_path.read_text())
-            log("reusing required surface {}".format(surface_path))
+        if reusable_surface is not None:
+            surface = reusable_surface
+            log("reusing required surface ({})".format(surface_path))
+            surface_path.write_text(json.dumps(surface, indent=2, sort_keys=True) + "\n")
         else:
             surface = build_required_surface(
                 trusted_repo, args.comparison_base,
