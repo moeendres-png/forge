@@ -942,12 +942,30 @@ class RedTrustDomain(EvidenceCase):
         self.assertIn("digest_mismatch", signals["witness_ledgers_authenticated"]["detail"])
 
     def test_candidate_code_run_as_a_trusted_identity_is_not_credit(self) -> None:
+        import copy
+
         self.honest()
         for identity in ("root", "runner", "", None):
             with self.subTest(identity=identity):
-                manifest = dict(self.manifest, candidate_execution_identity=identity)
-                self.assertNotPass(self.verdict(manifest=manifest, integrity=integrity_ok(identity or "x")),
+                # Every identity field agrees, so only the trusted-identity rule can refuse.
+                manifest = copy.deepcopy(self.manifest)
+                manifest["candidate_execution_identity"] = identity
+                for entry in manifest["modules"].values():
+                    entry["execution_identity"] = identity
+                self.assertNotPass(self.verdict(manifest=manifest, integrity=integrity_ok(identity)),
                                    qualify.FAIL)
+
+    def test_a_ledger_the_orchestrator_rejected_is_not_credit_even_with_a_matching_digest(self) -> None:
+        import copy
+
+        self.honest()
+        manifest = authenticate(self.manifest, self.witness_dir)
+        manifest = copy.deepcopy(manifest)
+        manifest["modules"]["forge-game"]["ledger_authentication"] = "REJECTED:ledger_line_3_mac_mismatch"
+        evidence = self.verdict(manifest=manifest, authenticated=False)
+        self.assertNotPass(evidence, qualify.FAIL)
+        signals = {s["signal"]: s for s in qualification_of(evidence)["signals"]}
+        self.assertIn("REJECTED", signals["witness_ledgers_authenticated"]["detail"])
 
     def test_a_launch_under_another_identity_is_not_credit(self) -> None:
         import copy
@@ -1021,10 +1039,15 @@ class TrustedLedgerAuthentication(unittest.TestCase):
     def test_the_trusted_testng_closure_is_pinned(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="forge-d17-pins-"))
         self.addCleanup(shutil.rmtree, str(tmp), True)
-        jar = tmp / "testng-7.10.2.jar"
-        jar.write_bytes(b"not the pinned testng")
-        with self.assertRaises(trusted_execution.ExecutionError):
-            trusted_execution.verify_trusted_testng([jar])
+        # A complete closure by name, with one substituted jar: only the digest
+        # pin can refuse it.
+        closure = []
+        for name in trusted_execution.TRUSTED_TESTNG_PINS:
+            path = tmp / name
+            path.write_bytes(b"not the pinned " + name.encode())
+            closure.append(path)
+        with self.assertRaisesRegex(trusted_execution.ExecutionError, "pinned digest"):
+            trusted_execution.verify_trusted_testng(closure)
         other = tmp / "evil-testng.jar"
         other.write_bytes(b"x")
         with self.assertRaises(trusted_execution.ExecutionError):
