@@ -86,6 +86,30 @@ definition on `master` and is therefore visible in review.
 This gate qualifies the Java 21 leg only. The Java 17 leg remains covered by the
 `test-build.yaml` matrix; JDK battery scope belongs to D21/#502.
 
+## Residual limitations
+
+These are properties this gate deliberately does **not** claim. Stating them is
+part of the evidence, not a defect list.
+
+* **It cannot detect a candidate that genuinely sabotages its own build.** The
+  candidate's code is executed on purpose — that is what qualification means — so
+  a candidate that makes `mvn test` exit 0 without running the tests it should
+  (for example by setting `skipTests` in its POM) can still reach `PASS`. Every
+  CI gate that executes candidate code has this property. What this gate
+  guarantees is narrower and precise: the *exact* candidate SHA and TREE are the
+  ones that were qualified, the evidence is bound to that identity, and the
+  verdict was computed by the trusted verifier rather than supplied by the
+  candidate. Detecting build-level sabotage needs a trusted build definition,
+  which is a separate governance question.
+* **It is not a required status check.** It is informational until a separate
+  decision promotes it. A red run here does not block a merge on its own.
+* **It qualifies the Java 21 leg only** and asserts no Rules correctness credit.
+* **Candidate definition divergence is reported, not enforced.** A candidate that
+  edits this workflow produces a visible `candidate_definition_divergent` signal
+  in the evidence. Turning that signal into a hard gate would duplicate lab
+  CI-02's required-check mutation detection (#483), which is a different owned
+  surface.
+
 ## Controls
 
 ```
