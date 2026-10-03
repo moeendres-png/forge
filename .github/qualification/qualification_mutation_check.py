@@ -2,19 +2,17 @@
 """Prove the exact-SHA qualification controls are non-vacuous by mutation.
 
 A red/positive control suite that cannot detect a broken implementation proves
-nothing.  This harness takes each safety property of the qualification, mutates
-the product code to violate exactly that property in a scratch copy, and
-requires the control suite to go RED for the right reason.
+nothing. This harness takes each safety property of the qualification, mutates the
+product code to violate exactly that property in a scratch copy, and requires the
+control suite to go RED.
 
 Design constraints
 ------------------
-* Nothing in the repository checkout is modified.  Each mutation is applied to a
+* Nothing in the repository checkout is modified. Each mutation is applied to a
   throwaway copy under a temporary directory.
-* A mutation counts as *detected* only when the control suite fails.  A mutation
-  that leaves the suite green is reported as ``SURVIVED`` and the harness exits
-  nonzero, because a surviving mutation is a hole in the controls.
-* Mutants are textual and minimal, so a failure can be attributed to the single
-  property under test.
+* A mutation counts as *detected* only when the control suite fails. A surviving
+  mutation exits nonzero, because a survivor is a hole in the controls.
+* Mutants are textual and minimal so a failure is attributable to one property.
 
 Usage: ``python3 qualification_mutation_check.py``
 """
@@ -28,28 +26,11 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PRODUCT = ("source_lock.py", "qualify.py", "qualification_selftest.py")
+PRODUCT = ("source_lock.py", "qualify.py", "trusted_execution.py", "qualification_selftest.py")
 
-#: Workflow files the workflow-contract controls read.  They must be staged next
-#: to the product copy so those controls are exercised rather than erroring out.
+#: Workflow files the workflow-contract controls read. They are staged next to the
+#: product copy so those controls are exercised rather than erroring out.
 WORKFLOWS = ("forge-candidate-qualification.yml", "test-build.yaml")
-
-
-def stage(root: Path) -> Path:
-    """Materialize a runnable copy of the real qualification layout under ``root``.
-
-    The copy mirrors ``.github/`` so the workflow-contract controls resolve the
-    same paths they do in the repository instead of erroring out.
-    """
-    qualification = root / ".github" / "qualification"
-    workflows = root / ".github" / "workflows"
-    qualification.mkdir(parents=True, exist_ok=True)
-    workflows.mkdir(parents=True, exist_ok=True)
-    for name in PRODUCT:
-        shutil.copy2(HERE / name, qualification / name)
-    for name in WORKFLOWS:
-        shutil.copy2(HERE.parent / "workflows" / name, workflows / name)
-    return qualification
 
 
 class Mutation:
@@ -75,149 +56,191 @@ class Mutation:
 
 
 MUTATIONS = [
+    # --- candidate identity ------------------------------------------------ #
     Mutation(
-        name="accept-github-synthetic-merge-ref-as-candidate",
-        filename="source_lock.py",
-        old='FETCH_REF = re.compile(r"^refs/(pull/[1-9][0-9]*/head|heads/[A-Za-z0-9._/-]+)$")',
-        new='FETCH_REF = re.compile(r"^refs/pull/[1-9][0-9]*/(head|merge)$")',
-        expected="a synthetic merge ref would become an acceptable candidate identity",
+        "accept-github-synthetic-merge-ref-as-candidate",
+        "source_lock.py",
+        'FETCH_REF = re.compile(r"^refs/(pull/[1-9][0-9]*/head|heads/[A-Za-z0-9._/-]+)$")',
+        'FETCH_REF = re.compile(r"^refs/pull/[1-9][0-9]*/(head|merge)$")',
+        "a synthetic merge ref would become an acceptable candidate identity",
     ),
     Mutation(
-        name="do-not-verify-fetched-head-equals-declared-candidate",
-        filename="source_lock.py",
-        old="        if fetched != candidate_sha:",
-        new="        if False:",
-        expected="a ref resolving to a different SHA would be silently accepted",
+        "do-not-verify-fetched-head-equals-declared-candidate",
+        "source_lock.py",
+        "        if fetched != candidate_sha:",
+        "        if False:",
+        "a ref resolving to a different SHA would be silently accepted",
     ),
     Mutation(
-        name="accept-abbreviated-candidate-sha",
-        filename="source_lock.py",
-        old='HEX40 = re.compile(r"^[0-9a-f]{40}$")',
-        new='HEX40 = re.compile(r"^[0-9a-f]{7,40}$")',
-        expected="a non-exact candidate identity would resolve",
+        "accept-abbreviated-candidate-sha",
+        "source_lock.py",
+        'HEX40 = re.compile(r"^[0-9a-f]{40}$")',
+        'HEX40 = re.compile(r"^[0-9a-f]{7,40}$")',
+        "a non-exact candidate identity would resolve",
     ),
     Mutation(
-        name="allow-qualification-to-run-off-the-default-branch",
-        filename="source_lock.py",
-        old='    if branch != TRUSTED_DEFAULT_BRANCH:',
-        new="    if False:",
-        expected="the candidate's own copy of the definition could become authority",
+        "allow-qualification-to-run-off-the-default-branch",
+        "source_lock.py",
+        '    if branch != TRUSTED_DEFAULT_BRANCH:',
+        "    if False:",
+        "the candidate's own copy of the definition could become authority",
     ),
     Mutation(
-        name="stop-asserting-verdict-is-not-read-from-candidate",
-        filename="source_lock.py",
-        old="        if lock.get(assertion) is not False:",
-        new="        if False:",
-        expected="a lock claiming a candidate-derived verdict would validate",
+        "stop-asserting-verdict-is-not-read-from-candidate",
+        "source_lock.py",
+        "        if lock.get(assertion) is not False:",
+        "        if False:",
+        "a lock claiming a candidate-derived verdict would validate",
     ),
     Mutation(
-        name="stop-asserting-synthetic-merge-was-not-consulted",
-        filename="source_lock.py",
-        old="    if lock[\"comparison_base\"][\"synthetic_merge_computed\"] is not False:",
-        new="    if False:",
-        expected="a lock claiming synthetic-merge consultation would validate",
+        "stop-asserting-synthetic-merge-was-not-consulted",
+        "source_lock.py",
+        '    if lock["comparison_base"]["synthetic_merge_computed"] is not False:',
+        "    if False:",
+        "a lock claiming synthetic-merge consultation would validate",
+    ),
+    # --- trusted execution provenance -------------------------------------- #
+    Mutation(
+        "ignore-candidate-identity-binding-in-verifier",
+        "qualify.py",
+        'identity_ok = bound_sha == lock["candidate"]["sha"] and bound_tree == lock["candidate"]["tree"]',
+        "identity_ok = True",
+        "evidence for a different candidate would qualify the locked one",
     ),
     Mutation(
-        name="ignore-candidate-identity-binding",
-        filename="qualify.py",
-        old="    identity_ok = bound_sha == lock[\"candidate\"][\"sha\"] and bound_tree == lock[\"candidate\"][\"tree\"]",
-        new="    identity_ok = True",
-        expected="evidence for a different candidate would qualify the locked one",
+        "ignore-required-surface-comparison-base-binding",
+        "qualify.py",
+        'surface_base_ok = surface.get("comparison_base_sha") == lock["comparison_base"]["sha"]',
+        "surface_base_ok = True",
+        "a required surface from an unrelated base would be trusted",
     ),
     Mutation(
-        name="treat-malformed-reports-as-parsed",
-        filename="qualify.py",
-        old="        not report_problems,",
-        new="        True,",
-        expected="malformed candidate evidence would be read as executed coverage",
+        "ignore-nonzero-trusted-launch",
+        "qualify.py",
+        "    launches_ok = bool(launch_codes) and all(",
+        "    launches_ok = True or all(",
+        "a failed trusted test launch would qualify",
     ),
     Mutation(
-        name="treat-absent-reports-as-executed",
-        filename="qualify.py",
-        old="        report_count > 0,",
-        new="        True,",
-        expected="a green command with no test evidence would reach PASS",
+        "ignore-required-class-liveness",
+        "qualify.py",
+        "        not dead_classes,",
+        "        True,",
+        "required test classes never observed executing would qualify",
     ),
     Mutation(
-        name="ignore-missing-expected-modules",
-        filename="qualify.py",
-        old="        not missing_modules,",
-        new="        True,",
-        expected="an unreported qualification module would qualify",
+        "ignore-trusted-invocation-floor",
+        "qualify.py",
+        "        observed_total >= required_total,",
+        "        True,",
+        "a candidate could cut the qualified test volume and still qualify",
     ),
     Mutation(
-        name="ignore-undeclared-skips",
-        filename="qualify.py",
-        old="        not undeclared,",
-        new="        True,",
-        expected="skipped coverage inside the qualified surface would qualify",
+        "ignore-observed-failures",
+        "qualify.py",
+        '    signal("no_failed_cases", failures == 0, "{} failure(s)".format(failures))',
+        '    signal("no_failed_cases", True, "{} failure(s)".format(failures))',
+        "failing candidate tests would qualify",
     ),
     Mutation(
-        name="ignore-failed-and-errored-cases",
-        filename="qualify.py",
-        old="        failures == 0 and errors == 0,",
-        new="        True,",
-        expected="failing candidate tests would qualify",
+        "ignore-undeclared-skips",
+        "qualify.py",
+        "        not undeclared,",
+        "        True,",
+        "skipped coverage inside the qualified surface would qualify",
     ),
     Mutation(
-        name="ignore-nonzero-trusted-step-outcome",
-        filename="qualify.py",
-        old="    step_codes_ok = (\n        isinstance(step_codes, dict)",
-        new="    step_codes_ok = (\n        True or isinstance(step_codes, dict)",
-        expected="a failed qualification step would qualify",
+        "treat-absent-and-malformed-witness-ledgers-the-same",
+        "qualify.py",
+        "        sorted(present_modules) == expected_modules,",
+        "        True,",
+        "a missing witness ledger would read as ambiguous rather than as never-run",
     ),
     Mutation(
-        name="stop-discarding-candidate-authored-verdict-attributes",
-        filename="qualify.py",
-        old='VERDICT_KEYS = ("verdict", "status", "result", "outcome", "passed", "success")',
-        new="VERDICT_KEYS = ()",
-        expected="candidate-authored verdict attributes would stop being provably discarded",
+        "accept-witness-without-the-trusted-run-nonce",
+        "qualify.py",
+        '    if header.get("nonce") != nonce:',
+        "    if False:",
+        "stale or replayed witness evidence would validate",
     ),
     Mutation(
-        name="expose-a-nonzero-verdict-class-as-success",
-        filename="qualify.py",
-        old="EXIT_CODES = {PASS: 0, FAIL: 1, PARTIAL: 2, NOT_RUN: 3, UNKNOWN: 4}",
-        new="EXIT_CODES = {PASS: 0, FAIL: 0, PARTIAL: 0, NOT_RUN: 0, UNKNOWN: 0}",
-        expected="a non-PASS class would exit 0 and read as a green check",
+        "accept-a-witness-with-gaps-in-its-sequence",
+        "qualify.py",
+        "        if seq != index:",
+        "        if False:",
+        "a truncated or spliced witness ledger would validate",
     ),
     Mutation(
-        name="promote-rules-qualification-credit-from-ci-green",
-        filename="qualify.py",
-        old='            "status": _NOT_CLAIMED,',
-        new='            "status": "PASS",',
-        expected="a green CI qualification would be reported as Rules qualification",
+        "accept-a-witness-summary-that-contradicts-its-records",
+        "qualify.py",
+        "    if summary.get(\"tests\") != recomputed_total:",
+        "    if False:",
+        "a hand-edited witness summary would validate",
     ),
     Mutation(
-        name="attribute-pr-mergeability-as-qualification-evidence",
-        filename="qualify.py",
-        old='            "status": _NOT_APPLICABLE,',
-        new='            "status": "MERGEABLE",',
-        expected="PR mergeability would be reported as qualification evidence",
+        "accept-invocations-without-a-testng-context",
+        "qualify.py",
+        '        if not isinstance(record.get("context"), str) or not record["context"]:',
+        "        if False:",
+        "records that were not genuine TestNG dispatches would count",
+    ),
+    # --- evidence-class separation and exit codes ------------------------- #
+    Mutation(
+        "expose-a-nonzero-verdict-class-as-success",
+        "qualify.py",
+        "EXIT_CODES = {PASS: 0, FAIL: 1, PARTIAL: 2, NOT_RUN: 3, UNKNOWN: 4}",
+        "EXIT_CODES = {PASS: 0, FAIL: 0, PARTIAL: 0, NOT_RUN: 0, UNKNOWN: 0}",
+        "a non-PASS class would exit 0 and read as a green check",
     ),
     Mutation(
-        name="accept-reports-from-anywhere-in-the-candidate-tree",
-        filename="qualify.py",
-        old="        if len(parts) != 4:\n            continue\n        if parts[1] != REPORT_TARGET_DIR or parts[2] != REPORT_DIR_NAME:\n            continue",
-        new="        if False:\n            continue",
-        expected="arbitrary candidate XML could pose as qualification evidence",
+        "promote-rules-qualification-credit-from-ci-green",
+        "qualify.py",
+        '            "status": _NOT_CLAIMED,',
+        '            "status": "PASS",',
+        "a green CI qualification would be reported as Rules qualification",
     ),
     Mutation(
-        name="accept-an-unrun-surface-as-executed",
-        filename="qualify.py",
-        old='    signal("tests_executed", executed > 0,',
-        new='    signal("tests_executed", True,',
-        expected="reports containing no executed test would qualify",
+        "attribute-pr-mergeability-as-qualification-evidence",
+        "qualify.py",
+        '            "status": _NOT_APPLICABLE,',
+        '            "status": "MERGEABLE",',
+        "PR mergeability would be reported as qualification evidence",
+    ),
+    Mutation(
+        "understate-the-trusted-required-surface-by-pattern",
+        "trusted_execution.py",
+        'TEST_INCLUDE_PATTERNS = ("Test*.java", "*Test.java", "*Tests.java", "*TestCase.java")',
+        'TEST_INCLUDE_PATTERNS = ("*Test.java",)',
+        "the trusted denominator would silently shrink and let tests be deleted",
+    ),
+    Mutation(
+        "drop-the-trusted-witness-from-the-classpath-head",
+        "trusted_execution.py",
+        '    return ":".join([str(witness_classes)] + list(entries))',
+        '    return ":".join(list(entries))',
+        "a candidate class could shadow the trusted listener",
     ),
 ]
+
+
+def stage(root: Path) -> Path:
+    """Materialize a runnable copy of the real qualification layout under ``root``."""
+    qualification = root / ".github" / "qualification"
+    workflows = root / ".github" / "workflows"
+    qualification.mkdir(parents=True, exist_ok=True)
+    workflows.mkdir(parents=True, exist_ok=True)
+    for name in PRODUCT:
+        shutil.copy2(HERE / name, qualification / name)
+    shutil.copytree(HERE / "witness", qualification / "witness", dirs_exist_ok=True)
+    for name in WORKFLOWS:
+        shutil.copy2(HERE.parent / "workflows" / name, workflows / name)
+    return qualification
 
 
 def run_controls(root: Path) -> "tuple[int, str]":
     proc = subprocess.run(
         [sys.executable, str(root / "qualification_selftest.py")],
-        cwd=str(root),
-        capture_output=True,
-        text=True,
-        check=False,
+        cwd=str(root), capture_output=True, text=True, check=False,
     )
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -234,11 +257,9 @@ def failing_tests(output: str) -> "set[str]":
 
 def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="forge-d17-mutation-"))
-    survived: "list[str]" = []
-    undetected: "list[str]" = []
+    survived = []
+    undetected = []
     try:
-        # Baseline: the unmutated suite must be green, otherwise "detected" is
-        # meaningless.
         baseline_root = stage(scratch / "baseline")
         code, output = run_controls(baseline_root)
         if code != 0:
@@ -255,7 +276,8 @@ def main() -> int:
                 print("SURVIVED           : {}".format(mutation.name))
             else:
                 detected = failing_tests(output)
-                print("detected ({:>2} red) : {}  [{}]".format(len(detected), mutation.name, mutation.expected))
+                print("detected ({:>2} red) : {}  [{}]".format(
+                    len(detected), mutation.name, mutation.expected))
                 if not detected:
                     undetected.append(mutation.name)
     finally:

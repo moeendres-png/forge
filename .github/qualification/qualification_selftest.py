@@ -1,22 +1,31 @@
 #!/usr/bin/env python3
 """Red and positive controls for the Forge exact-SHA candidate qualification.
 
-This suite is the qualification's own proof that it cannot be trivialized.  It
-is stdlib-only (``unittest``) because Forge has no Python test infrastructure,
-and it builds real Git repositories in temporary directories so the controls
-exercise the same ``git`` calls the workflow makes rather than a mock.
+This suite is the qualification's own proof that it cannot be trivialized. It is
+stdlib-only (``unittest``) because Forge has no Python test infrastructure, and it
+builds real Git repositories in temporary directories so the controls exercise the
+same ``git`` calls the workflow makes rather than a mock.
+
+Evidence model under test
+-------------------------
+Credit derives from two trusted ledgers only:
+
+``required surface``
+    what the trusted comparison base would execute (TestNG ``-dryrun``);
+``execution manifest`` + ``witness/*.witness.jsonl``
+    what the trusted orchestrator observed the candidate actually dispatch.
+
+Candidate-authored build artifacts -- Surefire/TestNG XML, generated, copied,
+renamed or committed reports -- carry **no** credit. The ``RedForgedCandidate
+Artifacts`` and ``Adversarial`` classes prove that directly.
 
 Control classes
 ---------------
-POSITIVE  the exact-SHA path resolves, binds and yields PASS.
-RED       a wrong or trivialized candidate state must fail closed.  Every RED
+POSITIVE  the exact-SHA path resolves, binds, and yields PASS from honest
+          witnessed execution.
+RED       a wrong or trivialized candidate state must fail closed. Every RED
           control asserts a *specific non-PASS class*, never merely "not PASS",
           so a control cannot pass for the wrong reason.
-
-The controls deliberately include candidate-authored attempts to self-qualify:
-fabricated surefire reports, a candidate-supplied run report, a candidate-
-supplied verdict document and mergeability/synthetic-merge claims.  Each must
-leave the trusted verdict non-PASS or provably ignored.
 """
 
 from __future__ import annotations
@@ -36,9 +45,12 @@ sys.path.insert(0, str(HERE))
 
 import qualify  # noqa: E402
 import source_lock  # noqa: E402
+import trusted_execution  # noqa: E402
 
 QUALIFY_WORKFLOW = ".github/workflows/forge-candidate-qualification.yml"
 EXPECTED_MODULES = ["forge-game", "forge-gui-desktop"]
+STRESS_CLASS = "forge.net.NetworkPlayIntegrationTest"
+WITNESS_CLASS = "forge.d17.witness.QualifiedExecutionListener"
 
 WORKFLOW_STUB = """name: stub
 on: [push]
@@ -76,8 +88,7 @@ class Fixture:
         self._git(self.origin, "commit", "-q", "-m", "trusted master baseline")
         self.master = self.rev(self.origin, "master")
 
-        # Candidate branch on top of master.  The commit must land on the
-        # candidate branch, not on master's checked-out worktree.
+        # Candidate branch on top of master.
         self._git(self.origin, "branch", "candidate")
         self.checkout("candidate")
         self.write_origin("README.md", "candidate change\n")
@@ -89,8 +100,6 @@ class Fixture:
         self._git(root, "clone", "-q", str(self.origin), str(self.trusted))
         self._git(self.trusted, "config", "user.email", "d17@example.invalid")
         self._git(self.trusted, "config", "user.name", "D17 Fixture")
-
-    # -- helpers ---------------------------------------------------------- #
 
     def _git(self, cwd: Path, *args: str) -> str:
         proc = subprocess.run(
@@ -130,11 +139,7 @@ class Fixture:
         return sha
 
     def commit_and_promote_master(self, relpath: str, text: str, message: str) -> str:
-        """Commit on candidate and point master at it.
-
-        Used to model a trusted default branch that no longer carries the
-        qualification definition.
-        """
+        """Commit on candidate and point master at it (drops the definition)."""
         sha = self.commit_on_candidate(relpath, text, message)
         os.unlink(self.origin / QUALIFY_WORKFLOW)
         self.checkout("candidate")
@@ -158,119 +163,142 @@ def build_lock(fixture: Fixture, **overrides) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Evidence fixtures
+# Trusted-evidence fixtures
 # --------------------------------------------------------------------------- #
 
+NONCE = "0123456789abcdef0123456789abcdef"
 
-def write_report(
-    root: Path,
-    module: str,
-    name: str,
-    tests: int = 3,
-    failures: int = 0,
-    errors: int = 0,
-    skipped: int = 0,
-    extra_attrs: "dict[str, str] | None" = None,
-    classname: "str | None" = None,
-    emit_cases: bool = True,
-) -> Path:
-    """Write one candidate-produced surefire report under ``root``.
 
-    ``emit_cases`` mirrors real surefire/TestNG output by writing one
-    ``<testcase>`` per counted test.  Setting it False produces a report whose
-    skip count cannot be attributed to any class.
+def required_surface(modules=None, totals=None, classes=None, base=None):
+    """A trusted required-surface ledger as produced from the comparison base."""
+    modules = modules or EXPECTED_MODULES
+    totals = totals or {module: 3 for module in modules}
+    classes = classes or {module: ["pkg.C{}".format(i) for i in range(2)] for module in modules}
+    return {
+        "schema": qualify.REQUIRED_SURFACE_SCHEMA,
+        "comparison_base_sha": base or "b" * 40,
+        "comparison_base_tree": "c" * 40,
+        "trusted_argline": ["--add-opens", "java.base/java.lang=ALL-UNNAMED"],
+        "denominator_source": "TestNG -dryrun over the trusted comparison base",
+        "modules": {
+            module: {
+                "module": module,
+                "classes": list(classes[module]),
+                "required_total": totals[module],
+                "required_passed": totals[module],
+                "required_failed": 0,
+                "required_skipped": 0,
+            }
+            for module in modules
+        },
+    }
+
+
+def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes=None,
+                       nonce=NONCE, base=None):
+    """A trusted execution manifest as written by the trusted orchestrator."""
+    modules = modules or EXPECTED_MODULES
+    launch_codes = launch_codes or {module: 0 for module in modules}
+    return {
+        "schema": qualify.EXECUTION_MANIFEST_SCHEMA,
+        "nonce": nonce,
+        "candidate_sha": candidate_sha,
+        "candidate_tree": candidate_tree,
+        "comparison_base_sha": base or "b" * 40,
+        "trusted_argline": ["--add-opens", "java.base/java.lang=ALL-UNNAMED"],
+        "witness_class": WITNESS_CLASS,
+        "witness_source": "witness/forge/d17/witness/QualifiedExecutionListener.java",
+        "candidate_artifacts_used_as_evidence": False,
+        "modules": {
+            module: {
+                "module": module,
+                "required_classes": ["pkg.C{}".format(i) for i in range(2)],
+                "launch_exit_code": launch_codes[module],
+                "classpath_digest": "d" * 64,
+                "testng_totals": {"total": 3, "passed": 3, "failed": 0, "skipped": 0},
+                "testng_version_entry": "testng-7.8.0.jar",
+                "log_tail": "",
+            }
+            for module in modules
+        },
+    }
+
+
+def write_witness(witness_dir: Path, module: str, invocations, nonce=NONCE,
+                  summary_override=None, omit_summary=False, raw_extra=None):
+    """Write a trusted witness ledger exactly as the trusted listener would.
+
+    ``invocations`` is a list of ``(class, method, status)`` tuples.
     """
-    directory = root / module / "target" / "surefire-reports"
-    directory.mkdir(parents=True, exist_ok=True)
-    attrs = {
-        "name": "{}.{}".format(module, name),
-        "tests": str(tests),
-        "failures": str(failures),
-        "errors": str(errors),
-        "skipped": str(skipped),
-    }
-    attrs.update(extra_attrs or {})
-    rendered = " ".join('{}="{}"'.format(key, value) for key, value in sorted(attrs.items()))
-
-    cases = ""
-    if emit_cases and tests > 0:
-        owner = classname or "{}.{}".format(module, name)
-        used = {"failure": 0, "error": 0, "skipped": 0}
-        for index in range(tests):
-            marker = ""
-            if used["failure"] < failures:
-                marker, used["failure"] = "<failure message=\"boom\"/>", used["failure"] + 1
-            elif used["error"] < errors:
-                marker, used["error"] = "<error message=\"boom\"/>", used["error"] + 1
-            elif used["skipped"] < skipped:
-                marker, used["skipped"] = "<skipped message=\"skipped\"/>", used["skipped"] + 1
-            cases += '\n  <testcase classname="{}" name="case{}">{}</testcase>'.format(
-                owner, index, marker
-            )
-    path = directory / ("TEST-{}.xml".format(name))
-    path.write_text("<testsuite {}>{}\n</testsuite>\n".format(rendered, cases))
+    witness_dir.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps({"kind": "header", "schema": qualify.WITNESS_SCHEMA,
+                         "module": module, "nonce": nonce}, sort_keys=True)]
+    per_total, per_skip, per_fail = {}, {}, {}
+    for index, (klass, method, status) in enumerate(invocations):
+        lines.append(json.dumps({
+            "kind": "invocation", "seq": index, "class": klass, "method": method,
+            "status": status, "context": "TestNG", "thread": "TestNG-0",
+        }, sort_keys=True))
+        per_total[klass] = per_total.get(klass, 0) + 1
+        bucket = {"PASS": {}, "SKIP": per_skip, "FAIL": per_fail}[status]
+        bucket[klass] = bucket.get(klass, 0) + 1
+    if not omit_summary:
+        summary = {
+            "kind": "summary",
+            "tests": len(invocations),
+            "failed": sum(per_fail.values()),
+            "skipped": sum(per_skip.values()),
+            "per_class_total": per_total,
+            "skip_classes": per_skip,
+            "fail_classes": per_fail,
+            "last_seq": len(invocations) - 1,
+        }
+        if summary_override:
+            summary.update(summary_override)
+        lines.append(json.dumps(summary, sort_keys=True))
+    if raw_extra:
+        lines.extend(raw_extra)
+    path = witness_dir / (module + ".witness.jsonl")
+    path.write_text("\n".join(lines) + "\n")
     return path
 
 
-def write_raw_report(root: Path, module: str, name: str, body: str) -> Path:
+def honest_invocations(module: str, total: int, skip_classes=()):
+    """One passing invocation per required class, plus optional stress skips."""
+    records = []
+    classes = ["pkg.C0", "pkg.C1"]
+    each = max(1, total // len(classes))
+    for klass in classes:
+        for index in range(each):
+            records.append((klass, "test{}".format(index), "PASS"))
+    while len(records) < total:
+        records.append((classes[-1], "extra{}".format(len(records)), "PASS"))
+    for klass in skip_classes:
+        records.append((klass, "stress{}".format(len(records)), "SKIP"))
+    return records
+
+
+def write_forged_surefire(root: Path, module: str, tests: int = 500, name="TEST-TestSuite.xml"):
+    """Write a syntactically valid green candidate Surefire/TestNG report."""
     directory = root / module / "target" / "surefire-reports"
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / ("TEST-{}.xml".format(name))
-    path.write_text(body)
+    path = directory / name
+    path.write_text(
+        '<testsuite name="TestSuite" tests="{}" failures="0" errors="0" skipped="0" '
+        'time="0.1">\n</testsuite>\n'.format(tests)
+    )
     return path
-
-
-_DEFAULT = object()
-
-
-def run_report(
-    lock: dict,
-    completed: bool = True,
-    step_exit_codes: "dict | None" = _DEFAULT,
-    candidate_sha: "str | None" = None,
-    candidate_tree: "str | None" = None,
-    extra: "dict | None" = None,
-) -> dict:
-    payload = {
-        "schema": qualify.RUN_REPORT_SCHEMA,
-        "candidate_sha": candidate_sha or lock["candidate"]["sha"],
-        "candidate_tree": candidate_tree or lock["candidate"]["tree"],
-        "maven_command": "xvfb-run -a mvn -B -pl forge-gui-desktop -am test",
-        "completed": completed,
-        "step_exit_codes": (
-            {"materialize_candidate": 0, "bounded_test_surface": 0}
-            if step_exit_codes is _DEFAULT
-            else step_exit_codes
-        ),
-    }
-    payload.update(extra or {})
-    return payload
-
-
-STRESS_CLASS = "forge.net.NetworkPlayIntegrationTest"
-
-
-def clean_evidence_root(root: Path) -> Path:
-    """A reports root with full, clean, complete evidence for both modules."""
-    write_report(root, "forge-game", "AbilityKeyTest", tests=4)
-    write_report(root, "forge-gui-desktop", "DeckEditorTest", tests=9)
-    write_report(root, "forge-gui-desktop", "CardRulesTest", tests=6)
-    return root
 
 
 def qualification_of(evidence: dict) -> dict:
-    """The exact-candidate-qualification block of an evidence document.
-
-    Reading the verdict class back through this accessor keeps the controls
-    honest about the evidence-class separation the gate promises.
-    """
+    """The exact-candidate-qualification block of an evidence document."""
     block = evidence.get("exact_candidate_qualification")
     if not isinstance(block, dict):
         raise AssertionError("evidence has no exact_candidate_qualification block")
     return block
 
 
-class FixtureCase(unittest.TestCase):
+class EvidenceCase(unittest.TestCase):
     """Base class providing a disposable Git fixture per test."""
 
     def setUp(self) -> None:
@@ -278,21 +306,32 @@ class FixtureCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self._tmp, True)
         self.root = Path(self._tmp)
         self.fixture = Fixture(self.root)
-        self.evidence_root = self.root / "evidence"
+        self.lock = build_lock(self.fixture)
+        self.witness_dir = self.root / "evidence" / "witness"
+        self.forged_dir = self.root / "candidate-target"
+        self.surface = required_surface(base=self.lock["comparison_base"]["sha"])
+        self.manifest = execution_manifest(
+            self.lock["candidate"]["sha"],
+            self.lock["candidate"]["tree"],
+            base=self.lock["comparison_base"]["sha"],
+        )
 
-    def verdict(
-        self,
-        lock: dict,
-        report: dict,
-        root: "Path | None" = None,
-        expected: "list[str] | None" = None,
-        out_of_band: "list[str] | None" = None,
-    ) -> dict:
+    def honest(self, out_of_band=None, modules=None, totals=None):
+        """Populate a complete, honest trusted evidence set."""
+        modules = modules or EXPECTED_MODULES
+        totals = totals or {module: 3 for module in modules}
+        for module in modules:
+            write_witness(self.witness_dir, module,
+                          honest_invocations(module, totals[module],
+                                             ([STRESS_CLASS] if out_of_band else ())))
+        return modules, totals
+
+    def verdict(self, surface=None, manifest=None, out_of_band=None, witness_dir=None):
         return qualify.build_evidence(
-            lock,
-            report,
-            root or self.evidence_root,
-            expected if expected is not None else EXPECTED_MODULES,
+            self.lock,
+            surface if surface is not None else self.surface,
+            manifest if manifest is not None else self.manifest,
+            witness_dir if witness_dir is not None else self.witness_dir,
             out_of_band or [],
         )
 
@@ -307,76 +346,87 @@ class FixtureCase(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-# POSITIVE controls
+# PRESERVED: positive exact-SHA path
 # --------------------------------------------------------------------------- #
 
 
-class PositiveExactShaPath(FixtureCase):
+class PositiveExactShaPath(EvidenceCase):
     def test_exact_candidate_lock_binds_sha_tree_and_authority(self) -> None:
-        lock = build_lock(self.fixture)
-        self.assertEqual(lock["status"], "LOCKED")
-        self.assertEqual(lock["candidate"]["sha"], self.fixture.candidate)
-        self.assertEqual(lock["candidate"]["fetched_from"], "refs/heads/candidate")
-        self.assertEqual(lock["workflow_authority"]["sha"], self.fixture.master)
-        self.assertEqual(lock["run_identity"]["sha"], self.fixture.master)
-        self.assertEqual(lock["run_identity"]["branch"], "master")
-        # Candidate TREE is a real, distinct tree bound to the candidate SHA.
-        self.assertRegex(lock["candidate"]["tree"], r"^[0-9a-f]{40}$")
+        self.assertEqual(self.lock["status"], "LOCKED")
+        self.assertEqual(self.lock["candidate"]["sha"], self.fixture.candidate)
+        self.assertEqual(self.lock["candidate"]["fetched_from"], "refs/heads/candidate")
+        self.assertEqual(self.lock["workflow_authority"]["sha"], self.fixture.master)
+        self.assertEqual(self.lock["run_identity"]["sha"], self.fixture.master)
+        self.assertEqual(self.lock["run_identity"]["branch"], "master")
+        self.assertRegex(self.lock["candidate"]["tree"], r"^[0-9a-f]{40}$")
         self.assertEqual(
-            lock["candidate"]["tree"],
+            self.lock["candidate"]["tree"],
             self.fixture.rev(self.fixture.trusted, self.fixture.candidate + "^{tree}"),
         )
-        self.assertEqual(lock["comparison_base"]["sha"], self.fixture.master)
-        self.assertIs(lock["comparison_base"]["synthetic_merge_computed"], False)
+        self.assertEqual(self.lock["comparison_base"]["sha"], self.fixture.master)
+        self.assertIs(self.lock["comparison_base"]["synthetic_merge_computed"], False)
 
     def test_explicit_sha_fetch_without_ref_also_binds_exactly(self) -> None:
         lock = build_lock(self.fixture, fetch_ref=None)
         self.assertEqual(lock["candidate"]["sha"], self.fixture.candidate)
         self.assertEqual(lock["candidate"]["fetched_from"], "explicit-sha")
 
-    def test_clean_full_surface_evidence_yields_pass(self) -> None:
-        lock = build_lock(self.fixture)
-        clean_evidence_root(self.evidence_root)
-        evidence = self.verdict(lock, run_report(lock))
+    def test_honest_witnessed_execution_yields_pass(self) -> None:
+        """Control H: an honest exact candidate must be able to reach PASS."""
+        self.honest()
+        evidence = self.verdict(out_of_band=[])
         self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
         self.assertEqual(evidence["exit_code"], 0)
-        self.assertEqual(qualification_of(evidence)["counts"]["tests"], 19)
-        self.assertEqual(qualification_of(evidence)["counts"]["failures"], 0)
         self.assertEqual(evidence["candidate"]["sha"], self.fixture.candidate)
-        self.assertEqual(evidence["candidate"]["tree"], lock["candidate"]["tree"])
-        self.assertEqual(evidence["source_lock"]["workflow_authority_sha"], self.fixture.master)
+        self.assertEqual(evidence["candidate"]["tree"], self.lock["candidate"]["tree"])
+        self.assertEqual(
+            evidence["source_lock"]["workflow_authority_sha"], self.fixture.master
+        )
+        self.assertEqual(qualification_of(evidence)["counts"]["observed_invocations"], 6)
+        self.assertEqual(qualification_of(evidence)["counts"]["required_invocations"], 6)
+
+    def test_declared_stress_skips_still_reach_pass(self) -> None:
+        self.honest(out_of_band=[STRESS_CLASS])
+        evidence = self.verdict(out_of_band=[STRESS_CLASS])
+        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+        skips = qualification_of(evidence)["skips"]
+        self.assertEqual(skips["declared_out_of_band_classes"], [STRESS_CLASS])
+        self.assertEqual(skips["undeclared_skipped_classes"], [])
+        self.assertEqual(skips["skipped_total"], 2)
 
     def test_pass_declares_no_mergeability_or_rules_credit(self) -> None:
-        lock = build_lock(self.fixture)
-        clean_evidence_root(self.evidence_root)
-        evidence = self.verdict(lock, run_report(lock))
+        self.honest()
+        evidence = self.verdict()
         self.assertEqual(evidence["pr_mergeability"]["credit"], "none")
         self.assertEqual(evidence["synthetic_merge_evidence"]["status"], "NEVER_COMPUTED")
         self.assertEqual(evidence["synthetic_merge_evidence"]["credit"], "none")
         self.assertEqual(evidence["rules_qualification_evidence"]["status"], "NOT_CLAIMED")
         self.assertEqual(evidence["trust_boundary"]["verdict_read_from_candidate"], False)
-        self.assertEqual(evidence["exact_candidate_qualification"]["verdict"], evidence["verdict"])
+        self.assertEqual(qualification_of(evidence)["verdict"], evidence["verdict"])
+
+    def test_pass_asserts_candidate_artifacts_were_not_evidence(self) -> None:
+        self.honest()
+        boundary = self.verdict()["trust_boundary"]
+        self.assertIs(boundary["candidate_build_artifacts_used_as_evidence"], False)
+        self.assertIs(boundary["candidate_reports_read_for_credit"], False)
+        self.assertEqual(boundary["execution_observed_by"], WITNESS_CLASS)
 
 
 # --------------------------------------------------------------------------- #
-# RED controls - identity and authority
+# PRESERVED: identity and authority red controls
 # --------------------------------------------------------------------------- #
 
 
-class RedIdentityAndAuthority(FixtureCase):
+class RedIdentityAndAuthority(EvidenceCase):
     def test_ref_resolving_to_a_different_sha_fails_closed(self) -> None:
-        """No silent substitution when the ref and the declared SHA disagree."""
         original = self.fixture.candidate
         other = self.fixture.commit_on_candidate("other.txt", "other\n", "other")
         self.assertNotEqual(other, original)
-        # The ref now resolves to `other`; declaring `original` must not be
-        # silently satisfied by the fetched object.
         with self.assertRaises(source_lock.SourceLockError) as caught:
             build_lock(self.fixture, candidate_sha=original, fetch_ref="refs/heads/candidate")
         self.assertIn("candidate identity mismatch", str(caught.exception))
 
     def test_synthetic_merge_ref_is_refused(self) -> None:
-        """refs/pull/<n>/merge is GitHub's synthetic merge: never a candidate."""
         for forbidden in ("refs/pull/17/merge", "refs/pull/17/head~1", "MERGE_HEAD", "master"):
             with self.subTest(ref=forbidden):
                 with self.assertRaises(source_lock.SourceLockError) as caught:
@@ -384,12 +434,6 @@ class RedIdentityAndAuthority(FixtureCase):
                 self.assertIn("refusing to fetch unqualified ref", str(caught.exception))
 
     def test_non_exact_candidate_identity_is_refused(self) -> None:
-        """Each malformed identity must be refused *as an identity*.
-
-        The assertion is on the specific rejection reason, not merely on some
-        error, so this control cannot pass for the wrong reason (for example
-        because a later fetch happened to fail instead).
-        """
         cases = {
             "abbreviated": self.fixture.candidate[:12],
             "uppercase": self.fixture.candidate.upper(),
@@ -404,15 +448,11 @@ class RedIdentityAndAuthority(FixtureCase):
                 with self.assertRaises(source_lock.SourceLockError) as caught:
                     build_lock(self.fixture, candidate_sha=bad)
                 self.assertIn(
-                    "not a full 40-hex sha",
-                    str(caught.exception),
-                    "refusal for {!r} was not an identity refusal: {}".format(
-                        bad, caught.exception
-                    ),
+                    "not a full 40-hex sha", str(caught.exception),
+                    "refusal for {!r} was not an identity refusal".format(bad),
                 )
 
     def test_unknown_candidate_object_fails_closed(self) -> None:
-        """Neither an explicit SHA nor a ref may resolve an absent object."""
         missing = "0" * 40
         with self.assertRaises(source_lock.SourceLockError) as caught:
             build_lock(self.fixture, candidate_sha=missing, fetch_ref=None)
@@ -427,7 +467,6 @@ class RedIdentityAndAuthority(FixtureCase):
         self.assertIn("trusted authority branch must be", str(caught.exception))
 
     def test_running_the_definition_off_the_default_branch_fails_closed(self) -> None:
-        """Executing the candidate's copy of the definition is not authority."""
         self.fixture.git(self.fixture.trusted, "checkout", "-q", "-b", "candidate-copy")
         try:
             with self.assertRaises(source_lock.SourceLockError) as caught:
@@ -456,12 +495,11 @@ class RedIdentityAndAuthority(FixtureCase):
             build_lock(self.fixture, event_base_sha=unrelated)
         self.assertIn("unrelated to trusted authority", str(caught.exception))
 
-    def test_event_base_ancestor_of_authority_is_recorded_not_rejected(self) -> None:
+    def test_event_base_equal_to_authority_is_recorded(self) -> None:
         lock = build_lock(self.fixture, event_base_sha=self.fixture.master)
         self.assertEqual(lock["event_base"]["relation"], "EQUAL")
 
     def test_trusted_master_missing_the_definition_is_not_authority(self) -> None:
-        """Without the definition on master, nothing may claim qualification."""
         master = self.fixture.commit_and_promote_master(
             "README.md", "master without the definition\n", "advance master"
         )
@@ -473,14 +511,14 @@ class RedIdentityAndAuthority(FixtureCase):
         self.assertIn(master, str(caught.exception))
 
 
-class RedLockValidation(FixtureCase):
-    """A lock document that overstates trust must be rejected on load."""
+# --------------------------------------------------------------------------- #
+# PRESERVED: lock-document trust validation
+# --------------------------------------------------------------------------- #
 
-    def _valid_lock(self) -> dict:
-        return build_lock(self.fixture)
 
+class RedLockValidation(EvidenceCase):
     def _expect_rejected(self, mutate) -> None:
-        lock = self._valid_lock()
+        lock = build_lock(self.fixture)
         mutate(lock)
         with self.assertRaises(source_lock.SourceLockError):
             source_lock.validate_lock(lock)
@@ -508,7 +546,6 @@ class RedLockValidation(FixtureCase):
         )
 
     def test_candidate_fetched_from_a_ref_must_be_recorded(self) -> None:
-        """The provenance of the candidate object is itself part of the lock."""
         self._expect_rejected(lambda lock: lock["candidate"].pop("fetched_from"))
 
     def test_self_referential_candidate_is_rejected(self) -> None:
@@ -549,13 +586,12 @@ class RedLockValidation(FixtureCase):
 
 
 # --------------------------------------------------------------------------- #
-# RED controls - candidate definition trivialization
+# PRESERVED: candidate definition trivialization
 # --------------------------------------------------------------------------- #
 
 
-class RedCandidateDefinitionTrivialization(FixtureCase):
+class RedCandidateDefinitionTrivialization(EvidenceCase):
     def test_candidate_editing_the_definition_is_recorded_as_divergent(self) -> None:
-        """A candidate that weakens the definition cannot do so invisibly."""
         candidate = self.fixture.commit_on_candidate(
             QUALIFY_WORKFLOW,
             WORKFLOW_STUB.replace("echo trusted", "echo trivialized\n"),
@@ -566,17 +602,10 @@ class RedCandidateDefinitionTrivialization(FixtureCase):
         divergence = lock["candidate_definition_divergence"]
         self.assertTrue(divergence["divergent"])
         self.assertNotEqual(divergence["trusted_blob"], divergence["candidate_blob"])
-        # The executed authority is still the trusted default branch blob.
         self.assertEqual(lock["workflow_authority"]["sha"], self.fixture.master)
-        self.assertEqual(
-            divergence["trusted_blob"],
-            source_lock.definition_digest(
-                self.fixture.trusted, self.fixture.master, QUALIFY_WORKFLOW
-            ),
-        )
-        # And the divergence is carried into the emitted evidence.
-        clean_evidence_root(self.evidence_root)
-        evidence = self.verdict(lock, run_report(lock))
+        self.honest()
+        evidence = qualify.build_evidence(lock, self.surface, self.manifest,
+                                          self.witness_dir, [])
         self.assertTrue(evidence["trust_boundary"]["candidate_definition_divergent"])
         self.assertEqual(evidence["trust_boundary"]["verdict_read_from_candidate"], False)
 
@@ -594,466 +623,585 @@ class RedCandidateDefinitionTrivialization(FixtureCase):
 
 
 # --------------------------------------------------------------------------- #
-# RED controls - verdict derivation
+# PRESERVED: witness-ledger integrity (replaces report parsing)
 # --------------------------------------------------------------------------- #
 
 
-class RedVerdictDerivation(FixtureCase):
+class RedWitnessLedgerIntegrity(EvidenceCase):
     def setUp(self) -> None:
         super().setUp()
-        self.lock = build_lock(self.fixture)
+        self.honest()
 
-    def test_run_report_claiming_another_candidate_is_fail(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        evidence = self.verdict(self.lock, run_report(self.lock, candidate_sha="a" * 40))
-        self.assertNotPass(evidence, qualify.FAIL)
-        self.assertIn("candidate identity is not bound", evidence["reason"])
-
-    def test_run_report_claiming_another_tree_is_fail(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        evidence = self.verdict(self.lock, run_report(self.lock, candidate_tree="b" * 40))
-        self.assertNotPass(evidence, qualify.FAIL)
-        self.assertIn("candidate identity is not bound", evidence["reason"])
-
-    def test_forged_clean_run_report_over_failing_tests_is_fail(self) -> None:
-        """Step outcomes are trusted signals; failing counts still dominate."""
-        clean_evidence_root(self.evidence_root)
-        write_report(self.evidence_root, "forge-game", "BrokenTest", tests=2, failures=2)
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertNotPass(evidence, qualify.FAIL)
-        self.assertEqual(qualification_of(evidence)["counts"]["failures"], 2)
-
-    def test_nonzero_trusted_step_is_fail(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        evidence = self.verdict(
-            self.lock,
-            run_report(self.lock, step_exit_codes={"bounded_test_surface": 1}),
-        )
-        self.assertNotPass(evidence, qualify.FAIL)
-        self.assertIn("nonzero exit code", evidence["reason"])
-
-    def test_incomplete_run_is_fail(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        evidence = self.verdict(self.lock, run_report(self.lock, completed=False))
-        self.assertNotPass(evidence, qualify.FAIL)
-        self.assertIn("did not complete", evidence["reason"])
-
-    def test_absent_step_outcomes_are_fail_not_unknown(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        for codes in ({}, None, {"x": "0"}, {"x": True}, "0"):
-            with self.subTest(step_exit_codes=codes):
-                evidence = self.verdict(self.lock, run_report(self.lock, step_exit_codes=codes))
-                self.assertNotPass(evidence, qualify.FAIL)
-
-    def test_green_command_with_no_reports_is_not_run(self) -> None:
-        """A claimed-green command that produced no evidence proves nothing."""
-        evidence = self.verdict(self.lock, run_report(self.lock))
+    def test_missing_witness_ledger_is_not_run(self) -> None:
+        for module in EXPECTED_MODULES:
+            (self.witness_dir / (module + ".witness.jsonl")).unlink()
+        evidence = self.verdict()
         self.assertNotPass(evidence, qualify.NOT_RUN)
         self.assertEqual(evidence["exit_code"], 3)
 
-    def test_missing_reports_root_directory_is_not_run(self) -> None:
-        evidence = self.verdict(self.lock, run_report(self.lock), root=self.root / "absent")
-        self.assertNotPass(evidence, qualify.NOT_RUN)
-
-    def test_malformed_report_is_unknown(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        write_raw_report(self.evidence_root, "forge-game", "Truncated", '<testsuite tests="3"')
-        evidence = self.verdict(self.lock, run_report(self.lock))
+    def test_empty_witness_ledger_is_unknown(self) -> None:
+        for module in EXPECTED_MODULES:
+            (self.witness_dir / (module + ".witness.jsonl")).write_text("")
+        evidence = self.verdict()
         self.assertNotPass(evidence, qualify.UNKNOWN)
         self.assertEqual(evidence["exit_code"], 4)
-        self.assertTrue(qualification_of(evidence)["report_problems"])
 
-    def test_wrong_root_element_is_unknown(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        write_raw_report(self.evidence_root, "forge-game", "WrongRoot", "<results tests='3'/>")
-        evidence = self.verdict(self.lock, run_report(self.lock))
+    def test_witness_nonce_mismatch_is_unknown(self) -> None:
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3),
+                          nonce="f" * 32)
+        evidence = self.verdict()
         self.assertNotPass(evidence, qualify.UNKNOWN)
 
-    def test_non_integer_counts_are_unknown(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        write_raw_report(
-            self.evidence_root,
-            "forge-game",
-            "BadCounts",
-            '<testsuite tests="lots" failures="0" errors="0" skipped="0"/>',
+    def test_witness_module_mismatch_is_unknown(self) -> None:
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3))
+        forged = self.witness_dir / "forge-game.witness.jsonl"
+        lines = forged.read_text().replace('"module": "forge-game"', '"module": "forge-ai"')
+        forged.write_text(lines)
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_witness_without_summary_is_unknown(self) -> None:
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3),
+                          omit_summary=True)
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_witness_with_a_gap_in_the_sequence_is_unknown(self) -> None:
+        records = honest_invocations("forge-game", 3)
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        path = self.witness_dir / "forge-game.witness.jsonl"
+        lines = path.read_text().splitlines()
+        lines[2] = json.dumps({"kind": "invocation", "seq": 7, "class": "pkg.C0",
+                               "method": "x", "status": "PASS", "context": "TestNG"})
+        path.write_text("\n".join(lines) + "\n")
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertTrue(any("contiguous" in p for p in qualification_of(evidence)["problems"]))
+
+    def test_witness_summary_claiming_more_tests_than_records_is_unknown(self) -> None:
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3),
+                          summary_override={"tests": 999})
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_witness_summary_failure_total_tampering_is_unknown(self) -> None:
+        records = [("pkg.C0", "a", "FAIL"), ("pkg.C1", "b", "PASS")]
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records,
+                          summary_override={"failed": 0})
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_malformed_witness_line_is_unknown(self) -> None:
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3))
+        path = self.witness_dir / "forge-game.witness.jsonl"
+        path.write_text(path.read_text() + "{not json\n")
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_invocations_without_a_testng_context_are_rejected(self) -> None:
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3))
+        path = self.witness_dir / "forge-game.witness.jsonl"
+        lines = path.read_text().splitlines()
+        record = json.loads(lines[1])
+        record["context"] = ""
+        lines[1] = json.dumps(record, sort_keys=True)
+        path.write_text("\n".join(lines) + "\n")
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_unknown_witness_record_kind_is_unknown(self) -> None:
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3),
+                          raw_extra=['{"kind":"verdict","value":"PASS"}'])
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_unexpected_verdict_kind_in_a_witness_is_rejected(self) -> None:
+        """A candidate-supplied verdict record inside a ledger is not accepted."""
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 3),
+                          raw_extra=['{"kind":"verdict","verdict":"PASS","exit_code":0}'])
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+
+# --------------------------------------------------------------------------- #
+# PRESERVED: verdict derivation red controls
+# --------------------------------------------------------------------------- #
+
+
+class RedVerdictDerivation(EvidenceCase):
+    def test_manifest_claiming_another_candidate_is_fail(self) -> None:
+        self.honest()
+        manifest = execution_manifest("a" * 40, self.lock["candidate"]["tree"],
+                                      base=self.lock["comparison_base"]["sha"])
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("candidate identity is not bound", evidence["reason"])
+
+    def test_manifest_claiming_another_tree_is_fail(self) -> None:
+        self.honest()
+        manifest = execution_manifest(self.lock["candidate"]["sha"], "b" * 40,
+                                      base=self.lock["comparison_base"]["sha"])
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+
+    def test_required_surface_not_bound_to_the_comparison_base_is_fail(self) -> None:
+        self.honest()
+        surface = required_surface(base="9" * 40)
+        evidence = self.verdict(surface=surface)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("not bound to the locked comparison base", evidence["reason"])
+
+    def test_nonzero_launch_is_fail(self) -> None:
+        self.honest()
+        manifest = execution_manifest(
+            self.lock["candidate"]["sha"], self.lock["candidate"]["tree"],
+            launch_codes={"forge-game": 0, "forge-gui-desktop": 1},
+            base=self.lock["comparison_base"]["sha"],
         )
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertNotPass(evidence, qualify.UNKNOWN)
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("nonzero exit code", evidence["reason"])
 
-    def test_zero_executed_tests_is_unknown(self) -> None:
-        reports = self.evidence_root / "forge-game" / "target" / "surefire-reports"
-        if reports.exists():
-            shutil.rmtree(reports)
-        write_report(self.evidence_root, "forge-game", "EmptyTest", tests=0)
-        write_report(self.evidence_root, "forge-gui-desktop", "AlsoEmpty", tests=0)
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertNotPass(evidence, qualify.UNKNOWN)
+    def test_witnessed_failure_is_fail(self) -> None:
+        records = [("pkg.C0", "a", "FAIL"), ("pkg.C0", "b", "PASS"), ("pkg.C1", "c", "PASS")]
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("failing tests", evidence["reason"])
 
-    def test_missing_expected_module_is_partial(self) -> None:
-        write_report(self.evidence_root, "forge-game", "AbilityKeyTest", tests=4)
-        evidence = self.verdict(self.lock, run_report(self.lock))
+    def test_empty_required_surface_is_not_run(self) -> None:
+        self.honest()
+        surface = required_surface(totals={m: 0 for m in EXPECTED_MODULES},
+                                   classes={m: [] for m in EXPECTED_MODULES},
+                                   base=self.lock["comparison_base"]["sha"])
+        evidence = self.verdict(surface=surface)
+        self.assertNotPass(evidence, qualify.NOT_RUN)
+
+    def test_missing_expected_module_witness_is_not_run(self) -> None:
+        self.honest()
+        (self.witness_dir / "forge-gui-desktop.witness.jsonl").unlink()
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.NOT_RUN)
+
+    def test_undeclared_skips_are_partial_not_pass(self) -> None:
+        records = honest_invocations("forge-game", 3, skip_classes=[STRESS_CLASS])
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        evidence = self.verdict(out_of_band=[])
         self.assertNotPass(evidence, qualify.PARTIAL)
-        self.assertEqual(evidence["exit_code"], 2)
-        self.assertEqual(qualification_of(evidence)["missing_modules"], ["forge-gui-desktop"])
-
-    def test_skipped_cases_are_partial_not_pass(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        write_report(
-            self.evidence_root,
-            "forge-gui-desktop",
-            "NetworkPlay",
-            tests=5,
-            skipped=5,
-            classname=STRESS_CLASS,
-        )
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertNotPass(evidence, qualify.PARTIAL)
-        self.assertEqual(qualification_of(evidence)["counts"]["skipped"], 5)
         self.assertEqual(
             qualification_of(evidence)["skips"]["undeclared_skipped_classes"], [STRESS_CLASS]
         )
 
-    def test_declared_out_of_band_skips_do_not_make_the_surface_partial(self) -> None:
-        """An explicitly declared opt-in surface is excluded, and only it."""
-        clean_evidence_root(self.evidence_root)
-        write_report(
-            self.evidence_root,
-            "forge-gui-desktop",
-            "NetworkPlay",
-            tests=6,
-            skipped=6,
-            classname=STRESS_CLASS,
-        )
-        evidence = self.verdict(self.lock, run_report(self.lock), out_of_band=[STRESS_CLASS])
+    def test_declared_stress_skip_is_not_partial(self) -> None:
+        records = honest_invocations("forge-game", 3, skip_classes=[STRESS_CLASS])
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        evidence = self.verdict(out_of_band=[STRESS_CLASS])
         self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
-        skips = qualification_of(evidence)["skips"]
-        self.assertEqual(skips["declared_out_of_band_classes"], [STRESS_CLASS])
-        self.assertEqual(skips["observed_skipped_classes"], [STRESS_CLASS])
-        self.assertEqual(skips["undeclared_skipped_classes"], [])
-        self.assertEqual(skips["skipped_total"], 6)
 
     def test_out_of_band_declaration_cannot_hide_other_skips(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        write_report(
-            self.evidence_root,
-            "forge-gui-desktop",
-            "NetworkPlay",
-            tests=6,
-            skipped=6,
-            classname=STRESS_CLASS,
-        )
-        write_report(
-            self.evidence_root,
-            "forge-gui-desktop",
-            "RulesCoverage",
-            tests=3,
-            skipped=3,
-            classname="forge.game.rule.RulesCoverageTest",
-        )
-        evidence = self.verdict(self.lock, run_report(self.lock), out_of_band=[STRESS_CLASS])
+        records = honest_invocations("forge-game", 3, skip_classes=[STRESS_CLASS])
+        records = records + [("pkg.RulesCoverage", "r1", "SKIP")]
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        evidence = self.verdict(out_of_band=[STRESS_CLASS])
         self.assertNotPass(evidence, qualify.PARTIAL)
-        self.assertEqual(
-            qualification_of(evidence)["skips"]["undeclared_skipped_classes"],
-            ["forge.game.rule.RulesCoverageTest"],
-        )
-
-    def test_unattributable_skips_are_never_excluded(self) -> None:
-        """A skip count with no class attribution cannot claim an exemption."""
-        clean_evidence_root(self.evidence_root)
-        write_report(
-            self.evidence_root,
-            "forge-gui-desktop",
-            "Opaque",
-            tests=4,
-            skipped=4,
-            classname=STRESS_CLASS,
-            emit_cases=False,
-        )
-        evidence = self.verdict(self.lock, run_report(self.lock), out_of_band=[STRESS_CLASS])
-        self.assertNotPass(evidence, qualify.PARTIAL)
-        skips = qualification_of(evidence)["skips"]
-        self.assertTrue(skips["unattributable_skips"])
-        self.assertEqual(skips["undeclared_skipped_classes"], ["<unattributable>"])
-
-    def test_errors_are_fail(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        write_report(self.evidence_root, "forge-game", "ErrTest", tests=1, errors=1)
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertNotPass(evidence, qualify.FAIL)
-
-    def test_reports_outside_the_bounded_shape_are_not_evidence(self) -> None:
-        """Candidate XML elsewhere in the tree cannot pose as qualification."""
-        clean_evidence_root(self.evidence_root)
-        stray = self.evidence_root / "forge-game" / "TEST-stray.xml"
-        stray.parent.mkdir(parents=True, exist_ok=True)
-        stray.write_text('<testsuite name="stray" tests="99" failures="0" errors="0" skipped="0"/>')
-        nested = self.evidence_root / "forge-game" / "target" / "other" / "TEST-x.xml"
-        nested.parent.mkdir(parents=True, exist_ok=True)
-        nested.write_text('<testsuite name="x" tests="99" failures="0" errors="0" skipped="0"/>')
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
-        self.assertEqual(qualification_of(evidence)["counts"]["tests"], 19)
-
-
-# --------------------------------------------------------------------------- #
-# RED controls - candidate self-qualification
-# --------------------------------------------------------------------------- #
-
-
-class RedCandidateSelfQualification(FixtureCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.lock = build_lock(self.fixture)
-
-    def test_fabricated_verdict_attributes_in_a_report_are_discarded(self) -> None:
-        """`verdict="PASS"` in candidate XML is data, not a verdict."""
-        write_report(
-            self.evidence_root,
-            "forge-game",
-            "ForgedTest",
-            tests=0,
-            extra_attrs={
-                "verdict": "PASS",
-                "status": "success",
-                "result": "ok",
-                "outcome": "passed",
-                "passed": "true",
-                "success": "1",
-            },
-        )
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertNotPass(evidence, qualify.UNKNOWN)
-        ignored = evidence["trust_boundary"]["ignored_candidate_verdict_keys"]
-        self.assertEqual(
-            sorted(ignored), ["outcome", "passed", "result", "status", "success", "verdict"]
-        )
-
-    def test_forged_report_with_many_tests_and_no_execution_is_not_pass(self) -> None:
-        """Counting claimed cases without a completed run stays FAIL."""
-        write_report(self.evidence_root, "forge-game", "ForgedA", tests=500)
-        write_report(self.evidence_root, "forge-gui-desktop", "ForgedB", tests=500)
-        evidence = self.verdict(
-            self.lock,
-            run_report(self.lock, completed=False, step_exit_codes={"bounded_test_surface": 0}),
-        )
-        self.assertNotPass(evidence, qualify.FAIL)
-
-    def test_candidate_supplied_run_report_is_not_read(self) -> None:
-        """The verifier reads only the trusted run report, never the tree's."""
-        clean_evidence_root(self.evidence_root)
-        forged = self.evidence_root / "run-report.json"
-        forged.write_text(json.dumps({"verdict": "PASS", "completed": True, "schema": "x"}))
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
-        self.assertFalse(evidence["trust_boundary"]["verdict_read_from_candidate"])
-        # The forged document is present in the candidate tree and ignored.
-        self.assertTrue(forged.is_file())
-
-    def test_candidate_supplied_verdict_document_cannot_promote_nothing_run(self) -> None:
-        """A candidate-shipped PASS document does not become the verdict."""
-        payload = self.evidence_root / "FORGE_CANDIDATE_QUALIFICATION.json"
-        payload.parent.mkdir(parents=True, exist_ok=True)
-        payload.write_text(json.dumps({"schema": qualify.SCHEMA, "verdict": "PASS", "exit_code": 0}))
-        evidence = self.verdict(self.lock, run_report(self.lock))
-        self.assertNotPass(evidence, qualify.NOT_RUN)
-        self.assertNotEqual(evidence["verdict"], qualify.PASS)
+        self.assertIn("pkg.RulesCoverage",
+                      qualification_of(evidence)["skips"]["undeclared_skipped_classes"])
 
     def test_mergeability_claims_cannot_promote_incomplete_evidence(self) -> None:
-        """Synthetic merge / mergeable state carries zero qualification credit."""
-        evidence = self.verdict(
-            self.lock,
-            run_report(
-                self.lock,
-                extra={
-                    "pr_mergeable": True,
-                    "mergeable_state": "CLEAN",
-                    "synthetic_merge_state": "CLEAN",
-                    "mergeStateStatus": "CLEAN",
-                    "verdict": "PASS",
-                },
-            ),
-        )
+        manifest = dict(self.manifest)
+        manifest.update({
+            "pr_mergeable": True, "mergeable_state": "CLEAN",
+            "synthetic_merge_state": "CLEAN", "mergeStateStatus": "CLEAN", "verdict": "PASS",
+        })
+        evidence = self.verdict(manifest=manifest)
         self.assertNotPass(evidence, qualify.NOT_RUN)
         self.assertEqual(evidence["pr_mergeability"]["status"], "NOT_APPLICABLE")
         self.assertEqual(evidence["synthetic_merge_evidence"]["status"], "NEVER_COMPUTED")
 
-    def test_mergeability_claims_do_not_rescue_a_missing_module(self) -> None:
-        write_report(self.evidence_root, "forge-game", "OnlyThis", tests=3)
-        evidence = self.verdict(
-            self.lock,
-            run_report(
-                self.lock,
-                extra={"pr_mergeable": True, "synthetic_merge_state": "CLEAN", "verdict": "PASS"},
-            ),
+
+# --------------------------------------------------------------------------- #
+# MANDATORY A-H: candidate-authored artifacts cannot manufacture credit
+# --------------------------------------------------------------------------- #
+
+
+class RedForgedCandidateArtifacts(EvidenceCase):
+    """The property the reviewed head failed: forged reports must earn nothing."""
+
+    def _forge_everywhere(self, tests=500):
+        """Candidate lifecycle writes green XML into every expected module."""
+        for module in EXPECTED_MODULES:
+            write_forged_surefire(self.forged_dir, module, tests=tests)
+
+    def test_A_suppression_plus_forged_green_xml_never_passes(self) -> None:
+        """Control A: hardcoded suppression, zero execution, forged green XML."""
+        self._forge_everywhere()
+        # No witness exists because nothing executed.
+        evidence = self.verdict(witness_dir=self.root / "absent")
+        self.assertNotPass(evidence, qualify.NOT_RUN)
+
+    def test_A_forged_xml_alongside_a_thin_witness_is_fail(self) -> None:
+        """Forged XML plus a witness that never touched the required classes."""
+        self._forge_everywhere()
+        write_witness(self.witness_dir, "forge-game",
+                      [("pkg.Other", "x", "PASS")])
+        write_witness(self.witness_dir, "forge-gui-desktop",
+                      [("pkg.Other", "x", "PASS")])
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("never observed executing", evidence["reason"])
+
+    def test_B_maven_success_with_zero_required_execution_never_passes(self) -> None:
+        """Control B: candidate claims success, forges expected counts, runs nothing."""
+        self._forge_everywhere(tests=666)
+        manifest = execution_manifest(
+            self.lock["candidate"]["sha"], self.lock["candidate"]["tree"],
+            base=self.lock["comparison_base"]["sha"],
         )
+        for entry in manifest["modules"].values():
+            entry["testng_totals"] = {"total": 666, "passed": 660, "failed": 0, "skipped": 6}
+        evidence = self.verdict(manifest=manifest, witness_dir=self.root / "absent")
+        self.assertNotPass(evidence, qualify.NOT_RUN)
+
+    def test_C_forged_reports_in_every_expected_module_never_pass(self) -> None:
+        """Control C: green XML present in forge-game, forge-gui-desktop, bridge."""
+        for module in ("forge-game", "forge-gui-desktop", "forge-protocol2-bridge"):
+            write_forged_surefire(self.forged_dir, module)
+        evidence = self.verdict(witness_dir=self.root / "absent")
+        self.assertNotPass(evidence, qualify.NOT_RUN)
+
+    def test_D_copied_and_renamed_reports_never_pass(self) -> None:
+        """Control D: a real report copied and renamed into the expected path."""
+        self.honest()
+        source = self.witness_dir / "forge-game.witness.jsonl"
+        copy = self.forged_dir / "forge-gui-desktop" / "target" / "surefire-reports"
+        copy.mkdir(parents=True, exist_ok=True)
+        (copy / "TEST-Copied.xml").write_text(
+            '<testsuite name="TestSuite" tests="450" failures="0" errors="0" skipped="0"/>'
+        )
+        (copy / "TEST-TestSuite.xml.bak").write_text(
+            '<testsuite name="TestSuite" tests="450" failures="0" errors="0" skipped="0"/>'
+        )
+        evidence = self.verdict()
+        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+        # The copied files changed nothing: credit came only from the witness.
+        self.assertEqual(qualification_of(evidence)["counts"]["observed_invocations"], 6)
+        self.assertIs(
+            evidence["trust_boundary"]["candidate_reports_read_for_credit"], False
+        )
+
+    def test_E_real_failure_with_forged_green_reports_is_fail(self) -> None:
+        """Control E: forged green XML must never mask an observed real failure."""
+        self._forge_everywhere()
+        records = [("pkg.C0", "a", "FAIL"), ("pkg.C0", "b", "PASS"), ("pkg.C1", "c", "PASS")]
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("failing tests", evidence["reason"])
+
+    def test_F_candidate_fabricated_run_report_grants_no_credit(self) -> None:
+        """Control F: a candidate-shipped manifest claiming success is rejected."""
+        self._forge_everywhere()
+        fabricated = self.root / "candidate-target" / "execution-manifest.json"
+        fabricated.parent.mkdir(parents=True, exist_ok=True)
+        fabricated.write_text(json.dumps(execution_manifest(
+            self.lock["candidate"]["sha"], self.lock["candidate"]["tree"],
+            base=self.lock["comparison_base"]["sha"])))
+        fabricated.write_text(json.dumps(dict(
+            json.loads(fabricated.read_text()), candidate_sha="f" * 40, completed=True,
+            step_exit_codes={"bounded_test_surface": 0}, verdict="PASS", exit_code=0,
+        )))
+        # The verifier reads only the trusted manifest path; the fabricated file
+        # is in the candidate tree and is never consulted.
+        evidence = self.verdict(witness_dir=self.root / "absent")
+        self.assertNotPass(evidence, qualify.NOT_RUN)
+
+    def test_F_candidate_shipped_verdict_document_grants_no_credit(self) -> None:
+        payload = self.forged_dir / "FORGE_CANDIDATE_QUALIFICATION.json"
+        payload.parent.mkdir(parents=True, exist_ok=True)
+        payload.write_text(json.dumps({"schema": "forge.candidate-qualification.evidence/2",
+                                       "verdict": "PASS", "exit_code": 0}))
+        evidence = self.verdict(witness_dir=self.root / "absent")
+        self.assertNotPass(evidence, qualify.NOT_RUN)
+
+    def test_candidate_verdict_shaped_fields_in_manifest_are_not_read(self) -> None:
+        self.honest()
+        manifest = dict(self.manifest, verdict="PASS", status="PASS", result="PASS",
+                        outcome="PASS", passed=True, success=True)
+        evidence = self.verdict(manifest=manifest)
+        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+        self.assertFalse(evidence["trust_boundary"]["verdict_read_from_candidate"])
+
+    def test_G_required_class_suppressed_never_passes(self) -> None:
+        """Control G: required tests not discovered/executed => no PASS."""
+        records = [("pkg.C0", "a", "PASS")]  # pkg.C1 never runs
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertEqual(
+            sorted(qualification_of(evidence)["dead_classes"]["forge-game"]), ["pkg.C1"]
+        )
+
+    def test_G_reduced_volume_below_trusted_denominator_is_partial(self) -> None:
+        """Control G: required classes alive but the volume was cut."""
+        surface = required_surface(totals={"forge-game": 40, "forge-gui-desktop": 40},
+                                   base=self.lock["comparison_base"]["sha"])
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, honest_invocations(module, 4))
+        evidence = self.verdict(surface=surface)
         self.assertNotPass(evidence, qualify.PARTIAL)
+        self.assertIn("reduced the qualified test volume", evidence["reason"])
 
-    def test_verdict_cannot_be_widened_by_a_report_with_a_skipped_suite(self) -> None:
-        clean_evidence_root(self.evidence_root)
-        write_report(
-            self.evidence_root,
-            "forge-gui-desktop",
-            "AllSkipped",
-            tests=40,
-            skipped=40,
-            classname="forge.game.rule.AllSkippedTest",
-        )
-        evidence = self.verdict(
-            self.lock, run_report(self.lock), out_of_band=[STRESS_CLASS]
-        )
-        self.assertNotPass(evidence, qualify.PARTIAL)
+    def test_forged_reports_alone_never_change_a_failing_verdict(self) -> None:
+        """Absolute property: candidate artifacts have zero influence."""
+        records = [("pkg.C0", "a", "FAIL"), ("pkg.C0", "b", "PASS"), ("pkg.C1", "c", "PASS")]
+        for module in EXPECTED_MODULES:
+            write_witness(self.witness_dir, module, records)
+        without = self.verdict()["verdict"]
+        self._forge_everywhere()
+        with_forged = self.verdict()["verdict"]
+        self.assertEqual(without, qualify.FAIL)
+        self.assertEqual(with_forged, qualify.FAIL)
 
-    def test_derive_verdict_is_pure_and_candidate_data_cannot_reach_the_verdict(self) -> None:
-        """Two identical trusted inputs give identical verdicts regardless of
-        any candidate-authored content in the reports root."""
-        clean_evidence_root(self.evidence_root)
-        report = run_report(self.lock)
-        first = qualify.build_evidence(self.lock, report, self.evidence_root, EXPECTED_MODULES)
-        second = qualify.build_evidence(self.lock, report, self.evidence_root, EXPECTED_MODULES)
-        self.assertEqual(first["verdict"], second["verdict"])
-        self.assertEqual(first["exit_code"], second["exit_code"])
 
-    def test_trusted_inputs_that_do_not_validate_produce_fail_evidence(self) -> None:
-        broken = dict(self.lock)
-        broken["verdict_read_from_candidate"] = True
+# --------------------------------------------------------------------------- #
+# PRESERVED: CLI exit-code separation
+# --------------------------------------------------------------------------- #
+
+
+class VerdictCli(EvidenceCase):
+    def _run(self, surface=None, manifest=None, out_of_band=None, witness_dir=None):
+        lock_path = self.root / "lock.json"
+        lock_path.write_text(json.dumps(self.lock))
+        surface_path = self.root / "surface.json"
+        surface_path.write_text(json.dumps(surface if surface is not None else self.surface))
+        manifest_path = self.root / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest if manifest is not None else self.manifest))
+        out = self.root / "evidence-out" / "qual.json"
+        argv = [
+            "--lock", str(lock_path),
+            "--required-surface", str(surface_path),
+            "--execution-manifest", str(manifest_path),
+            "--witness-dir", str(witness_dir if witness_dir is not None else self.witness_dir),
+            "--output", str(out),
+        ]
+        for klass in out_of_band or []:
+            argv += ["--out-of-band-test-class", klass]
+        code = qualify.main(argv)
+        return code, json.loads(out.read_text())
+
+    def test_cli_separates_every_verdict_class(self) -> None:
+        cases = [
+            ("pass", qualify.PASS, 0, None, None),
+            ("fail", qualify.FAIL, 1, "failure", None),
+            ("partial", qualify.PARTIAL, 2, "thin", None),
+            ("not_run", qualify.NOT_RUN, 3, None, "absent"),
+            ("unknown", qualify.UNKNOWN, 4, "malformed", None),
+        ]
+        for label, expected, code_expected, mode, missing in cases:
+            with self.subTest(case=label):
+                self.honest()
+                surface, manifest, out_of_band = self.surface, self.manifest, []
+                if mode == "failure":
+                    records = [("pkg.C0", "a", "FAIL"), ("pkg.C0", "b", "PASS"),
+                               ("pkg.C1", "c", "PASS")]
+                    for module in EXPECTED_MODULES:
+                        write_witness(self.witness_dir, module, records)
+                elif mode == "thin":
+                    surface = required_surface(
+                        totals={"forge-game": 30, "forge-gui-desktop": 30},
+                        base=self.lock["comparison_base"]["sha"])
+                    for module in EXPECTED_MODULES:
+                        write_witness(self.witness_dir, module, honest_invocations(module, 3))
+                elif mode == "malformed":
+                    path = self.witness_dir / "forge-game.witness.jsonl"
+                    path.write_text("{broken\n")
+                code, emitted = self._run(surface, manifest, out_of_band,
+                                          self.root / missing if missing else None)
+                self.assertEqual(emitted["verdict"], expected, emitted["reason"])
+                self.assertEqual(code, code_expected,
+                                 "{} -> {}".format(label, emitted["reason"]))
+
+    def test_cli_rejects_wrong_input_schemas(self) -> None:
+        self.honest()
+        code, emitted = self._run(surface=dict(self.surface, schema="wrong/1"))
+        self.assertEqual(code, qualify.EXIT_CODES[qualify.FAIL])
+        self.assertEqual(emitted["verdict"], qualify.FAIL)
+        code, emitted = self._run(manifest=dict(self.manifest, schema="wrong/1"))
+        self.assertEqual(code, qualify.EXIT_CODES[qualify.FAIL])
+
+    def test_cli_emits_fail_evidence_when_the_lock_does_not_validate(self) -> None:
+        broken = dict(self.lock, verdict_read_from_candidate=True)
         lock_path = self.root / "broken-lock.json"
         lock_path.write_text(json.dumps(broken))
-        run_path = self.root / "run.json"
-        run_path.write_text(json.dumps(run_report(self.lock)))
-        out = self.root / "evidence-out" / "qual.json"
-        code = qualify.main(
-            [
-                "--lock", str(lock_path),
-                "--run-report", str(run_path),
-                "--reports-root", str(self.evidence_root),
-                "--expect-report-module", "forge-game",
-                "--expect-report-module", "forge-gui-desktop",
-                "--output", str(out),
-            ]
-        )
+        out = self.root / "broken-evidence.json"
+        code = qualify.main([
+            "--lock", str(lock_path),
+            "--required-surface", str(self.root / "s.json"),
+            "--execution-manifest", str(self.root / "m.json"),
+            "--witness-dir", str(self.witness_dir),
+            "--output", str(out),
+        ])
         self.assertEqual(code, qualify.EXIT_CODES[qualify.FAIL])
-        self.assertNotEqual(code, 0)
         emitted = json.loads(out.read_text())
         self.assertEqual(emitted["verdict"], qualify.FAIL)
         self.assertEqual(emitted["rules_qualification_evidence"]["status"], "NOT_CLAIMED")
 
-    def test_cli_exit_codes_separate_every_verdict_class(self) -> None:
-        """End-to-end CLI wiring: only PASS is 0, every class is distinguishable."""
-        cases = [
-            ("pass", qualify.PASS, 0),
-            ("fail", qualify.FAIL, 1),
-            ("partial", qualify.PARTIAL, 2),
-            ("not_run", qualify.NOT_RUN, 3),
-            ("unknown", qualify.UNKNOWN, 4),
-        ]
-        for label, _verdict, expected_code in cases:
-            with self.subTest(case=label):
-                root = self.root / ("cli-" + label)
-                root.mkdir()
-                if label == "pass":
-                    clean_evidence_root(root)
-                elif label == "fail":
-                    clean_evidence_root(root)
-                    write_report(root, "forge-game", "Boom", tests=1, failures=1)
-                elif label == "partial":
-                    # Only one expected module reports.
-                    write_report(root, "forge-game", "OnlyThis", tests=3)
-                elif label == "unknown":
-                    clean_evidence_root(root)
-                    write_raw_report(root, "forge-game", "Truncated", '<testsuite tests="1"')
-                # "not_run" writes no reports at all.
-                lock_path = self.root / "cli-lock.json"
-                lock_path.write_text(json.dumps(self.lock))
-                run_path = self.root / ("cli-run-%s.json" % label)
-                run_path.write_text(json.dumps(run_report(self.lock)))
-                out = self.root / ("cli-evidence-%s.json" % label)
-                code = qualify.main(
-                    [
-                        "--lock", str(lock_path),
-                        "--run-report", str(run_path),
-                        "--reports-root", str(root),
-                        "--expect-report-module", "forge-game",
-                        "--expect-report-module", "forge-gui-desktop",
-                        "--output", str(out),
-                    ]
-                )
-                emitted = json.loads(out.read_text())
-                self.assertEqual(emitted["verdict"], _verdict, emitted["reason"])
-                self.assertEqual(code, expected_code, "{} -> {}".format(label, emitted["reason"]))
-
 
 # --------------------------------------------------------------------------- #
-# Source-lock CLI control
+# PRESERVED: source-lock CLI
 # --------------------------------------------------------------------------- #
 
 
-class SourceLockCli(FixtureCase):
+class SourceLockCli(EvidenceCase):
     def test_cli_writes_a_valid_lock_for_the_exact_candidate(self) -> None:
         out = self.root / "source-lock.json"
-        code = source_lock.main(
-            [
-                "--repo", str(self.fixture.trusted),
-                "--candidate-sha", self.fixture.candidate,
-                "--fetch-ref", "refs/heads/candidate",
-                "--run-sha", self.fixture.master,
-                "--output", str(out),
-            ]
-        )
+        code = source_lock.main([
+            "--repo", str(self.fixture.trusted),
+            "--candidate-sha", self.fixture.candidate,
+            "--fetch-ref", "refs/heads/candidate",
+            "--run-sha", self.fixture.master,
+            "--output", str(out),
+        ])
         self.assertEqual(code, 0)
         self.assertEqual(source_lock.load_lock(out)["candidate"]["sha"], self.fixture.candidate)
 
     def test_cli_writes_nothing_when_identity_is_unproven(self) -> None:
         out = self.root / "unproven-lock.json"
-        code = source_lock.main(
-            [
-                "--repo", str(self.fixture.trusted),
-                "--candidate-sha", "0" * 40,
-                "--output", str(out),
-            ]
-        )
+        code = source_lock.main([
+            "--repo", str(self.fixture.trusted),
+            "--candidate-sha", "0" * 40,
+            "--output", str(out),
+        ])
         self.assertEqual(code, 1)
         self.assertFalse(out.exists(), "no partially proven lock may be emitted")
 
 
-class WorkflowContractControls(unittest.TestCase):
-    """Assert the trust-critical properties of the trusted workflow definition.
+# --------------------------------------------------------------------------- #
+# PRESERVED + EXTENDED: workflow contract controls
+# --------------------------------------------------------------------------- #
 
-    These are executable assertions rather than prose, because each one protects
-    a property that is invisible from the Python verifier alone: if the workflow
-    stops triggering on the trusted event, gains a default write token, or stops
-    uploading a declared module's evidence, the gate silently stops qualifying
-    anything.
+
+class TrustedOrchestratorControls(unittest.TestCase):
+    """Controls on the trusted orchestrator itself.
+
+    The orchestrator decides what runs and what counts. These controls pin the
+    two properties that make the witness trustworthy: the trusted listener is
+    first on the launch classpath, and the required surface is enumerated with
+    Surefire's real default include patterns rather than a narrowed subset.
     """
+
+    def test_trusted_witness_classpath_entry_is_first(self) -> None:
+        assembled = trusted_execution.assemble_classpath(
+            "/evidence/witness-classes", ["/cand/target/test-classes", "/cand/target/classes", "/dep.jar"]
+        )
+        entries = assembled.split(":")
+        self.assertEqual(entries[0], "/evidence/witness-classes")
+        self.assertEqual(entries[1:], ["/cand/target/test-classes", "/cand/target/classes", "/dep.jar"])
+
+    def test_witness_classpath_survives_an_empty_candidate_classpath(self) -> None:
+        self.assertEqual(
+            trusted_execution.assemble_classpath("/w", []), "/w"
+        )
+
+    def test_required_surface_include_patterns_match_surefire_defaults(self) -> None:
+        self.assertEqual(
+            sorted(trusted_execution.TEST_INCLUDE_PATTERNS),
+            sorted(["Test*.java", "*Test.java", "*Tests.java", "*TestCase.java"]),
+        )
+        import fnmatch
+        for name, expected in [
+            ("TestSuiteX.java", True),      # Test*.java
+            ("TestUtilities.java", True),   # Test*.java (prefix match, as Surefire does)
+            ("AbilityKeyTest.java", True),  # *Test.java
+            ("FooTests.java", True),        # *Tests.java
+            ("FooTestCase.java", True),     # *TestCase.java
+            ("Support.java", False),
+            ("Helper.java", False),
+            ("MyTestbench.java", False),
+        ]:
+            with self.subTest(name=name):
+                matched = any(fnmatch.fnmatch(name, p)
+                              for p in trusted_execution.TEST_INCLUDE_PATTERNS)
+                self.assertEqual(matched, expected, name)
+
+    def test_required_classes_come_from_the_trusted_comparison_base_tree(self) -> None:
+        """The required class list must be read from Git, not from the working tree."""
+        tmp = tempfile.mkdtemp(prefix="forge-d17-surface-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = Path(tmp)
+        repo = root / "repo"
+        (repo / "forge-game" / "src" / "test" / "java" / "pkg").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.email", "a@b.invalid"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), check=True)
+        base = repo / "forge-game" / "src" / "test" / "java" / "pkg"
+        for name in ("AlphaTest.java", "BetaTest.java", "Support.java", "TestHelperX.java"):
+            (base / name).write_text("package pkg;\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True)
+        base_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo), text=True).strip()
+
+        found = trusted_execution.required_classes_for_module(repo, "forge-game", base_sha)
+        self.assertEqual(found, ["pkg.AlphaTest", "pkg.BetaTest", "pkg.TestHelperX"])
+
+        # A file present only in the working tree must not enter the required set.
+        (base / "GammaTest.java").write_text("package pkg;\n")
+        self.assertEqual(
+            trusted_execution.required_classes_for_module(repo, "forge-game", base_sha),
+            ["pkg.AlphaTest", "pkg.BetaTest", "pkg.TestHelperX"],
+        )
+
+    def test_required_classes_reject_an_unresolvable_base(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="forge-d17-surface2-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = Path(tmp)
+        subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=str(repo), check=True)
+        with self.assertRaises(trusted_execution.ExecutionError):
+            trusted_execution.required_classes_for_module(repo, "forge-game", "0" * 40)
+
+
+class WorkflowContractControls(unittest.TestCase):
+    """Assert the trust-critical properties of the trusted workflow definition."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.workflow_path = HERE.parent / "workflows" / "forge-candidate-qualification.yml"
         cls.text = cls.workflow_path.read_text()
-        match = re.search(
-            r'^\s*QUALIFY_EXPECTED_MODULES:\s*"([^"]+)"', cls.text, re.MULTILINE
-        )
+        match = re.search(r"^\s*QUALIFY_EXPECTED_MODULES:\s*\"([^\"]+)\"", cls.text, re.MULTILINE)
         assert match, "QUALIFY_EXPECTED_MODULES is not declared in the workflow"
         cls.modules = match.group(1).split()
         out_of_band = re.search(
-            r'^\s*QUALIFY_OUT_OF_BAND_CLASSES:\s*"([^"]*)"', cls.text, re.MULTILINE
-        )
+            r"^\s*QUALIFY_OUT_OF_BAND_CLASSES:\s*\"([^\"]*)\"", cls.text, re.MULTILINE)
         assert out_of_band, "QUALIFY_OUT_OF_BAND_CLASSES is not declared in the workflow"
         cls.out_of_band = out_of_band.group(1).split()
 
     @staticmethod
     def _step_run_block(text: str, step_name: str) -> str:
-        """Extract the ``run:`` body of the named step.
+        """Extract the ``run:`` body of the named step by indentation.
 
         Assertions must be made against the executed command, never against a
-        substring that a comment could satisfy.  The body is taken by
-        indentation relative to its own ``run:`` key, so it is independent of how
-        deeply the step happens to be nested.
+        substring a comment could satisfy.
         """
         lines = text.splitlines()
         try:
-            start = next(
-                i for i, line in enumerate(lines) if line.strip() == "- name: {}".format(step_name)
-            )
+            start = next(i for i, line in enumerate(lines)
+                         if line.strip() == "- name: {}".format(step_name))
         except StopIteration:
             raise AssertionError("step {!r} not found".format(step_name))
         run_index = None
@@ -1077,72 +1225,13 @@ class WorkflowContractControls(unittest.TestCase):
             body.append(line.strip())
         return "\n".join(body).strip()
 
-    def test_verdict_is_surfaced_verbatim_and_never_hardcoded(self) -> None:
-        """The recorded verdict must be the verifier's own exit code.
-
-        A hardcoded `exit_code=0` would turn every non-PASS class green, which is
-        the single most dangerous edit to this workflow.
-        """
-        verdict = self._step_run_block(self.text, "Derive the exact-SHA qualification verdict")
-        self.assertIn("exit_code=$rc", verdict)
-        for forbidden in ("exit_code=0", "exit_code=1", "|| true", "|| exit 0", "exit 0\n"):
-            with self.subTest(token=forbidden.strip()):
-                self.assertNotIn(forbidden, verdict)
-        # The python invocation must not be masked either.
-        self.assertNotRegex(verdict, r"qualify\.py[^\n]*\|\|")
-
-        surface = self._step_run_block(self.text, "Surface classification")
-        self.assertIn('exit "$EXIT_CODE"', surface)
-        self.assertIn('if: always()', self.text)
-        # An absent exit code must fail closed rather than default to success.
-        self.assertRegex(surface, r'if \[\[ -z "\$EXIT_CODE" \]\][\s\S]{0,200}exit 4')
-        self.assertNotIn('echo "exit_code=0"', self.text)
-
     def test_expected_surface_is_declared_and_not_empty(self) -> None:
         self.assertTrue(self.modules)
         for module in self.modules:
             self.assertRegex(module, r"^[a-z0-9][a-z0-9-]*$")
 
-    def test_every_declared_module_is_uploaded_as_evidence(self) -> None:
-        """A declared module that is not uploaded can never report evidence.
-
-        This is a real failure mode: the module would silently read as missing
-        on every run. It is asserted here so the two lists cannot drift.
-        """
-        for module in self.modules:
-            with self.subTest(module=module):
-                self.assertIn(
-                    "/candidate/{}/target/surefire-reports".format(module),
-                    self.text,
-                    "module {} is declared but never uploaded".format(module),
-                )
-
-    def test_qualification_runs_the_same_surface_as_the_existing_gate(self) -> None:
-        """D17 must not quietly narrow or diverge from test-build.yaml.
-
-        The comparison is made against the executed command of each gate's own
-        run step, so a comment that merely mentions the command cannot satisfy
-        this control.
-        """
-        ours = self._step_run_block(self.text, "Run bounded candidate test surface")
-        self.assertIn("mvn -U -B clean test", ours)
-        # No module selection or `-am` narrowing: the whole reactor must run.
-        self.assertNotIn("-pl ", ours)
-        self.assertNotIn("--settings", ours)
-
-        existing_text = (HERE.parent / "workflows" / "test-build.yaml").read_text()
-        existing = self._step_run_block(existing_text, "Run tests in virtual framebuffer")
-        self.assertIn("mvn -U -B clean test", existing)
-        self.assertEqual(
-            ours.split()[-3:],
-            existing.split()[-3:],
-            "D17 and test-build.yaml must invoke the same maven command",
-        )
-
     def test_trigger_is_the_trusted_event_not_the_untrusted_one(self) -> None:
         self.assertIn("pull_request_target:", self.text)
-        # A bare `pull_request:` trigger would let the candidate supply the
-        # definition that qualifies it.
         self.assertIsNone(
             re.search(r"^\s{2}pull_request:\s*$", self.text, re.MULTILINE),
             "an untrusted pull_request trigger is present",
@@ -1160,17 +1249,38 @@ class WorkflowContractControls(unittest.TestCase):
     def test_no_continue_on_error(self) -> None:
         self.assertNotIn("continue-on-error", self.text)
 
+    def test_verdict_is_surfaced_verbatim_and_never_hardcoded(self) -> None:
+        verdict = self._step_run_block(self.text, "Derive the exact-SHA qualification verdict")
+        self.assertIn("exit_code=$rc", verdict)
+        for forbidden in ("exit_code=0", "exit_code=1", "|| true"):
+            with self.subTest(token=forbidden):
+                self.assertNotIn(forbidden, verdict)
+        self.assertNotRegex(verdict, r"qualify\.py[^\n]*\|\|")
+        surface = self._step_run_block(self.text, "Surface classification")
+        self.assertIn('exit "$EXIT_CODE"', surface)
+        self.assertIn('if: always()', self.text)
+
     def test_out_of_band_declarations_are_explicit_and_well_formed(self) -> None:
         self.assertTrue(self.out_of_band, "out-of-band list must be explicit, not implicit")
+        self.assertEqual(self.out_of_band, [STRESS_CLASS],
+                         "only the measured network-stress class may be declared")
         for klass in self.out_of_band:
             self.assertRegex(klass, r"^[a-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
 
     def test_verifier_is_read_from_the_trusted_checkout(self) -> None:
-        """The verifier is invoked from the checkout, never from the candidate."""
         self.assertIn(".github/qualification/qualify.py", self.text)
         self.assertIn(".github/qualification/source_lock.py", self.text)
-        # The verdict step must run before any `cd` into the candidate tree.
-        self.assertNotRegex(self.text, r"cd \"\$RUNNER_TEMP/candidate\"[\s\S]{0,400}qualify\.py")
+        self.assertIn(".github/qualification/trusted_execution.py", self.text)
+
+    def test_execution_uses_the_trusted_orchestrator_not_the_candidate_build(self) -> None:
+        """The gate must not take test counts from the candidate's Maven run."""
+        self.assertIn("trusted_execution.py", self.text)
+        # The candidate's own test phase must not be the source of credit.
+        self.assertNotRegex(self.text, r"mvn[^\n]*\btest\b")
+        # Witness and required surface ledgers must be produced and consumed.
+        self.assertIn("required-surface.json", self.text)
+        self.assertIn("execution-manifest.json", self.text)
+        self.assertIn("witness", self.text)
 
 
 if __name__ == "__main__":

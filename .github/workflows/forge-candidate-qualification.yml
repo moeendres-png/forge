@@ -11,7 +11,7 @@ name: Forge exact-SHA candidate qualification
 # Every identity is exact and separately recorded:
 #   * workflow authority : the `master` commit that supplies this definition
 #   * candidate          : the exact 40-hex commit under qualification
-#   * comparison base    : inspected merge-base Git data only
+#   * comparison base    : the trusted denominator source, as inspected Git data
 #
 # PR mergeability, GitHub's synthetic merge result and `mergeable` /
 # `mergeStateStatus` are never read.  A green run of this workflow is a CI
@@ -43,21 +43,17 @@ env:
   PYTHONHASHSEED: "0"
   # Bounded qualification surface.
   #
-  # The surface is deliberately identical to the existing `test-build.yaml` gate
-  # (`mvn -U -B clean test` over the whole reactor) so that this gate qualifies
-  # exactly what Forge already gates and no module can be quietly dropped from it.
-  # Measured on Forge master b95c07b3436bf582274ea458520ca30aa379d6e7 with
-  # Java 21: 666 tests -- forge-game 3, forge-gui-desktop 450, and
-  # forge-protocol2-bridge 213 -- in 17:04 min.  These three are the only modules
-  # with test sources in the default reactor, so each must report or the
-  # qualification is PARTIAL.
+  # These are the only modules with test sources in the default reactor.  The
+  # trusted denominator for each comes from a TestNG dry run over the trusted
+  # comparison base, so a candidate cannot shrink it.  Measured on Forge master
+  # b95c07b3436bf582274ea458520ca30aa379d6e7 with Java 21: 666 tests --
+  # forge-game 3, forge-gui-desktop 450, forge-protocol2-bridge 213.
   QUALIFY_EXPECTED_MODULES: "forge-game forge-gui-desktop forge-protocol2-bridge"
   # Test classes the trusted contract declares outside the qualified surface.
   # Only skips in these classes are excluded from the completeness requirement;
-  # a skip anywhere else, or a skip that cannot be attributed to a class, makes
-  # the qualification PARTIAL.  The observed and undeclared skip sets are always
-  # reported in the evidence, so this list is an auditable scope statement and
-  # never a silent suppression.
+  # a skip anywhere else makes the qualification PARTIAL.  The observed and
+  # undeclared skip sets are always reported, so this list is an auditable scope
+  # statement and never a silent suppression.
   #
   # forge.net.NetworkPlayIntegrationTest stress cases are opt-in by design: they
   # self-report "Stress tests skipped. Use -Drun.stress.tests=true to run." and
@@ -84,10 +80,11 @@ jobs:
       candidate_sha: ${{ steps.identity.outputs.candidate_sha }}
       candidate_tree: ${{ steps.identity.outputs.candidate_tree }}
       candidate_ref: ${{ steps.identity.outputs.candidate_ref }}
+      comparison_base_sha: ${{ steps.identity.outputs.comparison_base_sha }}
     steps:
-      # The trusted validator source is the default branch itself, so
-      # HEAD is a branch tip and the executed definition is byte-identical to
-      # the definition on `master`.
+      # The trusted validator source is the default branch itself, so HEAD is a
+      # branch tip and the executed definition is byte-identical to the
+      # definition on `master`.
       - name: Checkout trusted qualification authority
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -156,6 +153,7 @@ jobs:
           print("candidate_sha=" + lock["candidate"]["sha"])
           print("candidate_tree=" + lock["candidate"]["tree"])
           print("candidate_ref=" + lock["candidate"]["fetched_from"])
+          print("comparison_base_sha=" + lock["comparison_base"]["sha"])
           PY
 
       - name: Upload trusted source lock
@@ -167,22 +165,23 @@ jobs:
           retention-days: 30
 
   # ------------------------------------------------------------------------ #
-  # Job 2 - bounded qualification of the exact candidate commit.
+  # Job 2 - trusted execution of the exact candidate commit.
   #
-  # The candidate tree is materialized in a separate runner directory and never
-  # overwrites the trusted workspace.  This job executes candidate *code* (that
-  # is the point of qualification), but its steps and their exit codes come from
-  # the trusted definition.
+  # The trusted orchestrator, not the candidate's build, decides what runs and
+  # what counts.  It launches each module's required classes itself with a
+  # listener compiled from this trusted branch, and records what those JVMs
+  # actually dispatched.  No Surefire/TestNG report, generated, copied, renamed
+  # or committed by the candidate is read for any qualification signal.
   # ------------------------------------------------------------------------ #
   candidate-qualification:
-    name: Exact candidate qualification (bounded surface)
+    name: Trusted witnessed execution of the exact candidate
     needs: candidate-identity
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 360
     permissions:
       contents: read
     steps:
-      - name: Checkout trusted authority for job control
+      - name: Checkout trusted qualification authority
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: master
@@ -234,8 +233,6 @@ jobs:
             echo "::error::candidate TREE $tree does not match locked TREE $TRUSTED_CANDIDATE_TREE"
             exit 1
           fi
-          echo "sha=$observed" >> "$GITHUB_OUTPUT"
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
 
       - name: Setup java
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
@@ -244,68 +241,49 @@ jobs:
           java-version: ${{ env.QUALIFY_JAVA }}
           cache: maven
 
-      - name: Run bounded candidate test surface
-        id: tests
-        shell: bash
-        env:
-          CANDIDATE_DIR: ${{ runner.temp }}/candidate
-        run: |
-          set -o pipefail
-          cd "$CANDIDATE_DIR"
-          # Same command and surface as the existing test-build.yaml gate.
-          xvfb-run -a mvn -U -B clean test
-
-      - name: Record the trusted run report
-        if: always()
+      # The trusted orchestrator enumerates the required surface by dry-running
+      # the trusted comparison base, compiles the candidate, compiles its own
+      # listener from trusted source, and launches each module's required
+      # classes with that listener first on the classpath.
+      - name: Run trusted witnessed execution
+        id: execute
         shell: bash
         env:
           CANDIDATE_SHA: ${{ needs.candidate-identity.outputs.candidate_sha }}
           CANDIDATE_TREE: ${{ needs.candidate-identity.outputs.candidate_tree }}
-          TESTS_OUTCOME: ${{ steps.tests.outcome }}
-          CANDIDATE_STEP_OUTCOME: ${{ steps.candidate.outcome }}
+          COMPARISON_BASE: ${{ needs.candidate-identity.outputs.comparison_base_sha }}
+          EXPECTED_MODULES: ${{ env.QUALIFY_EXPECTED_MODULES }}
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          EVIDENCE_DIR: ${{ runner.temp }}/d17-evidence
         run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/qualification"
-          exit_code=0
-          if [[ "$TESTS_OUTCOME" != "success" ]]; then exit_code=1; fi
-          if [[ "$CANDIDATE_STEP_OUTCOME" != "success" ]]; then exit_code=1; fi
-          TESTS_OUTCOME="$TESTS_OUTCOME" \
-          RUN_EXIT_CODE="$exit_code" \
-          python3 - <<'PY'
-          import json, os
-          payload = {
-              "schema": "forge.candidate-qualification.run-report/1",
-              "candidate_sha": os.environ["CANDIDATE_SHA"],
-              "candidate_tree": os.environ["CANDIDATE_TREE"],
-              "maven_command": "xvfb-run -a mvn -U -B clean test",
-              "completed": os.environ["RUN_EXIT_CODE"] == "0",
-              "step_exit_codes": {
-                  "materialize_candidate": 0 if os.environ["CANDIDATE_STEP_OUTCOME"] == "success" else 1,
-                  "bounded_test_surface": 0 if os.environ["TESTS_OUTCOME"] == "success" else 1,
-              },
-          }
-          path = os.environ["RUNNER_TEMP"] + "/run-report.json"
-          with open(path, "w") as handle:
-              json.dump(payload, handle, indent=2, sort_keys=True)
-              handle.write("\n")
-          PY
+          set -uo pipefail
+          python3 .github/qualification/trusted_execution.py \
+            --trusted-repo . \
+            --candidate-dir "$CANDIDATE_DIR" \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --modules "$EXPECTED_MODULES" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --candidate-tree "$CANDIDATE_TREE" \
+            --comparison-base "$COMPARISON_BASE" \
+            --java java \
+            --xvfb-run "xvfb-run -a"
+          rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
 
-      # upload-artifact roots the archive at the least common ancestor of these
-      # paths, i.e. $RUNNER_TEMP, so the archive contains exactly:
-      #   run-report.json                                        (trusted)
-      #   candidate/<module>/target/surefire-reports/TEST-*.xml  (candidate data)
-      # Job 3 depends on that layout.  Every module named in
-      # QUALIFY_EXPECTED_MODULES must be listed here.
-      - name: Upload candidate qualification inputs
+      # The evidence directory is trusted-owned: required-surface.json,
+      # execution-manifest.json, the compiled trusted listener classes and the
+      # witness ledgers it produced.  It is created fresh by the orchestrator and
+      # never sourced from the candidate tree.
+      - name: Upload trusted execution evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: d17-candidate-run
+          name: d17-trusted-execution
           path: |
-            ${{ runner.temp }}/run-report.json
-            ${{ runner.temp }}/candidate/forge-game/target/surefire-reports
-            ${{ runner.temp }}/candidate/forge-gui-desktop/target/surefire-reports
-            ${{ runner.temp }}/candidate/forge-protocol2-bridge/target/surefire-reports
+            ${{ runner.temp }}/d17-evidence/required-surface.json
+            ${{ runner.temp }}/d17-evidence/execution-manifest.json
+            ${{ runner.temp }}/d17-evidence/witness
           if-no-files-found: warn
           retention-days: 30
 
@@ -334,29 +312,26 @@ jobs:
           name: d17-source-lock
           path: ${{ runner.temp }}/qualification
 
-      - name: Download candidate run evidence
+      - name: Download trusted execution evidence
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005964372cb63d33 # v4.1.8
         with:
-          name: d17-candidate-run
-          path: ${{ runner.temp }}/candidate-evidence
+          name: d17-trusted-execution
+          path: ${{ runner.temp }}/d17-evidence
 
       - name: Derive the exact-SHA qualification verdict
         id: verdict
         shell: bash
         env:
-          EXPECTED_MODULES: ${{ env.QUALIFY_EXPECTED_MODULES }}
           OUT_OF_BAND_CLASSES: ${{ env.QUALIFY_OUT_OF_BAND_CLASSES }}
         run: |
           set -uo pipefail
-          modules=()
-          for module in $EXPECTED_MODULES; do modules+=(--expect-report-module "$module"); done
           out_of_band=()
           for class in $OUT_OF_BAND_CLASSES; do out_of_band+=(--out-of-band-test-class "$class"); done
           python3 .github/qualification/qualify.py \
             --lock "$RUNNER_TEMP/qualification/source-lock.json" \
-            --run-report "$RUNNER_TEMP/candidate-evidence/run-report.json" \
-            --reports-root "$RUNNER_TEMP/candidate-evidence/candidate" \
-            "${modules[@]}" \
+            --required-surface "$RUNNER_TEMP/d17-evidence/required-surface.json" \
+            --execution-manifest "$RUNNER_TEMP/d17-evidence/execution-manifest.json" \
+            --witness-dir "$RUNNER_TEMP/d17-evidence/witness" \
             "${out_of_band[@]}" \
             --output "$RUNNER_TEMP/evidence/FORGE_CANDIDATE_QUALIFICATION.json"
           rc=$?
@@ -375,9 +350,9 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      # Surface the verdict as a step summary so the four evidence classes are
-      # readable without downloading artifacts.  The exit code is the verdict:
-      # only PASS is 0.
+      # Surface the verdict and the four evidence classes so they are readable
+      # without downloading artifacts.  The exit code is the verdict: only PASS
+      # is 0.
       - name: Surface classification
         if: always()
         shell: bash
@@ -398,15 +373,21 @@ jobs:
               print("- reason: {}".format(data.get("reason")))
               lock = data.get("source_lock", {})
               print("- workflow authority: `{}`".format(lock.get("workflow_authority_sha")))
-              print("- candidate SHA: `{}`".format(
-                  (data.get("candidate") or {}).get("sha")))
-              print("- candidate TREE: `{}`".format(
-                  (data.get("candidate") or {}).get("tree")))
+              print("- candidate SHA: `{}`".format((data.get("candidate") or {}).get("sha")))
+              print("- candidate TREE: `{}`".format((data.get("candidate") or {}).get("tree")))
+              block = data.get("exact_candidate_qualification", {})
+              counts = block.get("counts", {})
+              print("- observed/required invocations: {} / {}".format(
+                  counts.get("observed_invocations"), counts.get("required_invocations")))
+              boundary = data.get("trust_boundary", {})
+              print("- observed by: `{}`".format(boundary.get("execution_observed_by")))
+              print("- candidate build artifacts used as evidence: {}".format(
+                  boundary.get("candidate_build_artifacts_used_as_evidence")))
               for key in ("pr_mergeability", "synthetic_merge_evidence",
                           "rules_qualification_evidence"):
-                  block = data.get(key, {})
+                  entry = data.get(key, {})
                   print("- {}: {} (credit: {})".format(
-                      key, block.get("status"), block.get("credit")))
+                      key, entry.get("status"), entry.get("credit")))
           PY
           if [[ -z "$EXIT_CODE" ]]; then
             echo "::error::qualification produced no exit code; treating as UNKNOWN"
