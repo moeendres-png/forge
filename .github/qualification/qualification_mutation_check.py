@@ -228,6 +228,27 @@ MUTATIONS = [
         "the trusted denominator would silently shrink and let tests be deleted",
     ),
     Mutation(
+        "use-candidate-test-source-as-qualification-authority",
+        "trusted_execution.py",
+        "    return comparison_base\n\n\ndef cmd_execute",
+        "    return candidate_sha\n\n\ndef cmd_execute",
+        "candidate-owned test deletion or weakening would become qualification authority",
+    ),
+    Mutation(
+        "ignore-hostile-bytecode-containment",
+        "qualify.py",
+        '    elif not by_name["hostile_candidate_bytecode_contained"]["satisfied"]:',
+        '    elif False:',
+        "hostile candidate bytecode could violate the witness authority and still qualify",
+    ),
+    Mutation(
+        "promote-known-not-run-coverage-to-pass",
+        "qualify.py",
+        '    elif not by_name["whole_reactor_coverage_complete"]["satisfied"]:',
+        '    elif False:',
+        "D24/disabled NOT_RUN obligations would be hidden behind executable-surface PASS",
+    ),
+    Mutation(
         "ignore-an-integrity-violation",
         "qualify.py",
         '    if integrity_status == "VIOLATION":',
