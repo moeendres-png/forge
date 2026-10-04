@@ -507,14 +507,33 @@ def _testng_annotation_inventory(repo: Path, base: str, modules, classes) -> dic
         )
         annotations = list(re.finditer(pattern, code, re.S))
         disabled = 0
+        disabled_members = []
         for match in annotations:
             args = match.group(1) or ""
-            if re.search(r"\benabled\s*=\s*false\b", args):
-                disabled += 1
+            if not re.search(r"\benabled\s*=\s*false\b", args):
+                continue
+            disabled += 1
+            # Bind a disabled method annotation to the following Java method
+            # declaration when possible. Class-level or unusual annotations stay
+            # explicit as <class-or-unknown>; they are never converted to credit.
+            tail = code[match.end(): match.end() + 1200]
+            method = re.search(
+                r"(?:@[A-Za-z_$][\w$]*(?:\s*\([^)]*\))?\s*)*"
+                r"(?:public|protected|private)\s+"
+                r"(?:(?:static|final|synchronized|native|abstract|strictfp)\s+)*"
+                r"[A-Za-z_$][\w$<>,.?\[\] ]*\s+"
+                r"([A-Za-z_$][\w$]*)\s*\(",
+                tail, re.S)
+            disabled_members.append(
+                class_name + "#" + (
+                    method.group(1) if method else "<class-or-unknown>"
+                )
+            )
         inventory[class_name] = {
             "source_present": True,
             "test_annotations": len(annotations),
             "explicitly_disabled_annotations": disabled,
+            "disabled_members": disabled_members,
             "enabled_source_methods": len(annotations) - disabled,
         }
     return inventory
@@ -609,11 +628,27 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
         else:
             explicit_disabled.append(name)
 
-    d22_disabled = []
-    if _d22_disabled_method_present(trusted_repo, base, modules):
-        d22_disabled.append(D22_DISABLED_CLASS + "#" + D22_DISABLED_METHOD)
     all_source_inventory = _testng_annotation_inventory(
         trusted_repo, base, modules, source_classes)
+    all_disabled_members = sorted({
+        member
+        for item in all_source_inventory.values() if isinstance(item, dict)
+        for member in item.get("disabled_members", [])
+    })
+    d22_key = D22_DISABLED_CLASS + "#" + D22_DISABLED_METHOD
+    d22_disabled = [d22_key] if d22_key in all_disabled_members else []
+    if _d22_disabled_method_present(trusted_repo, base, modules) and not d22_disabled:
+        # Parser disagreement is evidence ambiguity, never a silent PASS.
+        d20_baseline_drift.append({
+            "class": D22_DISABLED_CLASS,
+            "problem": "D22 disabled-method parser disagreement",
+        })
+    explicit_disabled_set = set(explicit_disabled)
+    other_explicit_disabled_methods = sorted(
+        member for member in all_disabled_members
+        if member != d22_key
+        and member.split("#", 1)[0] not in explicit_disabled_set
+    )
     source_test_obligations_not_executed = sorted(
         name for name, item in all_source_inventory.items()
         if isinstance(item, dict)
@@ -640,12 +675,14 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
             for item in d24_inventory.values() if isinstance(item, dict)
         ),
         "explicitly_disabled_source_classes": explicit_disabled,
+        "other_explicit_disabled_test_methods": other_explicit_disabled_methods,
         "d22_disabled_rules_tests": d22_disabled,
         "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
     }
     surface["whole_reactor_coverage_complete"] = not (
         source_test_obligations_not_executed
-        or framework_not_run or explicit_disabled or d22_disabled
+        or framework_not_run or explicit_disabled
+        or other_explicit_disabled_methods or d22_disabled
         or d20_baseline_drift
     )
     return surface
