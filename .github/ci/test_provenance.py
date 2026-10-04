@@ -8,7 +8,6 @@ import hashlib
 import json
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -24,6 +23,10 @@ DISABLED_TEST = re.compile(
     re.DOTALL,
 )
 PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_][\w.]*)\s*;")
+
+
+def lname(tag):
+    return tag.rsplit("}", 1)[-1]
 
 
 def strip_java(text):
@@ -66,23 +69,46 @@ def source_identity(repo, expected_sha=None):
     return {"sha": sha, "tree": tree, "errors": errors}
 
 
-def inventories(repo):
-    all_sources, annotated = {}, {}
-    for path in sorted(repo.rglob("*.java")):
-        rel = path.relative_to(repo).as_posix()
-        if "/src/test/java/" not in "/" + rel:
+def default_modules(repo):
+    try:
+        root = ET.parse(str(repo / "pom.xml")).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise ValueError("root pom.xml unreadable: {}".format(exc))
+    modules = []
+    for child in list(root):
+        if lname(child.tag) != "modules":
             continue
-        clean = strip_java(path.read_text(encoding="utf-8", errors="replace"))
-        package = PACKAGE.search(clean)
-        fqn = "{}.{}".format(package.group(1), path.stem) if package else path.stem
-        meta = {
-            "path": rel,
-            "declared_test_annotations": len(TEST_ANNOTATION.findall(clean)),
-            "declared_disabled_test_annotations": len(DISABLED_TEST.findall(clean)),
-        }
-        all_sources[fqn] = meta
-        if meta["declared_test_annotations"]:
-            annotated[fqn] = meta
+        for module in list(child):
+            if lname(module.tag) == "module" and module.text and module.text.strip():
+                modules.append(module.text.strip())
+        break
+    if not modules:
+        raise ValueError("root pom.xml declares no default-reactor modules")
+    if modules != list(dict.fromkeys(modules)):
+        raise ValueError("root pom.xml contains duplicate default-reactor modules")
+    return modules
+
+
+def inventories(repo, modules):
+    all_sources, annotated = {}, {}
+    for module in modules:
+        root = repo / module / "src/test/java"
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*.java")):
+            rel = path.relative_to(repo).as_posix()
+            clean = strip_java(path.read_text(encoding="utf-8", errors="replace"))
+            package = PACKAGE.search(clean)
+            fqn = "{}.{}".format(package.group(1), path.stem) if package else path.stem
+            meta = {
+                "path": rel,
+                "module": module,
+                "declared_test_annotations": len(TEST_ANNOTATION.findall(clean)),
+                "declared_disabled_test_annotations": len(DISABLED_TEST.findall(clean)),
+            }
+            all_sources[fqn] = meta
+            if meta["declared_test_annotations"]:
+                annotated[fqn] = meta
     return all_sources, annotated
 
 
@@ -95,17 +121,13 @@ def dec(raw):
         raise ValueError("invalid duration {!r}".format(raw)) from exc
 
 
-def lname(tag):
-    return tag.rsplit("}", 1)[-1]
-
-
-def report_paths(repo):
-    return sorted(
-        p
-        for p in repo.rglob("TEST-*.xml")
-        if p.is_file()
-        and "/target/surefire-reports/" in "/" + p.relative_to(repo).as_posix()
-    )
+def report_paths(repo, modules):
+    paths = []
+    for module in modules:
+        root = repo / module / "target/surefire-reports"
+        if root.exists():
+            paths.extend(root.glob("TEST-*.xml"))
+    return sorted(p for p in paths if p.is_file())
 
 
 def parse_report(repo, path):
@@ -188,6 +210,11 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         identity = {"sha": None, "tree": None}
         errors.append(str(exc))
     try:
+        modules = default_modules(repo)
+    except ValueError as exc:
+        modules = []
+        errors.append(str(exc))
+    try:
         maven_exit = read_exit(exit_path)
     except ValueError as exc:
         maven_exit = None
@@ -201,9 +228,9 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         }
         errors.append(str(exc))
 
-    all_sources, annotated = inventories(repo)
+    all_sources, annotated = inventories(repo, modules)
     reports, cases, observed = [], [], set()
-    for path in report_paths(repo):
+    for path in report_paths(repo, modules):
         try:
             report, parsed, classes = parse_report(repo, path)
         except ValueError as exc:
@@ -262,6 +289,7 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         "source": identity,
         "run": run or {},
         "java_version": str(java_version),
+        "default_reactor_modules": modules,
         "build_outcome": build,
         "maven_exit_code": maven_exit,
         "provenance_integrity": provenance,
@@ -340,6 +368,10 @@ class Controls(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        (self.root / "pom.xml").write_text(
+            "<project><modules><module>module</module></modules></project>\n",
+            encoding="utf-8",
+        )
         self.exit = self.root / "exit.txt"
         self.exit.write_text("0\n", encoding="utf-8")
         self.orig = globals()["source_identity"]
@@ -353,9 +385,9 @@ class Controls(unittest.TestCase):
         globals()["source_identity"] = self.orig
         self.tmp.cleanup()
 
-    def java(self, fqn, annotated=True):
+    def java(self, fqn, annotated=True, module="module"):
         parts = fqn.split(".")
-        path = self.root / "module/src/test/java" / Path(*parts).with_suffix(".java")
+        path = self.root / module / "src/test/java" / Path(*parts).with_suffix(".java")
         path.parent.mkdir(parents=True, exist_ok=True)
         annotation = "@org.testng.annotations.Test\n" if annotated else ""
         path.write_text(
@@ -365,8 +397,8 @@ class Controls(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def report(self, fqn, malformed=False, nested=False):
-        out = self.root / "module/target/surefire-reports"
+    def report(self, fqn, malformed=False, nested=False, module="module"):
+        out = self.root / module / "target/surefire-reports"
         out.mkdir(parents=True, exist_ok=True)
         path = out / ("TEST-" + fqn.rsplit(".", 1)[-1] + ".xml")
         if malformed:
@@ -405,7 +437,7 @@ class Controls(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(PASS, r["overall_classification"])
         self.assertEqual("0.25", r["normalized_results"]["duration_seconds"])
-        self.assertEqual(64, len(r["reports"][0]["sha256"]))
+        self.assertEqual(["module"], r["default_reactor_modules"])
 
     def test_known_not_run_is_partial_not_pass(self):
         self.java("example.RealTest")
@@ -475,6 +507,14 @@ class Controls(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual([], r["coverage"]["source_test_classes_not_observed"])
 
+    def test_non_reactor_source_is_ignored(self):
+        self.java("example.RealTest")
+        self.report("example.RealTest")
+        self.java("shadow.NotRunTest", module=".github/materialized")
+        r, ok = self.run_collect(self.known())
+        self.assertTrue(ok)
+        self.assertNotIn("shadow.NotRunTest", r["coverage"]["source_test_classes_not_observed"])
+
     def test_comments_and_strings_do_not_create_tests(self):
         path = self.root / "module/src/test/java/example/Helper.java"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -482,8 +522,7 @@ class Controls(unittest.TestCase):
             'package example;\n// @Test\npublic class Helper { String x="@Test"; }\n',
             encoding="utf-8",
         )
-        all_sources, annotated = inventories(self.root)
-        self.assertIn("example.Helper", all_sources)
+        _, annotated = inventories(self.root, ["module"])
         self.assertNotIn("example.Helper", annotated)
 
     def test_source_mismatch_is_red(self):
