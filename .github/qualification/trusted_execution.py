@@ -316,14 +316,8 @@ def compile_and_resolve(repo: Path, modules, cp_rel, label: str):
             )
 
 
-def _dryrun_class_counts(out_dir: Path) -> "dict[str, int]":
-    """Per-class executable test counts from a TestNG dry run.
-
-    TestNG's ``testng-results.xml`` from a dry run lists every test method it
-    would invoke, grouped by class. That is the trusted per-class denominator.
-    Filename-matched classes that contain no runnable tests are therefore
-    excluded by trusted observation rather than by heuristic.
-    """
+def _dryrun_counts(out_dir: Path) -> "tuple[dict[str, int], dict[str, int]]":
+    """Per-class and per-method invocation counts from trusted TestNG dry-run."""
     results = out_dir / "testng-results.xml"
     if not results.is_file():
         raise ExecutionError("dry run produced no testng-results.xml in {}".format(out_dir))
@@ -331,16 +325,23 @@ def _dryrun_class_counts(out_dir: Path) -> "dict[str, int]":
         root = ET.parse(str(results)).getroot()
     except ET.ParseError as exc:
         raise ExecutionError("dry-run results are malformed: {}".format(exc))
-    counts: "dict[str, int]" = {}
+    class_counts: "dict[str, int]" = {}
+    method_counts: "dict[str, int]" = {}
     for element in root.iter("class"):
-        name = element.get("name")
-        if not name:
+        class_name = element.get("name")
+        if not class_name:
             continue
         for method in element.iter("test-method"):
             if method.get("is-config") == "true":
                 continue
-            counts[name] = counts.get(name, 0) + 1
-    return counts
+            method_name = method.get("name")
+            if not method_name:
+                raise ExecutionError(
+                    "dry-run test method in {} has no name".format(class_name))
+            class_counts[class_name] = class_counts.get(class_name, 0) + 1
+            key = class_name + "#" + method_name
+            method_counts[key] = method_counts.get(key, 0) + 1
+    return class_counts, method_counts
 
 
 def dryrun_module(repo: Path, module: str, classes, java: str, argline, xvfbrun, cp_rel):
@@ -367,13 +368,14 @@ def dryrun_module(repo: Path, module: str, classes, java: str, argline, xvfbrun,
     totals = _parse_testng_totals(stdout + stderr)
     if totals is None:
         raise ExecutionError("could not read TestNG dry-run totals for {}".format(module))
-    class_counts = _dryrun_class_counts(out_dir)
+    class_counts, method_counts = _dryrun_counts(out_dir)
     executable = sorted(class_counts)
     return {
         "module": module,
         "classes": executable,
         "candidate_classes_considered": len(classes),
         "class_counts": class_counts,
+        "method_counts": method_counts,
         "required_total": totals["total"],
         "required_passed": totals["passed"],
         "required_failed": totals["failed"],
