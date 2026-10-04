@@ -542,7 +542,6 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
     ROUTES = (
         "system-loader",
         "context-loader",
-        "parent-loader",
         "forbidden-testng-annotation",
         "properties-object",
         "set-properties",
@@ -596,6 +595,27 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             candidate_code=[candidate], trusted_dependencies=[dependency])
         self.assertEqual(proc.returncode, 0, proc.stderr)
         lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
+        self.assertIsNone(problem)
+        records = [json.loads(line) for line in lines]
+        self.assertEqual(records[-1].get("containment"), trusted_execution.CONTAINMENT_ENFORCED)
+        invocations = [r for r in records if r.get("kind") == "invocation"]
+        self.assertEqual([r["status"] for r in invocations], ["PASS"])
+
+    def test_candidate_parent_loader_cannot_reach_testng_authority(self) -> None:
+        candidate = self._candidate_domain()
+        out = self.tmp / "contained-parent-loader"
+        out.mkdir()
+        ledger = out / "forge-game.witness.jsonl"
+        tests = self.compile_source_set(
+            {"TrustedAttackCallerTest": trusted_attack_caller("parent-loader", ledger)},
+            "comparison-base-tests-parent-loader",
+            extra_cp=[str(candidate)])
+        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+        proc, raw = self.launch(
+            ["probe.TrustedAttackCallerTest"], [str(tests)], out, key, nonce,
+            candidate_code=[candidate])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines, problem = trusted_execution.verify_ledger(raw or b"", key, nonce)
         self.assertIsNone(problem)
         records = [json.loads(line) for line in lines]
         self.assertEqual(records[-1].get("containment"), trusted_execution.CONTAINMENT_ENFORCED)
