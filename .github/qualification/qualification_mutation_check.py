@@ -284,6 +284,13 @@ MUTATIONS = [
         "a ledger the orchestrator never authenticated would be credit",
     ),
     Mutation(
+        "ignore-testng-configuration-failure-status",
+        "witness/forge/d17/witness/TrustedTestNGDriver.java",
+        "        if (counter.failures() > 0 || (testng.getStatus() & 1) != 0) {\n",
+        "        if (counter.failures() > 0) {\n",
+        "configuration failures outside test-method callbacks could receive credit",
+    ),
+    Mutation(
         "decode-error-exits-as-declared-skips",
         "trusted_execution.py",
         "    if 31 <= code <= 69 and len(allowed_skip_classes) == 1:\n",
