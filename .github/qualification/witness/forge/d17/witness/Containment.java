@@ -85,11 +85,18 @@ public final class Containment {
      * dynamically at runtime.
      */
     static final class CandidateCodeLoader extends URLClassLoader {
+        private final DependencyLoader dependencies;
         private final ClassLoader trusted;
         private volatile Guard guard;
 
-        CandidateCodeLoader(URL[] urls, ClassLoader parent, ClassLoader trusted) {
-            super(urls, parent);
+        CandidateCodeLoader(URL[] urls, DependencyLoader dependencies, ClassLoader trusted) {
+            // The actual parent is platform-only.  DependencyLoader is a private
+            // delegate, not an ancestor: candidate code may obtain its own
+            // ClassLoader.getParent() without permission when that parent is an
+            // ancestor, so making the dependency/TestNG bridge the real parent
+            // would expose trusted TestNG authority.
+            super(urls, ClassLoader.getPlatformClassLoader());
+            this.dependencies = dependencies;
             this.trusted = trusted;
         }
 
@@ -121,10 +128,25 @@ public final class Containment {
             if (isPlatform(name)) {
                 return super.loadClass(name, resolve);
             }
-            // Trusted dependencies are parent-first.  Candidate production
-            // bytecode must not shadow Mockito, TestNG-adjacent libraries or any
-            // other dependency used by the trusted comparison-base tests.
-            return super.loadClass(name, resolve);
+            Class<?> loaded = findLoadedClass(name);
+            if (loaded == null) {
+                try {
+                    // Trusted dependencies are logically parent-first but are a
+                    // private delegate, never a ClassLoader ancestor visible to
+                    // hostile candidate code.
+                    loaded = dependencies.loadClass(name);
+                } catch (ClassNotFoundException missingDependency) {
+                    try {
+                        loaded = findClass(name);
+                    } catch (ClassNotFoundException missingCandidate) {
+                        loaded = super.loadClass(name, false);
+                    }
+                }
+            }
+            if (resolve) {
+                resolveClass(loaded);
+            }
+            return loaded;
         }
     }
 
