@@ -542,7 +542,7 @@ def derive_verdict(
         )
     signal(
         "module_receipts_bound_to_external_parent",
-        bool(module_receipt_authority) and all(module_receipt_authority.values()),
+        all(module_receipt_authority.values()),
         "module receipt authority={}".format(module_receipt_authority),
     )
 
