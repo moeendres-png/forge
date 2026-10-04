@@ -142,8 +142,16 @@ def report_paths(repo, modules):
 
 def parse_report(repo, path):
     try:
+        resolved = path.resolve()
+        absolute = path.absolute()
+        try:
+            resolved.relative_to(repo.resolve())
+        except ValueError as exc:
+            raise ValueError('XML report path escapes repository') from exc
+        if path.is_symlink() or resolved != absolute:
+            raise ValueError('symlinked/escaped XML report path')
         raw = path.read_bytes()
-        if path.is_symlink() or b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+        if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
             raise ValueError('non-regular/unsupported XML report')
         root = ET.fromstring(raw)
         if lname(root.tag) != 'testsuite':
@@ -155,6 +163,14 @@ def parse_report(repo, path):
                 raise ValueError('missing/nonnegative integer suite counter: '+key)
             counters[key] = int(value)
         nodes = [n for n in root.iter() if lname(n.tag)=='testcase']
+        for node in nodes:
+            terminal = [
+                lname(child.tag)
+                for child in list(node)
+                if lname(child.tag) in ('failure', 'error', 'skipped')
+            ]
+            if len(terminal) > 1:
+                raise ValueError('testcase contains multiple terminal outcomes')
         actual = {'tests':len(nodes), 'failures':sum(any(lname(c.tag)=='failure' for c in list(n)) for n in nodes),
                   'errors':sum(any(lname(c.tag)=='error' for c in list(n)) for n in nodes),
                   'skipped':sum(any(lname(c.tag)=='skipped' for c in list(n)) for n in nodes)}
@@ -655,6 +671,19 @@ class Controls(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(FAIL, r["provenance_integrity"])
 
+    def test_worktree_drift_and_untracked_test_input_are_red(self):
+        self.java('example.RealTest')
+        subprocess.run(['git','init','-q',str(self.root)],check=True)
+        subprocess.run(['git','-C',str(self.root),'add','pom.xml','module/src'],check=True)
+        subprocess.run(['git','-C',str(self.root),'-c','user.name=Control','-c','user.email=control@example.invalid','commit','-qm','source identity control'],check=True)
+        clean=self.orig(self.root);self.assertEqual([],clean['errors'])
+        source=self.root/'module/src/test/java/example/RealTest.java'
+        source.write_text(source.read_text()+'// tracked drift\\n')
+        self.assertTrue(self.orig(self.root)['errors'])
+        subprocess.run(['git','-C',str(self.root),'checkout','--','module/src/test/java/example/RealTest.java'],check=True)
+        injected=self.root/'module/src/test/java/example/Injected.java';injected.write_text('package example; public class Injected {}\\n')
+        self.assertTrue(self.orig(self.root)['errors'])
+
     def test_missing_exit_receipt_is_red(self):
         self.java("example.RealTest")
         self.report("example.RealTest")
@@ -676,6 +705,17 @@ class Controls(unittest.TestCase):
                 path.write_text(xml);r,ok=self.run_collect(self.known())
                 self.assertFalse(ok);self.assertEqual(FAIL,r['provenance_integrity'])
 
+    def test_multiple_terminal_outcomes_are_red(self):
+        self.java('example.RealTest');path=self.report('example.RealTest')
+        path.write_text(
+            '<testsuite tests="2" failures="1" errors="0" skipped="1">'
+            '<testcase classname="example.RealTest" name="ambiguous" time="0.10"><skipped/><failure/></testcase>'
+            '<testcase classname="example.RealTest" name="pass" time="0.15"/></testsuite>\\n'
+        )
+        r,ok=self.run_collect(self.known());self.assertFalse(ok)
+        self.assertEqual(FAIL,r['provenance_integrity'])
+        self.assertTrue(any('multiple terminal outcomes' in x for x in r['provenance_errors']))
+
     def test_source_disabled_debt_is_partial_hash_bound_and_not_exempt(self):
         self.java('example.RealTest');self.report('example.RealTest');self.java('example.DisabledTest')
         source=self.root/'module/src/test/java/example/DisabledTest.java'
@@ -690,6 +730,14 @@ class Controls(unittest.TestCase):
     def test_symlinked_reports_are_red(self):
         self.java('example.RealTest');path=self.report('example.RealTest');raw=path.read_text();real=self.root/'raw.xml';real.write_text(raw);path.unlink();path.symlink_to(real)
         r,ok=self.run_collect(self.known());self.assertFalse(ok)
+
+    def test_symlinked_report_parent_escape_is_red(self):
+        self.java('example.RealTest');path=self.report('example.RealTest')
+        report_dir=path.parent;outside=self.root/'outside-reports';outside.mkdir()
+        real=outside/path.name;path.replace(real);report_dir.rmdir();report_dir.symlink_to(outside,target_is_directory=True)
+        r,ok=self.run_collect(self.known());self.assertFalse(ok)
+        self.assertEqual(FAIL,r['provenance_integrity'])
+        self.assertTrue(any('symlinked/escaped XML report path' in x for x in r['provenance_errors']))
 
 
     def test_one_reported_method_cannot_claim_complete_method_coverage(self):
