@@ -72,6 +72,7 @@ public final class TrustedTestNGDriver {
         List<String> trustedDependencies = new ArrayList<String>();
         List<String> classes = new ArrayList<String>();
         List<String> expectedSpecs = new ArrayList<String>();
+        List<String> expectedMethodSpecs = new ArrayList<String>();
         Set<String> allowedSkipClasses = new HashSet<String>();
 
         for (int i = 0; i < args.length; i++) {
@@ -99,6 +100,8 @@ public final class TrustedTestNGDriver {
                 classes.add(value);
             } else if ("--expected-count".equals(flag)) {
                 expectedSpecs.add(value);
+            } else if ("--expected-method-count".equals(flag)) {
+                expectedMethodSpecs.add(value);
             } else if ("--allowed-skip-class".equals(flag)) {
                 allowedSkipClasses.add(value);
             } else {
@@ -108,8 +111,10 @@ public final class TrustedTestNGDriver {
         }
 
         final Map<String, Integer> expected;
+        final Map<String, Integer> expectedMethods;
         try {
             expected = expectedCounts(expectedSpecs);
+            expectedMethods = expectedCounts(expectedMethodSpecs);
         } catch (RuntimeException badExpected) {
             System.err.println("TrustedTestNGDriver: " + badExpected);
             System.exit(DRIVER_ERROR);
@@ -118,7 +123,8 @@ public final class TrustedTestNGDriver {
 
         if (module == null || protectedRoot == null || outputDir == null
                 || trustedTests == null || trustedSpi.isEmpty() || classes.isEmpty()
-                || expected.isEmpty() || !new HashSet<String>(classes).equals(expected.keySet())) {
+                || expected.isEmpty() || expectedMethods.isEmpty()
+                || !new HashSet<String>(classes).equals(expected.keySet())) {
             System.err.println("TrustedTestNGDriver: incomplete or inconsistent trusted launch contract");
             System.exit(DRIVER_ERROR);
         }
@@ -171,8 +177,11 @@ public final class TrustedTestNGDriver {
         }
 
         Map<String, Integer> observed = counter.perClassTotal();
-        if (!observed.equals(expected)) {
-            System.err.println("D17_EXECUTION_COUNT_MISMATCH expected=" + expected + " observed=" + observed);
+        Map<String, Integer> observedMethods = counter.perMethodTotal();
+        if (!observed.equals(expected) || !observedMethods.equals(expectedMethods)) {
+            System.err.println("D17_EXECUTION_COUNT_MISMATCH expectedClasses=" + expected
+                    + " observedClasses=" + observed + " expectedMethods=" + expectedMethods
+                    + " observedMethods=" + observedMethods);
             System.exit(EXECUTION_COUNT_MISMATCH);
             return;
         }
