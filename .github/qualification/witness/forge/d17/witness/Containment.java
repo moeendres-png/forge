@@ -119,11 +119,8 @@ public final class Containment {
                 throw new ClassNotFoundException("D17 witness package is not candidate-visible");
             }
             if (name.startsWith("org.testng.")) {
-                if (!allowedTestNg(name)) {
-                    denyAuthority("candidate attempted to load TestNG authority class " + name);
-                    throw new ClassNotFoundException("D17 TestNG authority is not candidate-visible: " + name);
-                }
-                return trusted.loadClass(name);
+                denyAuthority("candidate attempted to load TestNG class " + name);
+                throw new ClassNotFoundException("D17 TestNG is not candidate-visible: " + name);
             }
             if (isPlatform(name)) {
                 return super.loadClass(name, resolve);
@@ -317,6 +314,7 @@ public final class Containment {
         public void checkPackageAccess(String pkg) {
             if (candidateInContext()
                     && (pkg.startsWith("forge.d17.witness")
+                    || pkg.startsWith("org.testng")
                     || pkg.startsWith("sun.misc")
                     || pkg.startsWith("jdk.internal"))) {
                 deny("candidate package access " + pkg);
@@ -464,30 +462,6 @@ public final class Containment {
         return name.startsWith("testng.")
                 || "java.security.manager".equals(name)
                 || "java.class.path".equals(name);
-    }
-
-    private static boolean allowedTestNg(String name) {
-        return name.equals("org.testng.annotations.Test")
-                || name.equals("org.testng.annotations.BeforeClass")
-                || name.equals("org.testng.annotations.AfterClass")
-                || name.equals("org.testng.annotations.BeforeMethod")
-                || name.equals("org.testng.annotations.AfterMethod")
-                || name.equals("org.testng.annotations.BeforeTest")
-                || name.equals("org.testng.annotations.AfterTest")
-                || name.equals("org.testng.annotations.BeforeSuite")
-                || name.equals("org.testng.annotations.AfterSuite")
-                || name.equals("org.testng.annotations.BeforeGroups")
-                || name.equals("org.testng.annotations.AfterGroups")
-                || name.equals("org.testng.annotations.DataProvider")
-                || name.equals("org.testng.annotations.Parameters")
-                || name.equals("org.testng.annotations.Optional")
-                || name.equals("org.testng.annotations.NoInjection")
-                || name.equals("org.testng.annotations.Ignore")
-                || name.equals("org.testng.Assert")
-                || name.equals("org.testng.AssertJUnit")
-                || name.equals("org.testng.SkipException")
-                || name.startsWith("org.testng.asserts.")
-                || name.startsWith("org.testng.collections.");
     }
 
     private static boolean isPlatform(String name) {
