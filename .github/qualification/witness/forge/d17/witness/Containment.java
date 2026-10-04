@@ -45,7 +45,12 @@ public final class Containment {
         private final ClassLoader trusted;
 
         DependencyLoader(URL[] urls, ClassLoader trusted) {
-            super(urls, trusted);
+            // Deliberately do NOT parent this domain to the system loader.
+            // Otherwise ClassLoader.getSystemClassLoader() can be returned to a
+            // descendant without a getClassLoader permission check because the
+            // system loader is its ancestor.  The platform loader keeps JDK APIs
+            // available while TestNG is bridged explicitly below.
+            super(urls, ClassLoader.getPlatformClassLoader());
             this.trusted = trusted;
         }
 
@@ -214,6 +219,15 @@ public final class Containment {
                         || name.equals("getStackWalkerWithClassReference")
                         || name.equals("getStackTrace")
                         || name.equals("manageProcess")
+                        || name.equals("modifyThread")
+                        || name.equals("modifyThreadGroup")
+                        || name.equals("stopThread")
+                        || name.equals("setDefaultUncaughtExceptionHandler")
+                        || name.equals("accessDeclaredMembers")
+                        || name.startsWith("accessClassInPackage.forge.d17.witness")
+                        || name.startsWith("accessClassInPackage.org.testng")
+                        || name.startsWith("accessClassInPackage.sun.")
+                        || name.startsWith("accessClassInPackage.jdk.internal.")
                         || name.startsWith("exitVM")
                         || name.startsWith("loadLibrary")) {
                     deny("candidate RuntimePermission " + name);
@@ -231,8 +245,10 @@ public final class Containment {
                     || permission.getClass().getName().equals("com.sun.tools.attach.AttachPermission")) {
                 deny("candidate VM-introspection permission " + permission.getClass().getName());
             } else if (permission instanceof PropertyPermission
-                    && permission.getActions().contains("write")
-                    && ("*".equals(name) || sensitiveProperty(name))) {
+                    && permission.getActions().contains("write")) {
+                // Process-global properties are trusted-runtime state.  Even a
+                // property not presently consumed by TestNG can change class
+                // loading, provider selection or a future witness dependency.
                 deny("candidate property mutation " + name);
             } else if (permission instanceof FilePermission) {
                 String actions = permission.getActions();
