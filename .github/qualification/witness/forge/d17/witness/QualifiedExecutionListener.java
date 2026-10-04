@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
 import java.util.Map;
+import java.util.Properties;
 import java.util.TreeMap;
 
 import javax.crypto.Mac;
@@ -91,6 +92,9 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
      * reports without invoking the method (its dry-run mode, which candidate
      * code can switch on with one system property) is recorded as a failure.
      */
+    /** The system properties object the driver installed; replacing it is tampering. */
+    private volatile Properties pinned;
+
     private final Set<ITestResult> dispatched =
             Collections.newSetFromMap(new IdentityHashMap<ITestResult, Boolean>());
 
@@ -142,10 +146,17 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
      * TestNG reads its runtime knobs from {@code testng.*} system properties, and
      * candidate code can set one at any time. In dry-run mode TestNG reports a
      * success, and still fires this listener, without running the method body.
-     * The driver clears every {@code testng.*} property before the run, so one
-     * present now was set by code under test.
+     * The driver clears every {@code testng.*} property and pins the properties
+     * object before the run, so a property present now, or a replaced object,
+     * was set by code under test.
      */
-    static boolean runtimeAltered() {
+    boolean runtimeAltered() {
+        // A replaced Properties object can answer TestNG and this check
+        // differently, so the object itself must still be the pinned one.
+        Properties current = System.getProperties();
+        if (pinned == null || current != pinned) {
+            return true;
+        }
         if (RuntimeBehavior.isDryRun()) {
             return true;
         }
@@ -178,6 +189,11 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
         } catch (IOException exc) {
             throw new IllegalStateException("witness cannot record", exc);
         }
+    }
+
+    /** Called by the driver once every testng.* property is cleared, just before the run. */
+    void pinSystemProperties() {
+        this.pinned = System.getProperties();
     }
 
     long invocations() {

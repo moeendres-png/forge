@@ -214,11 +214,14 @@ Stated as part of the evidence, not hidden.
   example reading the listener's key or reaching TestNG internals through
   strings assembled at runtime, defining classes from bytes, or reading the
   listener's key from memory) is not ruled out: **a candidate acting
-  deliberately inside the test JVM is not contained.** The admission scan,
-  the dispatch check and the `testng.*` property check close the declarative and
-  configuration routes (`@Listeners`, hooks, factories, `Reporter`, dry-run and
-  other runtime knobs), and the HMAC chain stops forgery from outside the
-  process. They are not a sandbox for code that sets out to subvert the JVM it
+  deliberately inside the test JVM is not contained.** The admission scan
+  closes the declarative TestNG routes (`@Listeners`, hooks, factories,
+  `Reporter`). The dispatch check closes `testng.*` runtime knobs set as
+  ordinary properties, including dry-run mode, and a replaced `Properties`
+  object. The HMAC chain stops forgery from outside the process. Each later
+  review found another plain-JDK route around a point check (a properties
+  object answering differently per caller, then a thread racing the reads), so
+  these checks are mitigations, not a boundary. They are not a sandbox for code that sets out to subvert the JVM it
   shares with the witness. Whether that residual is acceptable is an Owner
   decision. What the design guarantees: candidate code cannot write trusted
   state, cannot change which test bytecode runs, cannot load a class that
@@ -238,6 +241,10 @@ Stated as part of the evidence, not hidden.
   Code running in an earlier module's launch can rewrite the candidate's
   classpath file, output directories and Maven repository, but never what a
   later launch loads.
+* **Working directory data.** Launches run in the candidate's module directory,
+  and Forge tests read data files from there (`../forge-gui/res`). Code in an
+  earlier module's launch can rewrite data a later launch reads. Only what loads
+  from the classpath is frozen.
 * **Scheduled jobs.** `reap` and `verify` check that no candidate process is
   alive. A `cron`/`at` job the sandbox account schedules could start later; it
   reaches only state the account can already write.

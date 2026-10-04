@@ -492,6 +492,14 @@ def derive_verdict(
         verdict, reason = FAIL, "trusted state integrity was violated during candidate execution"
     elif not by_name["candidate_identity_bound"]["satisfied"]:
         verdict, reason = FAIL, "candidate identity is not bound to the locked exact SHA/TREE"
+    elif (isinstance(manifest.get("error"), str) and not compilation
+          and (manifest.get("candidate_build") or {}).get("exit_code") in (None, 0)):
+        # Trusted infrastructure stopped before it compiled anything (TestNG pin
+        # mismatch, sandbox not READY): neither a candidate failure nor credit.
+        verdict, reason = UNKNOWN, (
+            "trusted execution stopped before compiling the candidate's tests: {}".format(
+                manifest.get("error")[:300])
+        )
     elif rejected:
         # Checked before any outcome: such code can rewrite every other outcome.
         verdict, reason = FAIL, (

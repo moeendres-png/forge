@@ -1525,6 +1525,22 @@ class RedLaunchClasspathAdmission(EvidenceCase):
         del manifest["launch_classpath_admission"]
         self.assertNotPass(self.verdict(manifest=manifest), qualify.UNKNOWN)
 
+    def test_infrastructure_stop_before_compiling_is_unknown(self) -> None:
+        """The real shape: cmd_execute's manifest after a trusted-side error, with no launches."""
+        manifest = dict(self.manifest, modules={}, error="trusted TestNG input does not match its pinned digest")
+        manifest.pop("trusted_test_compilation")
+        manifest.pop("launch_classpath_admission")
+        evidence = self.verdict(manifest=manifest, authenticated=False)
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertIn("stopped before compiling", evidence["reason"])
+
+    def test_candidate_build_failure_is_still_fail(self) -> None:
+        manifest = dict(self.manifest, modules={}, error="candidate build failed (exit 1)",
+                        candidate_build={"exit_code": 1, "user": SANDBOX_USER})
+        manifest.pop("trusted_test_compilation")
+        manifest.pop("launch_classpath_admission")
+        self.assertNotPass(self.verdict(manifest=manifest, authenticated=False), qualify.FAIL)
+
     def test_failed_trusted_compile_is_fail(self) -> None:
         self.honest()
         manifest = self._with("forge-game", "exit_code", 1, record="trusted_test_compilation")

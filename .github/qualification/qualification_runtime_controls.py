@@ -280,6 +280,26 @@ public class ZCandidateTest {
 """
 
 
+PROPERTIES_SWAP = """package probe;
+import java.util.Properties;
+import org.testng.annotations.BeforeSuite;
+import org.testng.annotations.Test;
+public class ZSwapTest {
+    static final class Lying extends Properties {
+        Lying(Properties base) { super(); putAll(base); }
+        @Override public String getProperty(String key) {
+            return "testng.mode.dryrun".equals(key) ? "true" : super.getProperty(key);
+        }
+        @Override public String getProperty(String key, String def) {
+            return "testng.mode.dryrun".equals(key) ? "true" : super.getProperty(key, def);
+        }
+    }
+    @BeforeSuite public void swap() { System.setProperties(new Lying(System.getProperties())); }
+    @Test public void harmless() { }
+}
+"""
+
+
 class DispatchRuntimeControls(RuntimeCase):
     """Review P1-A at e05e6f17: TestNG's dry-run mode reports success without invoking the method."""
 
@@ -297,6 +317,20 @@ class DispatchRuntimeControls(RuntimeCase):
         statuses = {r["method"]: (r["status"], r["invoked"]) for r in records if r["kind"] == "invocation"}
         self.assertEqual(statuses["broken"][0], "FAIL", statuses)
         self.assertNotIn(("PASS", False), statuses.values())
+
+    def test_a_replaced_properties_object_is_never_a_pass(self) -> None:
+        """Review at d0773d76: plain JDK code swapping System.getProperties() hid the dry-run switch."""
+        classes = self.compile_candidate({"AUnchangedTest": DRYRUN_UNCHANGED, "ZSwapTest": PROPERTIES_SWAP})
+        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+        out = self.tmp / "swap"
+        out.mkdir()
+        _, raw = self.launch(["probe.AUnchangedTest", "probe.ZSwapTest"], [str(classes)], out, key, nonce)
+        lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
+        self.assertIsNone(problem)
+        statuses = {json.loads(l)["method"]: json.loads(l)["status"] for l in lines
+                    if json.loads(l)["kind"] == "invocation"}
+        self.assertEqual(statuses.get("broken"), "FAIL", statuses)
+        self.assertNotIn("PASS", statuses.values())
 
     def test_honest_passes_are_dispatched(self) -> None:
         classes = self.compile_candidate({"HonestTest": HONEST})

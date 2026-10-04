@@ -126,6 +126,7 @@ public final class TrustedTestNGDriver {
                 System.clearProperty(name);
             }
         }
+        witness.pinSystemProperties();
         TestNG testng = new TestNG(false);
         testng.setUseDefaultListeners(false);
         testng.setServiceLoaderClassLoader(new URLClassLoader(trustedSpi.toArray(new URL[0]), null));

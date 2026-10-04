@@ -532,6 +532,12 @@ def bytecode_findings(class_name: str, data: bytes) -> "list[str]":
     return sorted(found)
 
 
+#: Largest single file admitted onto the frozen launch classpath. A planted
+#: (sparse) giant would otherwise exhaust trusted memory or disk.
+MAX_ADMITTED_FILE = 512 * 1024 * 1024
+_OVERSIZED = object()
+
+
 def _regular_file_bytes(path: Path):
     """The bytes of a regular file, never following a final symlink or opening a FIFO or device."""
     try:
@@ -539,9 +545,12 @@ def _regular_file_bytes(path: Path):
     except OSError:
         return None
     with os.fdopen(fd, "rb") as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
             return None
-        return handle.read()
+        if info.st_size > MAX_ADMITTED_FILE:
+            return _OVERSIZED
+        return handle.read(MAX_ADMITTED_FILE + 1)
 
 
 def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | None" = None) -> None:
@@ -560,7 +569,13 @@ def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | No
         for name in filenames:
             path = Path(directory) / name
             rel = path.relative_to(root).as_posix()
+            if not name.endswith(".class") and freeze_to is None:
+                continue
             data = _regular_file_bytes(path)
+            if data is _OVERSIZED:
+                result["findings"].append({"entry": label, "class": rel,
+                                           "problems": ["file larger than {} bytes".format(MAX_ADMITTED_FILE)]})
+                continue
             if name.endswith(".class"):
                 if data is None:
                     result["findings"].append({"entry": label, "class": rel, "problems": ["not a regular class file"]})
@@ -654,7 +669,7 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             trusted = (trusted_m2 / rel_path) if trusted_m2 else None
             mine = _regular_file_bytes(real)
             theirs = _regular_file_bytes(trusted) if trusted else None
-            if mine is None or theirs is None:
+            if not isinstance(mine, bytes) or not isinstance(theirs, bytes):
                 result["unverified_jars"].append(str(rel_path))
             elif hashlib.sha256(mine).digest() != hashlib.sha256(theirs).digest():
                 result["tampered_jars"].append(str(rel_path))
@@ -667,8 +682,8 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             continue
         if real.is_relative_to(candidate_root) and real.suffix == ".jar":
             data = _regular_file_bytes(real)
-            if data is None:
-                result["findings"].append({"entry": entry, "class": None, "problems": ["not a regular jar"]})
+            if not isinstance(data, bytes):
+                result["findings"].append({"entry": entry, "class": None, "problems": ["not a regular jar of admissible size"]})
                 continue
             _scan_jar_bytes(entry, data, result)
             rel = "cp/{}.jar".format(len(cache))
@@ -936,7 +951,7 @@ def cmd_execute(args) -> int:
                 module, manifest["modules"][module]["launch_exit_code"],
                 manifest["modules"][module]["ledger_authentication"],
                 manifest["modules"][module]["testng_totals"]))
-    except (ExecutionError, sandbox.SandboxError, OSError, KeyError, ValueError) as exc:
+    except (ExecutionError, sandbox.SandboxError, OSError, KeyError, ValueError, MemoryError) as exc:
         manifest["error"] = str(exc)
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         sys.stderr.write("d17-exec: {}\n".format(exc))
