@@ -121,18 +121,10 @@ public final class Containment {
             if (isPlatform(name)) {
                 return super.loadClass(name, resolve);
             }
-            Class<?> loaded = findLoadedClass(name);
-            if (loaded == null) {
-                try {
-                    loaded = findClass(name);
-                } catch (ClassNotFoundException missing) {
-                    loaded = super.loadClass(name, false);
-                }
-            }
-            if (resolve) {
-                resolveClass(loaded);
-            }
-            return loaded;
+            // Trusted dependencies are parent-first.  Candidate production
+            // bytecode must not shadow Mockito, TestNG-adjacent libraries or any
+            // other dependency used by the trusted comparison-base tests.
+            return super.loadClass(name, resolve);
         }
     }
 
