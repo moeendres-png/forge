@@ -312,6 +312,28 @@ MUTATIONS = [
         '          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare',
         "prepare would probe and resolve tools on the inherited PATH",
     ),
+    # --- trusted Maven/build-definition authority ------------------------- #
+    Mutation(
+        "ignore-candidate-build-definition-divergence",
+        "trusted_execution.py",
+        "        divergence = build_definition_divergence(\n            trusted_repo, args.comparison_base, args.candidate_sha)\n",
+        "        divergence = []\n",
+        "candidate-controlled POM/plugin changes would be allowed to define the bytecode under test",
+    ),
+    Mutation(
+        "use-candidate-writable-maven-repository",
+        "trusted_execution.py",
+        '"-Dmaven.repo.local=" + str(trusted_maven_repo),',
+        '"-Dmaven.repo.local=" + str(home / ".m2" / "repository"),',
+        "candidate code could replace Maven plugin/dependency jars before later build phases",
+    ),
+    Mutation(
+        "allow-network-resolution-in-candidate-build",
+        "trusted_execution.py",
+        '             [args.mvn, "-o", "-B", "-q",',
+        '             [args.mvn, "-B", "-q",',
+        "candidate Maven execution could resolve untrusted code instead of the pre-resolved trusted repository",
+    ),
     # --- launch classpath admission and verdict bindings (review 63731d9f) - #
     Mutation(
         "ignore-rejected-launch-classpath",
