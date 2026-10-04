@@ -1184,7 +1184,6 @@ def cmd_surface(args) -> int:
     trusted_repo = Path(args.trusted_repo).resolve()
     evidence_dir = Path(args.evidence_dir).resolve()
     modules = args.modules.split()
-    reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)
     argline = list(DEFAULT_TRUSTED_ARGLINE)
     xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
     # A stale evidence directory must never be mistaken for this run's evidence.
@@ -1227,6 +1226,7 @@ def cmd_execute(args) -> int:
     bundle = Path(args.bundle_dir)
     work = Path(args.work_dir).resolve()
     modules = args.modules.split()
+    reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)
     argline = list(DEFAULT_TRUSTED_ARGLINE)
     xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
     nonce = secrets.token_hex(16)
