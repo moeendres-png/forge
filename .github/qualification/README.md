@@ -19,7 +19,7 @@ qualification signal. Credit is derived from two trusted ledgers only:
 | Ledger | Produced by | Why it is trusted |
 | --- | --- | --- |
 | `required-surface.json` | `TestNG -dryrun` over the **trusted comparison base** checkout | an observation of what the trusted lineage's own tests would execute; a candidate cannot shrink it |
-| `execution-manifest.json` + `witness/*.witness.jsonl` | the trusted orchestrator launching each module's required classes itself, with a listener compiled from this trusted branch and placed **first** on the classpath | records what those JVMs actually dispatched, bound to a per-run nonce and a gap-free sequence |
+| `execution-manifest.json` + `witness/*.witness.jsonl` | the external trusted parent process, after a contained child JVM exits with the exact trusted count/skip contract | the candidate JVM receives no receipt key, run ID or trusted evidence handle; only the parent writes credited receipts, bound to a parent-only run ID |
 
 `PASS` therefore requires positive proof that the exact candidate SHA/TREE
 executed the whole trusted required surface: every required class observed alive,
@@ -43,14 +43,14 @@ provenance.** That revision was rejected at review and replaced.
 | The authority is provably trusted | `source_lock.py` requires the run to execute from `refs/heads/master` at its tip, and requires `master` to physically carry this directory and the workflow file. |
 | Candidate identity is exact | Full lowercase 40-hex only; the fetched ref must resolve to exactly that commit; the TREE is re-proven inside the candidate workspace before any candidate code runs. |
 | No synthetic-merge fallback | `refs/pull/<n>/merge` is not an acceptable fetch ref. No merge is computed and no mergeability field is read anywhere. |
-| Execution is witnessed, not reported | A trusted listener, compiled here and placed first on the classpath, records every dispatch. Candidate reports are never consulted. |
+| Execution is externally receipted, not candidate-reported | A receiptless trusted child counter validates exact per-class dispatch counts and failures/skips inside containment. The external trusted parent observes only the child OS exit and writes the credited receipt. Candidate reports are never consulted. |
 | Candidate code never runs as the validator | Candidate Maven/plugin execution runs as `d17build`; hostile candidate production bytecode in the qualification JVM runs as the distinct `d17exec` account. Neither is a trusted identity. Qualification test bodies come only from the trusted comparison base; candidate-owned test bodies are never executed for credit. Both identities are reaped and included in final integrity checks. |
-| Trusted bytecode and toolchains are out of reach | Before any candidate code runs, the driver and listener are compiled against the digest-pinned TestNG 7.10.2 closure. They are staged root-owned and read-only under `/var/lib/d17-trusted` (`/opt` is world-writable on hosted runners), together with the JDK and Maven that later trusted steps use. |
+| Trusted bytecode and toolchains are out of reach | Before any candidate code runs, the receiptless child driver/counter and containment guard are compiled against the digest-pinned TestNG 7.10.2 closure. They are staged root-owned and read-only under `/var/lib/d17-trusted`, together with the JDK and Maven used by later trusted steps. |
 | The executed test bytecode is trusted policy | Test sources are exported from the **trusted comparison-base commit**, never from the candidate role, and compiled by trusted code with `-proc:none` only **after** Candidate production/dependency bytes are admitted and frozen into runner-owned staging. Candidate `target/test-classes` is never executed for credit. The manifest binds `trusted_test_source_sha` to the comparison-base source lock. |
-| Hostile bytecode is contained before ledger authentication matters | The system classpath contains only the trusted driver/listener and digest-pinned TestNG. Trusted comparison-base tests and candidate production bytecode use separate child loaders. The Candidate loader has only the JDK platform loader as its real parent; the trusted dependency bridge is a private delegate. Candidate production may resolve **no TestNG class at all**. A mandatory Java-21 SecurityManager guard additionally denies system/context-loader authority, witness/TestNG package access, access-check suppression, SecurityManager replacement, process/native-code execution, protected witness-path mutation and process-global property mutation. A denied operation is sticky and makes the run FAIL even if caught. The HMAC ledger remains defense in depth. If containment is unavailable, the verdict is UNKNOWN; there is no uncontained fallback. |
+| Hostile bytecode is separated from receipt authority | The system classpath contains only the trusted receiptless child harness and digest-pinned TestNG. Trusted comparison-base tests and candidate production bytecode use separate child loaders. The Candidate loader has only the JDK platform loader as its real parent; the trusted dependency bridge is private. Candidate production may resolve **no TestNG class at all**. A mandatory Java-21 SecurityManager guard denies system/context-loader authority, witness/TestNG package access, access-check suppression, SecurityManager replacement, process/native execution, protected child-output mutation and process-global property mutation. Crucially, no receipt key/run ID/evidence handle exists in the candidate JVM; the external parent alone creates credited evidence. If containment is unavailable, verdict is UNKNOWN. |
 | Candidate listeners cannot change what runs or counts | TestNG's default listeners are off, and its service-loader discovery sees only the trusted jars, so a candidate `META-INF/services/org.testng.ITestNGListener` is never loaded. |
 | Integrity is verified, not assumed | `sandbox.py verify` re-derives every trusted file from Git, re-checks the evidence seals and checks that no candidate process is alive. `qualify.py` turns a violation into `FAIL` and a missing or foreign `INTEGRITY.json` into `UNKNOWN`. |
-| Stale evidence cannot be reused | The evidence directory is deleted and recreated each run; every witness ledger is bound to a fresh nonce and a gap-free sequence, and its summary is recomputed from its records. |
+| Stale evidence cannot be reused | The evidence directory is deleted and recreated each run; every parent receipt is bound to a fresh parent-only run ID and the validator recomputes its sequence/count aggregates. Module receipts must bind to that same run ID. |
 | Non-PASS is never green | `PASS` exits 0. `FAIL`, `PARTIAL`, `NOT_RUN`, `UNKNOWN` exit 1, 2, 3, 4. |
 | Absurd identity claims are rejected | A lock that does not assert `candidate_code_executed_as_validator=false`, `verdict_read_from_candidate=false`, `synthetic_merge_consulted=false`, `pr_mergeability_consulted=false`, or whose comparison base claims a synthetic merge, is rejected on load. |
 
@@ -84,7 +84,7 @@ classifies the launch inputs in `launch_classpath_admission`:
   loader's actual parent. Candidate production and trusted dependencies are
   admitted/frozen before trusted `javac` is allowed to parse them.
 - **The JVM system classpath contains no candidate bytecode.** It contains only
-  the trusted driver/listener and digest-pinned TestNG closure. Trusted tests and
+  the trusted receiptless child harness and digest-pinned TestNG closure. Trusted tests and
   candidate production code are loaded through distinct child-loader domains.
   Trusted tests may use the narrow TestNG test API after bytecode admission;
   Candidate production bytecode is rejected for **any** `org.testng.*`
@@ -118,8 +118,8 @@ Signals are evaluated strongest-negative-first:
 
 The emitted signal set binds, at minimum: exact candidate SHA/TREE; comparison-base
 denominator and test-source authority; trusted Maven/build definition; non-empty
-required surface; trusted launch completion; witness presence/parsing/HMAC digest;
-per-class/invocation floors; failures and skip attribution; distinct untrusted
+required surface; trusted child completion; parent-receipt presence/parsing/digest;
+per-class/invocation floors; failures and skip attribution; external receipt authority; distinct untrusted
 build/execution OS identities; trusted-state integrity; mandatory hostile-bytecode
 containment; trusted test compilation; launch-classpath admission; and explicit
 whole-reactor coverage debt. Verdict precedence is fail-closed: infrastructure
@@ -149,10 +149,11 @@ base:
    the committed comparison-base Git blob and exposes baseline hash/execution
    drift rather than trusting a working-tree copy.
 
-The separately owned disabled CR104.3f method remains explicit as well. Any
-generic NOT_RUN obligation, D20 baseline debt/drift, D24 blocker or D22 disabled
-Rules test keeps `whole_reactor_coverage_complete=false`; an otherwise valid
-execution is `PARTIAL`, never PASS.
+Method-level disabled TestNG obligations are inventoried independently as well:
+CR104.3f remains D22-owned, and D24 leaves two CardDbPerformance benchmark
+methods disabled. Any generic NOT_RUN obligation, D20 baseline debt/drift or
+explicitly disabled method keeps `whole_reactor_coverage_complete=false`; an
+otherwise valid execution is `PARTIAL`, never PASS.
 
 Only a skip in a declared out-of-band class is excluded. A skip in any other
 class is `PARTIAL`. `skipped_total`, `observed_skipped_classes`,
@@ -175,13 +176,12 @@ D17_REQUIRE_TOOLCHAIN=1 python3 -m unittest qualification_runtime_controls   # f
 `forge-candidate-qualification-selftest.yml` runs all three on every pull
 request that changes the gate.
 
-`qualification_runtime_controls.py` runs the real trusted driver and pinned
-TestNG. In addition to legacy ledger-defense controls, it executes hostile
+`qualification_runtime_controls.py` runs the real receiptless child driver and
+pinned TestNG. It executes hostile
 **candidate production bytecode** in fresh JVMs for each authority route:
 system/context-loader access, computed forbidden-TestNG access,
-properties-object/property replacement, classloader creation, process
-exit/creation, native loading, ledger writes, heap dump/JMX,
-`/proc/self/mem`, witness reflection, runtime `defineClass`, and a racing
+property replacement, classloader creation, process exit/creation, native
+loading, protected-output writes, witness reflection and a racing
 property-mutator thread. Every SecurityManager/loader-authority route must trip
 the sticky containment state; merely making the test fail is insufficient. The
 Candidate-parent-loader control is structural instead: it proves the only parent
@@ -191,11 +191,11 @@ cannot be shadowed, full-reactor Candidate outputs are used, trusted tests compi
 only against frozen inputs, and neither untrusted UID can overwrite
 validator/denominator/evidence paths.
 
-`RedTrustDomain` and `TrustedLedgerAuthentication` cover the verdict side. They
-reject an unauthenticated or rewritten ledger, candidate code run as `root` or
-`runner`, a launch under another identity, an integrity violation, missing
-integrity, and every MAC forgery: an appended line, an altered line, reordered
-lines, another key, a replay from another run, or a dropped line.
+The verdict controls reject candidate/foreign receipt authority, rewritten or
+digest-mismatched receipts, replayed parent run IDs, candidate code run as
+`root` or `runner`, identity collapse, integrity violations and missing
+integrity. The child command is asserted to contain no receipt nonce/key/ledger
+handle; the obsolete in-JVM signing listener is not compiled or present.
 
 `qualification_selftest.py` builds real Git repositories in temporary
 directories and asserts the **specific** non-`PASS` class for every red control,
@@ -211,9 +211,10 @@ adversarial set:
 * **E** observed real failure with forged green reports ⇒ `FAIL`;
 * **F** candidate-fabricated run report, manifest or verdict document ⇒ no credit;
 * **G** required class suppressed, or volume cut below the trusted denominator ⇒ never `PASS`;
-* **H** an honest **fully covered synthetic fixture** reaches `PASS`; current
-  Forge is expected to remain `PARTIAL` while D24/D22/disabled-source debt is
-  present.
+* **H** an honest **fully covered synthetic fixture** reaches `PASS`. Current
+  Forge's **coverage classification** remains `PARTIAL` while explicit disabled
+  debt exists; an actual current candidate may still be `FAIL` for ordinary
+  test failures, which takes precedence over coverage PARTIAL.
 
 `qualification_mutation_check.py` mutates the product code once per safety
 property in a scratch copy and requires the control suite to go red. A surviving
@@ -230,18 +231,18 @@ used deliberately rather than adding a dependency.
   guard is installed before trusted-base tests initialize candidate code.
   Candidate attempts to obtain the system loader, suppress access checks,
   replace the SecurityManager/properties object, execute processes, load native
-  code, mutate the protected witness directory or TestNG global knobs are sticky
-  violations. The listener records the containment state and `qualify.py`
-  requires `SECURITY_MANAGER_ENFORCED` from both manifest and witness.
+  code, mutate protected child output or TestNG global knobs are sticky
+  violations. The child turns any containment violation into a non-credit OS
+  exit; only the external parent can create a credited receipt.
 * **Runtime support is bounded.** This design deliberately uses the JDK 17/21
   SecurityManager compatibility mechanism. A runtime where that mechanism is
   unavailable is `UNKNOWN`, not an implicit downgrade to the older shared-JVM
   mitigation model. D17 does not claim future-JDK containment from this design.
-* **D24 coverage remains external remediation debt.** D17 does not repair those
-  tests. It generically records source-level TestNG obligations missing from
-  execution and also consumes D20's canonical named baseline; explicit disabled
-  source classes and D22 CR104.3f remain distinct evidence classes. None can be
-  converted into PASS by the executable denominator.
+* **D24 execution restoration is consumed, not reimplemented.** The formerly
+  silent PowerMock-derived concrete classes are now part of the executable
+  denominator through the trusted Surefire include policy. D17 separately
+  retains the remaining disabled-class/method debt (including CR104.3f and two
+  CardDbPerformance benchmarks) as non-PASS coverage.
 * **Dependency changes are UNKNOWN.** A candidate-added/upgraded dependency that
   is absent from the trusted Maven repository is not admitted.
 * **Frozen classpath and immutable runtime data.** Candidate production output
@@ -250,10 +251,11 @@ used deliberately rather than adding a dependency.
   the hostile-bytecode JVM starts. Launch working-directory data comes from a
   separately verified exact-candidate Git export, not from the writable build
   tree. Build/plugin code and runtime candidate bytecode use different OS UIDs.
-* **HMAC is defense in depth, not the containment boundary.** The ledger key is
-  supplied only to the trusted driver. Qualification credit additionally
-  requires the independent hostile-bytecode containment signal and filesystem
-  integrity; a valid-looking ledger without those signals cannot PASS.
+* **No authentication secret exists in the candidate JVM.** The child has no
+  receipt key, parent run ID or trusted evidence handle. It can only return a
+  bounded OS status. Credited receipt files are created by the external parent
+  in the trusted evidence directory and are then digest-bound and integrity
+  sealed.
 
 ## Scope boundary with D20/#501
 
