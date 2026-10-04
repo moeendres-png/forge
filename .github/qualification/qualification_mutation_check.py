@@ -277,6 +277,13 @@ MUTATIONS = [
         "candidate code run as the validator's own identity would be credit",
     ),
     Mutation(
+        "ignore-build-execution-identity-separation",
+        "qualify.py",
+        '    elif not by_name["build_and_execution_identities_separated"]["satisfied"]:',
+        '    elif False:',
+        "a delayed candidate build process could share the witness JVM UID and attack it out of process",
+    ),
+    Mutation(
         "accept-an-unpinned-trusted-testng",
         "trusted_execution.py",
         '        if sha256_file(path) != TRUSTED_TESTNG_PINS[path.name]:',
