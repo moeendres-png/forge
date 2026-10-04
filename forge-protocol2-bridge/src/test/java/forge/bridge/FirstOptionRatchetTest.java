@@ -34,7 +34,8 @@ public class FirstOptionRatchetTest {
     /*
      * Bounded claim (D23, commander-playtest-lab#504). Both gates below are
      * syntactic debt control. They stop new first-option picks in the bridge's
-     * tests and keep every first-element pick in its production code either a
+     * tests and keep every first-element pick its production code spells in a
+     * recognised way (see PICK) either a
      * structurally guarded forced singleton or a pinned, reviewed exception.
      * They are NOT a runtime proof that no production-reachable decision falls
      * back to a first option; that proof belongs to the candidate's runtime
@@ -134,21 +135,31 @@ public class FirstOptionRatchetTest {
     // ------------------------------------------------------------------ //
     // Production gate
 
+    /** A literal zero index, also spelled 0x0, 0L or (0). */
+    private static final String ZERO = "\\(\\s*(?:\\(\\s*)*0(?:[xXbB]0*|0*)[lL]?(?:\\s*\\))*\\s*\\)";
+
     /**
-     * Every first-element pick in production code, whatever the collection is
-     * called: {@code get(0)}, {@code getFirst()}, {@code getLast()},
-     * {@code iterator().next()}, {@code findFirst()}, {@code findAny()} and
-     * {@code Iterables.get*}. It runs on source with comments and literals
-     * blanked, so a pick split over lines is still found.
+     * The first-element pick spellings the production gate recognises, on any
+     * receiver: {@code get(0)}, {@code remove(0)}, {@code getFirst()},
+     * {@code removeFirst()}, {@code getLast()}, {@code first()},
+     * {@code iterator().next()}, {@code listIterator().next()},
+     * {@code findFirst()}, {@code findAny()}, {@code toArray()[0]},
+     * {@code Iterables.get*} and {@code Iterators.get*}. It runs on source with
+     * comments, string literals and text blocks blanked, so a pick split over
+     * lines is still found. Other spellings are blind spots
+     * (FIRST_OPTION_RATCHET.md).
      */
     private static final Pattern PICK = Pattern.compile(
-            "\\.\\s*(?:get\\s*\\(\\s*0\\s*\\)|getFirst\\s*\\(\\s*\\)|getLast\\s*\\(\\s*\\)"
-                    + "|iterator\\s*\\(\\s*\\)\\s*\\.\\s*next\\s*\\(\\s*\\)"
-                    + "|findFirst\\s*\\(\\s*\\)|findAny\\s*\\(\\s*\\))"
-                    + "|\\bIterables\\s*\\.\\s*(?:getFirst|getLast|get)\\s*\\(");
+            "\\.\\s*(?:get\\s*" + ZERO + "|remove\\s*" + ZERO
+                    + "|getFirst\\s*\\(\\s*\\)|removeFirst\\s*\\(\\s*\\)|getLast\\s*\\(\\s*\\)"
+                    + "|first\\s*\\(\\s*\\)"
+                    + "|(?:list)?[iI]terator\\s*\\(\\s*\\)\\s*\\.\\s*next\\s*\\(\\s*\\)"
+                    + "|findFirst\\s*\\(\\s*\\)|findAny\\s*\\(\\s*\\)"
+                    + "|toArray\\s*\\([^()]*\\)\\s*\\[\\s*0\\s*\\])"
+                    + "|\\b(?:Iterables|Iterators)\\s*\\.\\s*get[A-Za-z]*\\s*\\(");
 
     /** Structurally guarded picks: the pick sits directly in the block of {@code if (<receiver>.size() == 1 [&& flag]...)}. */
-    private static final int PRODUCTION_FORCED_SINGLETONS = 33;
+    private static final int PRODUCTION_FORCED_SINGLETONS = 34;
 
     /**
      * Every other production pick, pinned by file and exact (whitespace-collapsed)
@@ -160,7 +171,8 @@ public class FirstOptionRatchetTest {
             {"BridgeCostDecisionMaker.java", "&& payable.getZone() == player.getZone(cost.getFrom().get(0))", "1",
                     "the cost's source zone, not a decision option"},
             {"ExternalPlayerController.java", "targetOptions, decision.getTotalAmount(), decision.getRecipients().get(0)", "1",
-                    "minimum amount carried by the engine's divided-allocation decision, not a choice"},
+                    "minimum amount of the engine's divided-allocation decision; every recipient carries the same"
+                            + " minPerTarget (DividedAllocationDecision), so it is not a choice"},
             {"ExternalPlayerController.java", "single.add(spells.get(0));", "1",
                     "forced singleton guarded by spells.size() == num && num == 1"},
             {"SemanticReplay.java", "return matches.get(0);", "1",
@@ -189,7 +201,7 @@ public class FirstOptionRatchetTest {
         }
     }
 
-    /** Comments, string and char literals blanked to spaces; offsets and newlines kept. */
+    /** Comments, text blocks, string and char literals blanked to spaces; offsets and newlines kept. */
     static String blankCommentsAndLiterals(String source) {
         final char[] out = source.toCharArray();
         int i = 0;
@@ -203,6 +215,12 @@ public class FirstOptionRatchetTest {
             } else if (c == '/' && next == '*') {
                 end = source.indexOf("*/", i + 2);
                 end = end < 0 ? out.length : end + 2;
+            } else if (source.startsWith("\"\"\"", i)) {
+                end = i + 3;
+                while (end < out.length && !source.startsWith("\"\"\"", end)) {
+                    end += source.charAt(end) == '\\' ? 2 : 1;
+                }
+                end = Math.min(out.length, end + 3);
             } else if (c == '"' || c == '\'') {
                 end = i + 1;
                 while (end < out.length && source.charAt(end) != c && source.charAt(end) != '\n') {
@@ -263,7 +281,9 @@ public class FirstOptionRatchetTest {
     /**
      * True only when the innermost block that contains the pick is opened by
      * {@code if (<receiver>.size() == 1)} or {@code else if (...)}, optionally
-     * conjoined ({@code &&}) with plain flags. A disjunction, a negation, a
+     * conjoined ({@code &&}) with negated plain flags such as
+     * {@code !isOptional} (a decision that may be declined is not forced). A
+     * positive flag, a call, a disjunction, a negation of the size test, a
      * guard whose block closed before the pick, a comment, or a guard on a
      * different collection does not count.
      */
@@ -291,11 +311,11 @@ public class FirstOptionRatchetTest {
         }
         final String header = code.substring(from + 1, open).replaceAll("\\s+", "");
         return header.matches("(?:else)?if\\(" + Pattern.quote(receiver)
-                + "\\.size\\(\\)==1(?:&&!?[A-Za-z_][A-Za-z0-9_.]*(?:\\(\\))?)*\\)");
+                + "\\.size\\(\\)==1(?:&&![A-Za-z_][A-Za-z0-9_]*)*\\)");
     }
 
     /**
-     * Every first-element pick in the bridge's production code is either a
+     * Every recognised first-element pick (see PICK) in the bridge's production code is either a
      * structurally guarded forced singleton (counted and pinned) or a pinned,
      * reviewed exception. Anything else would answer a real decision with
      * whatever was listed first.
@@ -364,6 +384,14 @@ public class FirstOptionRatchetTest {
                 "return frame.getOptions().get(0);",
                 "return options.getLast();",
                 "return spells.iterator().next();",
+                "return legal.remove(0);",
+                "return legal.removeFirst();",
+                "return legal.get(0x0);",
+                "return legal.get((0));",
+                "return legal.listIterator().next();",
+                "return sorted.first();",
+                "return (Card) legal.toArray()[0];",
+                "return Iterators.getNext(legal.iterator(), null);",
                 "return new ArrayList<>(legal).get(0);"}) {
             Assert.assertFalse(only(unguarded).forced, unguarded);
         }
@@ -378,11 +406,17 @@ public class FirstOptionRatchetTest {
                 "if (!subsets.isEmpty()) {\n    return subsets.get(0);\n}",
                 "if (legal.size() == 10) {\n    return legal.get(0);\n}",
                 "if (legal.size() >= 1) {\n    return legal.get(0);\n}",
-                "if (legal.size() == 1) return legal.get(0);"}) {
+                "if (legal.size() == 1) return legal.get(0);",
+                "if (legal.size() == 1 && isOptional) {\n    return legal.get(0);\n}",
+                "if (legal.size() == 1 && shrinkLegal()) {\n    return legal.get(0);\n}",
+                "String s = \"\"\"\n    ;\n    if (legal.size() == 1) {\n    \"\"\";\nreturn legal.get(0);"}) {
             Assert.assertFalse(only(fake).forced, fake);
         }
 
-        // Comments and literals are not code.
+        // Comments, literals and text blocks are not code, and code after a text block is.
         Assert.assertTrue(sites("// return options.get(0);\nString s = \"options.get(0)\";").isEmpty());
+        Assert.assertTrue(sites("String s = \"\"\"\n    options.get(0) /* \\\"\"\" \n    \"\"\";").isEmpty());
+        Assert.assertFalse(only("return \"\"\"\n    picked %s\n    \"\"\".formatted(options.get(0));").forced);
+        Assert.assertFalse(only("String s = \"\"\"\n    see forge/bridge/*.java\n    \"\"\";\nreturn offered.get(0);").forced);
     }
 }
