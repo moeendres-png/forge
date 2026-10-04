@@ -272,9 +272,9 @@ MUTATIONS = [
     Mutation(
         "accept-candidate-code-run-as-a-trusted-identity",
         "qualify.py",
-        '        isinstance(identity, str) and bool(identity) and identity not in TRUSTED_IDENTITIES',
-        '        True',
-        "candidate code run as the validator's own identity would be credit",
+        'TRUSTED_IDENTITIES = ("root", "runner")',
+        'TRUSTED_IDENTITIES = ()',
+        "candidate build/execution code run as a trusted runner identity would be credit",
     ),
     Mutation(
         "ignore-build-execution-identity-separation",
@@ -344,8 +344,8 @@ MUTATIONS = [
     Mutation(
         "allow-network-resolution-in-candidate-build",
         "trusted_execution.py",
-        '             [args.mvn, "-o", "-B", "-q",',
-        '             [args.mvn, "-B", "-q",',
+        '            [args.mvn, "-o", "-B", "-q",',
+        '            [args.mvn, "-B", "-q",',
         "candidate Maven execution could resolve untrusted code instead of the pre-resolved trusted repository",
     ),
     # --- launch classpath admission and verdict bindings (review 63731d9f) - #
