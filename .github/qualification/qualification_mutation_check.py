@@ -341,6 +341,13 @@ MUTATIONS = [
         "    reactor_modules = modules\n",
         "candidate changes in upstream Forge reactor modules would disappear from the executed classpath",
     ),
+    Mutation(
+        "read-d20-known-not-run-from-working-tree",
+        "trusted_execution.py",
+        '        raw = _git_blob_bytes(repo, "{}:{}".format(base, D20_KNOWN_NOT_RUN_PATH))\n',
+        '        raw = (repo / D20_KNOWN_NOT_RUN_PATH).read_bytes()\n',
+        "candidate working-tree data could redefine named NOT_RUN coverage categories",
+    ),
     # --- trusted Maven/build-definition authority ------------------------- #
     Mutation(
         "ignore-candidate-build-definition-divergence",
