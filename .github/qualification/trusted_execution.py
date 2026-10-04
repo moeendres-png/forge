@@ -3,66 +3,31 @@
 
 Trust boundary
 --------------
-This module runs from the trusted default-branch checkout.  It is the only thing
-that launches the test JVMs, and it derives qualification credit from what it
-observed those JVMs dispatch -- never from an artifact the candidate's build
-produced.
+This module runs from the trusted default-branch checkout. It owns the required
+surface, build admission, external receipt authority and final execution
+manifest. Candidate-authored reports and test bodies carry no credit.
 
-Why this exists
----------------
-The previous D17 design parsed the candidate's own
-``target/surefire-reports/TEST-*.xml`` and granted PASS from those counts after a
-candidate-controlled Maven run exited successfully.  A candidate could suppress
-tests in its POM, return Maven success, and commit or lifecycle-generate green
-XML with plausible counts.  Trusted Python parsing candidate numbers is not
-provenance.  Candidate-authored build artifacts therefore carry **no** credit.
+The trusted comparison base supplies:
+* the Surefire discovery policy and TestNG dry-run denominator;
+* the qualification test bodies;
+* Maven/plugin authority and the D20 known-NOT_RUN baseline.
 
-The replacement has two trusted halves:
+Candidate production code is compiled as an untrusted build UID, admitted and
+frozen before trusted test compilation, then executed as a distinct untrusted
+UID behind the mandatory classloader/SecurityManager containment boundary.
 
-``required surface``
-    Enumerated by running TestNG's own ``-dryrun`` over the **trusted comparison
-    base** checkout.  This is an observation of what the trusted lineage's tests
-    would execute, so it is a trusted denominator that no candidate can shrink.
+The candidate JVM is deliberately receiptless: it receives no receipt key,
+parent run ID or trusted evidence path. A trusted child counter validates exact
+per-class dispatch counts, failures and skip classes and returns only a bounded
+OS exit status. The external trusted parent interprets that status fail-closed
+and, only after successful completion, writes the credited parent receipt under
+the runner-owned evidence directory. Receipts are bound to a parent-only run ID,
+SHA-256 digests and the final trusted-state integrity seal.
 
-``observed execution``
-    Recorded by ``forge/d17/witness/QualifiedExecutionListener.java``, compiled
-    here from trusted source and placed ahead of every candidate class on the
-    classpath.  It records each dispatched method with its outcome.
-
-Trust domain (Coordinator finding at ``17d42d7e``)
--------------------------------------------------
-Candidate code never runs as the identity that owns trusted state:
-
-* the required surface is enumerated, and the trusted driver and listener are
-  compiled against a pinned, digest-checked TestNG, before any candidate code
-  runs; that bytecode is staged root-owned and read-only;
-* the candidate build (``mvn test-compile`` and ``dependency:build-classpath``)
-  and every candidate test JVM run as the separate sandbox account
-  (``sandbox.py``) with an allowlisted environment, and every candidate process
-  is reaped after each run;
-* the executed test bytecode is compiled here, by trusted code, from a
-  ``git archive`` export of the locked candidate commit with annotation
-  processing disabled (``-proc:none``); the candidate's ``target/test-classes``
-  is never executed, and test resources never contribute ``.class`` files or
-  TestNG service registrations;
-* the witness ledger is HMAC-chained with a per-module key that reaches the
-  trusted driver on stdin only; this orchestrator verifies every line before
-  copying the ledger into trusted evidence, so a ledger line the candidate
-  writes, alters, reorders or replays is rejected;
-* ``sandbox.py verify`` later re-derives every trusted file from Git and checks
-  the evidence seals (``INTEGRITY.json``), which ``qualify.py`` requires.
-
-The candidate's POMs, main sources and dependency resolution stay candidate
-influenced: they decide which dependency and main classes load, never which
-test bytecode runs, whether an invocation counts, or the verdict rule.
-
-Scope boundary
---------------
-D20/#501 owns general persisted JUnit/timing artifact provenance and retention.
-This module implements only the minimum trusted execution provenance D17 needs to
-stop candidate-authored build artifacts from manufacturing PASS.  It persists a
-witness ledger and a required-surface ledger; it does not build a general
-artifact store.
+D20/#501 owns general persisted JUnit/timing provenance and retention. D17 owns
+only the minimum trusted exact-SHA execution receipts required to prevent
+candidate build artifacts, plugins, tests or hostile production bytecode from
+manufacturing qualification credit.
 """
 
 from __future__ import annotations
