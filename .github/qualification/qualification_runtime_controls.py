@@ -627,20 +627,30 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
 class SandboxRuntimeControls(RuntimeCase):
     def setUp(self) -> None:
         super().setUp()
-        self.user = os.environ.get("D17_SANDBOX_USER", sandbox.CANDIDATE_USER)
-        self.sandbox_dir = Path(os.environ.get("D17_SANDBOX_DIR", "/srv/d17-selftest-sandbox"))
+        self.build_user = os.environ.get("D17_BUILD_USER", "d17build")
+        self.user = os.environ.get("D17_EXEC_USER",
+                                   os.environ.get("D17_SANDBOX_USER", "d17exec"))
+        self.build_sandbox = Path(os.environ.get(
+            "D17_BUILD_SANDBOX_DIR", "/srv/d17-selftest-build"))
+        self.sandbox_dir = Path(os.environ.get(
+            "D17_EXEC_SANDBOX_DIR", "/srv/d17-selftest-exec"))
         try:
+            sandbox.prepare_sandbox(self.build_user, self.build_sandbox)
             sandbox.prepare_sandbox(self.user, self.sandbox_dir)
         except (sandbox.SandboxError, OSError) as exc:
             if REQUIRE:
                 self.fail("sandbox unavailable: {}".format(exc))
             self.skipTest("sandbox unavailable: {}".format(exc))
 
-    def test_candidate_tests_cannot_write_trusted_state(self) -> None:
+    def test_build_plugin_and_execution_users_cannot_write_trusted_state(self) -> None:
         trusted = self.tmp / "trusted"
         trusted.mkdir()
         os.chmod(trusted, 0o755)
-        targets = [trusted / "qualify.py", trusted / "execution-manifest.json"]
+        targets = [
+            trusted / "qualify.py",
+            trusted / "required-surface.json",
+            trusted / "execution-manifest.json",
+        ]
         for target in targets:
             target.write_text("trusted\n")
         bundle = Path("/var/lib/d17-selftest/bundle")
@@ -663,11 +673,41 @@ class SandboxRuntimeControls(RuntimeCase):
         proc, raw = self.launch(["probe.TrespassTest"], [str(bundle / "classes")], out, key, nonce,
                                 as_user=self.user, env={"D17_TRUSTED_TARGETS": ":".join(map(str, targets))})
         for target in targets:
-            self.assertEqual(target.read_text(), "trusted\n", "{} was written by candidate code".format(target))
-        self.assertEqual(sandbox.alive(self.user), [], "a candidate process survived")
+            self.assertEqual(target.read_text(), "trusted\n", "{} was written by execution code".format(target))
+        self.assertEqual(sandbox.alive(self.user), [], "an execution candidate process survived")
+
+        # Model a Maven/plugin process under the build UID.  It must not be able
+        # to overwrite validator/denominator/evidence or the execution UID's
+        # private ledger directory.
+        private_ledger = self.sandbox_dir / "private-ledger"
+        sandbox.run_candidate(
+            self.user, self.sandbox_dir / "home", self.sandbox_dir,
+            ["/bin/sh", "-c", 'rm -rf "$1" && mkdir -p "$1" && chmod 0700 "$1"',
+             "d17", str(private_ledger)])
+        build_home = self.build_sandbox / "home"
+        command = (
+            'set +e; '
+            + 'printf pwn > "$1"; a=$?; '
+            + 'printf pwn > "$2"; b=$?; '
+            + 'printf pwn > "$3"; c=$?; '
+            + 'printf pwn > "$4/forged"; d=$?; '
+            + 'test "$a" -ne 0 -a "$b" -ne 0 -a "$c" -ne 0 -a "$d" -ne 0'
+        )
+        plugin = sandbox.run_candidate(
+            self.build_user, build_home, self.build_sandbox,
+            ["/bin/sh", "-c", command, "d17",
+             str(targets[0]), str(targets[1]), str(targets[2]), str(private_ledger)],
+            timeout=60)
+        self.assertEqual(plugin.returncode, 0, plugin.stderr)
+        for target in targets:
+            self.assertEqual(target.read_text(), "trusted\n",
+                             "{} was written by build/plugin code".format(target))
+        self.assertFalse((private_ledger / "forged").exists())
+        self.assertEqual(sandbox.alive(self.build_user), [], "a build candidate process survived")
         lines, problem = trusted_execution.verify_ledger(raw or b"", key, nonce)
         self.assertIsNone(problem, (problem, proc.stdout[-800:], proc.stderr[-800:]))
         self.assertFalse(sandbox.writable_by(self.user, [trusted, bundle]))
+        self.assertFalse(sandbox.writable_by(self.build_user, [trusted, bundle, private_ledger]))
 
 
 if __name__ == "__main__":
