@@ -189,6 +189,25 @@ def git(repo: Path, *args: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def build_definition_divergence(repo: Path, comparison_base: str, candidate_sha: str) -> "list[str]":
+    """Return candidate changes that can alter Maven/plugin execution authority.
+
+    D17 qualifies production source under the trusted comparison-base build
+    definition. A candidate may not change a POM, Maven core-extension/config
+    file or wrapper and still receive qualification credit: doing so would let a
+    candidate-controlled plugin/build definition manufacture the bytecode under
+    test.
+    """
+    changed = git(repo, "diff", "--name-only", comparison_base, candidate_sha).splitlines()
+    return sorted(path for path in changed if (
+        path == "pom.xml"
+        or path.endswith("/pom.xml")
+        or path == "mvnw"
+        or path == "mvnw.cmd"
+        or path.startswith(".mvn/")
+    ))
+
+
 def required_classes_for_module(repo: Path, module: str, base: str) -> "list[str]":
     """Baseline required test classes, read from trusted Git data only.
 
@@ -782,6 +801,18 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             continue
         if not real.exists():
             continue  # frozen launches list only what exists now
+        if trusted_m2 and real.is_relative_to(trusted_m2):
+            rel_path = real.relative_to(trusted_m2)
+            data = _regular_file_bytes(real)
+            if not isinstance(data, bytes):
+                result["unverified_jars"].append(str(rel_path))
+            else:
+                rel = "deps/" + rel_path.as_posix()
+                if staging is not None:
+                    (staging / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (staging / rel).write_bytes(data)
+                remember(key, rel, before, "trusted_dependency_entries")
+            continue
         if real.is_relative_to(candidate_m2):
             rel_path = real.relative_to(candidate_m2)
             trusted = (trusted_m2 / rel_path) if trusted_m2 else None
@@ -1029,6 +1060,8 @@ def cmd_execute(args) -> int:
         "hostile_bytecode_containment_required": True,
         "ledger_authentication_scheme": "HMAC-SHA256 chain behind mandatory code-domain containment",
         "candidate_artifacts_used_as_evidence": False,
+        "candidate_build_definition_divergence": [],
+        "maven_repository_authority": None,
         "modules": {},
     }
     manifest_path = evidence_dir / "execution-manifest.json"
@@ -1043,6 +1076,21 @@ def cmd_execute(args) -> int:
         testng_jars = verify_trusted_testng(args.trusted_testng)
         manifest["trusted_testng"] = {p.name: TRUSTED_TESTNG_PINS[p.name] for p in testng_jars}
         home = sandbox.sandbox_home(sandbox_dir)
+        trusted_maven_repo = (Path(args.trusted_maven_repo).resolve()
+                              if args.trusted_maven_repo else None)
+        if trusted_maven_repo is None or not trusted_maven_repo.is_dir():
+            raise ExecutionError("trusted Maven repository is required")
+        divergence = build_definition_divergence(
+            trusted_repo, args.comparison_base, args.candidate_sha)
+        manifest["candidate_build_definition_divergence"] = divergence
+        manifest["maven_repository_authority"] = {
+            "path": str(trusted_maven_repo),
+            "mode": "trusted_read_only_offline",
+        }
+        if divergence:
+            raise ExecutionError(
+                "candidate changes Maven build authority: {}".format(
+                    ", ".join(divergence[:20])))
 
         # 1. Trusted bytecode first: driver and listener, before any candidate code.
         staging = work / "bundle"
@@ -1054,11 +1102,17 @@ def cmd_execute(args) -> int:
         testng_main = str(staging / "testng" / "testng-7.10.2.jar")
         compile_witness(trusted_repo, staging / "witness", args.java, testng_main)
 
-        # 2. The candidate build, as the sandbox account. Candidate influenced.
+        # 2. Compile the exact candidate production source with the trusted
+        # comparison-base Maven definition and a trusted, read-only dependency/
+        # plugin repository.  The candidate cannot supply a Maven plugin or
+        # mutate a plugin jar before it executes.
         build = sandbox.run_candidate(
             args.sandbox_user, home, candidate_root,
-            [args.mvn, "-B", "-q", "-DskipTests", "test-compile", "dependency:build-classpath",
-             "-Dmdep.outputFile=" + args.cp_rel, "-DincludeScope=test", "-pl", ",".join(modules), "-am"],
+            [args.mvn, "-o", "-B", "-q",
+             "-Dmaven.repo.local=" + str(trusted_maven_repo),
+             "-DskipTests", "test-compile", "dependency:build-classpath",
+             "-Dmdep.outputFile=" + args.cp_rel, "-DincludeScope=test",
+             "-pl", ",".join(modules), "-am"],
             timeout=14400,
         )
         manifest["candidate_build"] = {"exit_code": build.returncode, "user": args.sandbox_user,
@@ -1089,7 +1143,7 @@ def cmd_execute(args) -> int:
             # classpath and freeze the admitted bytes into the trusted bundle.
             scans[module] = scan_launch_classpath(
                 out, entries, candidate_root, home / ".m2" / "repository",
-                Path(args.trusted_maven_repo) if args.trusted_maven_repo else None,
+                trusted_maven_repo,
                 freeze=(staging / "classpath", bundle / "classpath", frozen))
         manifest["trusted_test_compilation"] = records
         manifest["launch_classpath_admission"] = scans
