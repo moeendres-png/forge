@@ -142,9 +142,9 @@ class RuntimeCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, str(self.tmp), True)
         self.witness = trusted_execution.compile_witness(HERE.parents[1], self.tmp / "witness", "java", self.testng)
 
-    def compile_candidate(self, sources: dict, extra_cp=()) -> Path:
-        src = self.tmp / "candidate-src"
-        out = self.tmp / "candidate-classes"
+    def compile_source_set(self, sources: dict, out_name: str, extra_cp=()) -> Path:
+        src = self.tmp / (out_name + "-src")
+        out = self.tmp / out_name
         for name, text in sources.items():
             path = src / "probe" / (name + ".java")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,11 +157,25 @@ class RuntimeCase(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return out
 
-    def launch(self, classes, classpath, ledger_dir: Path, key: bytes, nonce: str, as_user=None, env=None):
+    def compile_candidate(self, sources: dict, extra_cp=()) -> Path:
+        # Historical helper: these are comparison-base test fixtures, not
+        # candidate-owned tests in the production D17 architecture.
+        return self.compile_source_set(sources, "trusted-test-classes", extra_cp)
+
+    def launch(self, classes, classpath, ledger_dir: Path, key: bytes, nonce: str, as_user=None, env=None,
+               candidate_code=(), trusted_dependencies=()):
         ledger = ledger_dir / "forge-game.witness.jsonl"
-        cmd = ["java", "-cp", trusted_execution.assemble_classpath(self.witness, [str(j) for j in self.jars] + classpath),
+        self.assertTrue(classpath, "a trusted test root is required")
+        system_cp = trusted_execution.assemble_classpath(self.witness, [str(j) for j in self.jars])
+        cmd = ["java", "-Djava.security.manager=allow", "-cp", system_cp,
                trusted_execution.DRIVER_CLASS, "--module", "forge-game", "--nonce", nonce,
-               "--ledger", str(ledger), "--output-dir", str(ledger_dir / "testng-out")]
+               "--ledger", str(ledger), "--protected-root", str(ledger_dir),
+               "--output-dir", str(ledger_dir / "testng-out"),
+               "--trusted-test-root", str(classpath[0])]
+        for entry in candidate_code:
+            cmd += ["--candidate-code", str(entry)]
+        for entry in trusted_dependencies:
+            cmd += ["--trusted-dependency", str(entry)]
         for jar in self.jars:
             cmd += ["--trusted-jar", str(jar)]
         for name in classes:
@@ -366,6 +380,131 @@ class AdmissionRuntimeControls(RuntimeCase):
         scan = self.scan(classes)
         self.assertEqual(scan["findings"], [])
         self.assertEqual(scan["scanned_classes"], 3)
+
+
+HOSTILE_MAIN = """package probe;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.Properties;
+
+public class HostileMain {
+    public static int add(int a, int b) { return a + b; }
+
+    private static int caught(Runnable action) {
+        try {
+            action.run();
+            return 0;
+        } catch (SecurityException expected) {
+            return 1;
+        }
+    }
+
+    public static int attack(String ledger) {
+        int blocked = 0;
+        blocked += caught(() -> ClassLoader.getSystemClassLoader());
+        blocked += caught(() -> System.setProperties(new Properties()));
+        blocked += caught(() -> {
+            try {
+                new URLClassLoader(new URL[0]);
+            } catch (java.io.IOException impossible) {
+                throw new RuntimeException(impossible);
+            }
+        });
+        blocked += caught(() -> System.exit(0));
+        blocked += caught(() -> System.loadLibrary("d17_nonexistent_native"));
+        blocked += caught(() -> {
+            try {
+                Files.writeString(Path.of(ledger), "{\\\"kind\\\":\\\"forged\\\"}\\n",
+                        StandardOpenOption.APPEND);
+            } catch (java.io.IOException io) {
+                throw new RuntimeException(io);
+            }
+        });
+
+        Thread racer = new Thread(() -> {
+            try {
+                System.getProperties().put("testng.mode.dryrun", "true");
+            } catch (SecurityException expected) {
+                // Expected.  The guard records a sticky violation.
+            }
+        });
+        racer.start();
+        try {
+            racer.join();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        return blocked;
+    }
+}
+"""
+
+TRUSTED_CALLER = """package probe;
+import static org.testng.Assert.assertEquals;
+import org.testng.annotations.Test;
+public class TrustedCallerTest {
+    @Test public void honestCandidateCodeRuns() {
+        assertEquals(HostileMain.add(2, 3), 5);
+    }
+}
+"""
+
+TRUSTED_ATTACK_CALLER = """package probe;
+import static org.testng.Assert.assertEquals;
+import org.testng.annotations.Test;
+public class TrustedAttackCallerTest {
+    @Test public void hostileAuthorityAttemptsCannotBeHidden() {
+        assertEquals(HostileMain.attack(LEDGER), 6);
+    }
+}
+"""
+
+
+class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
+    def _compile_domains(self, test_source: str, ledger: Path):
+        candidate = self.compile_source_set({"HostileMain": HOSTILE_MAIN}, "candidate-main")
+        rendered = test_source.replace("LEDGER", json.dumps(str(ledger)))
+        tests = self.compile_source_set(
+            {"TrustedCallerTest" if "honestCandidate" in rendered else "TrustedAttackCallerTest": rendered},
+            "comparison-base-tests", extra_cp=[str(candidate)])
+        return tests, candidate
+
+    def test_honest_candidate_production_bytecode_runs_inside_containment(self) -> None:
+        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+        out = self.tmp / "contained-honest"
+        out.mkdir()
+        tests, candidate = self._compile_domains(TRUSTED_CALLER, out / "forge-game.witness.jsonl")
+        proc, raw = self.launch(["probe.TrustedCallerTest"], [str(tests)], out, key, nonce,
+                                candidate_code=[candidate])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
+        self.assertIsNone(problem)
+        records = [json.loads(line) for line in lines]
+        summary = records[-1]
+        self.assertEqual(summary.get("containment"), trusted_execution.CONTAINMENT_ENFORCED)
+        invocations = [r for r in records if r.get("kind") == "invocation"]
+        self.assertEqual([r["status"] for r in invocations], ["PASS"])
+
+    def test_hostile_candidate_authority_attempts_make_the_run_red(self) -> None:
+        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+        out = self.tmp / "contained-hostile"
+        out.mkdir()
+        tests, candidate = self._compile_domains(
+            TRUSTED_ATTACK_CALLER, out / "forge-game.witness.jsonl")
+        proc, raw = self.launch(["probe.TrustedAttackCallerTest"], [str(tests)], out, key, nonce,
+                                candidate_code=[candidate])
+        self.assertNotEqual(proc.returncode, 0)
+        lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
+        self.assertIsNone(problem)
+        records = [json.loads(line) for line in lines]
+        summary = records[-1]
+        self.assertEqual(summary.get("containment"), "SECURITY_MANAGER_VIOLATED")
+        self.assertTrue(summary.get("containment_violation"))
+        invocations = [r for r in records if r.get("kind") == "invocation"]
+        self.assertEqual([r["status"] for r in invocations], ["FAIL"])
 
 
 class SandboxRuntimeControls(RuntimeCase):
