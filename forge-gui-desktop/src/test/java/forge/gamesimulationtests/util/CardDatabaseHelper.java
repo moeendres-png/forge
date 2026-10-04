@@ -1,16 +1,24 @@
 package forge.gamesimulationtests.util;
 
+import java.lang.reflect.Field;
+import java.util.HashMap;
+import java.util.Map;
+
 import forge.CardStorageReader;
 import forge.StaticData;
+import forge.card.CardDb;
 import forge.item.PaperCard;
 import forge.localinstance.properties.ForgeConstants;
 
-public class CardDatabaseHelper {
-    private static StaticData eagerStaticData;
-    private static StaticData lazyStaticData;
+public final class CardDatabaseHelper {
+    private static final Map<FixtureKey, StaticData> FIXTURES = new HashMap<>();
+    private static FixtureKey activeFixture;
+
+    private CardDatabaseHelper() {
+    }
 
     public static PaperCard getCard(String name) {
-        StaticData data = getStaticData(false);
+        StaticData data = getStaticData(CardDatabaseHelper.class, false);
 
         PaperCard result = data.getCommonCards().getCard(name);
         if (result == null) {
@@ -19,19 +27,24 @@ public class CardDatabaseHelper {
         return result;
     }
 
-    private static StaticData getStaticData(boolean lazyLoad) {
-        StaticData existing = lazyLoad ? lazyStaticData : eagerStaticData;
-        if (existing != null) {
-            return existing;
+    public static synchronized StaticData getStaticDataToPopulateOtherMocks(Class<?> fixtureOwner) {
+        return getStaticData(fixtureOwner, false);
+    }
+
+    public static synchronized StaticData getStaticDataToPopulateOtherMocks(Class<?> fixtureOwner, boolean lazyLoad) {
+        return getStaticData(fixtureOwner, lazyLoad);
+    }
+
+    private static StaticData getStaticData(Class<?> fixtureOwner, boolean lazyLoad) {
+        FixtureKey key = new FixtureKey(fixtureOwner.getName(), lazyLoad);
+        if (!key.equals(activeFixture)) {
+            clearCrossFixtureCardDbState();
+            activeFixture = key;
         }
 
-        StaticData initialized = initialize(lazyLoad);
-        if (lazyLoad) {
-            lazyStaticData = initialized;
-        } else {
-            eagerStaticData = initialized;
-        }
-        return initialized;
+        StaticData data = FIXTURES.computeIfAbsent(key, ignored -> initialize(lazyLoad));
+        activate(data);
+        return data;
     }
 
     private static StaticData initialize(boolean loadCardsLazily) {
@@ -51,11 +64,27 @@ public class CardDatabaseHelper {
                 false);
     }
 
-    public static StaticData getStaticDataToPopulateOtherMocks() {
-        return getStaticData(false);
+    private static void activate(StaticData data) {
+        try {
+            Field lastInstance = StaticData.class.getDeclaredField("lastInstance");
+            lastInstance.setAccessible(true);
+            lastInstance.set(null, data);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Unable to activate test StaticData fixture", e);
+        }
     }
 
-    public static StaticData getStaticDataToPopulateOtherMocks(boolean lazyLoad) {
-        return getStaticData(lazyLoad);
+    @SuppressWarnings("unchecked")
+    private static void clearCrossFixtureCardDbState() {
+        try {
+            Field artPrefs = CardDb.class.getDeclaredField("artPrefs");
+            artPrefs.setAccessible(true);
+            ((Map<String, String>) artPrefs.get(null)).clear();
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Unable to reset CardDb test fixture state", e);
+        }
+    }
+
+    private record FixtureKey(String ownerClassName, boolean lazyLoad) {
     }
 }
