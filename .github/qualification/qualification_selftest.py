@@ -1595,6 +1595,7 @@ class TrustedOrchestratorControls(unittest.TestCase):
         source = inspect.getsource(trusted_execution.cmd_execute)
         self.assertIn('"-o", "-B", "-q"', source)
         self.assertIn('"-Dmaven.repo.local=" + str(trusted_maven_repo)', source)
+        self.assertIn('"-Dmaven.compiler.proc=none"', source)
         self.assertIn("build_definition_divergence(", source)
 
     def test_required_surface_include_patterns_match_surefire_defaults(self) -> None:
