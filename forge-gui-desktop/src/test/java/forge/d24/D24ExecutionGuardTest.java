@@ -14,6 +14,7 @@ import java.util.stream.Stream;
 import org.testng.Assert;
 import org.testng.IInvokedMethod;
 import org.testng.IInvokedMethodListener;
+import org.testng.ISuite;
 import org.testng.ISuiteListener;
 import org.testng.ITestNGMethod;
 import org.testng.ITestResult;
@@ -169,7 +170,16 @@ public class D24ExecutionGuardTest {
             return;
         }
 
-        Map<String, Integer> discovered = new HashMap<>(ExecutionListener.discovered);
+        Map<String, Integer> discovered = zeroCounts();
+        ISuite suite = ExecutionListener.suite;
+        Assert.assertNotNull(suite, "D24 execution listener did not receive the TestNG suite");
+        for (ITestNGMethod method : suite.getAllMethods()) {
+            String className = method.getTestClass().getRealClass().getName();
+            if (discovered.containsKey(className) && method.getEnabled()) {
+                discovered.merge(className, 1, Integer::sum);
+            }
+        }
+
         Map<String, Integer> passed = new HashMap<>(ExecutionListener.passed);
         Map<String, Integer> failed = new HashMap<>(ExecutionListener.failed);
         Map<String, Integer> skipped = new HashMap<>(ExecutionListener.skipped);
@@ -199,24 +209,17 @@ public class D24ExecutionGuardTest {
     }
 
     public static final class ExecutionListener implements ISuiteListener, IInvokedMethodListener {
-        private static Map<String, Integer> discovered = zeroCounts();
+        private static ISuite suite;
         private static Map<String, Integer> passed = zeroCounts();
         private static Map<String, Integer> failed = zeroCounts();
         private static Map<String, Integer> skipped = zeroCounts();
 
         @Override
-        public void onStart(org.testng.ISuite suite) {
-            discovered = zeroCounts();
+        public void onStart(ISuite suite) {
+            ExecutionListener.suite = suite;
             passed = zeroCounts();
             failed = zeroCounts();
             skipped = zeroCounts();
-
-            for (ITestNGMethod method : suite.getAllMethods()) {
-                String className = method.getTestClass().getRealClass().getName();
-                if (discovered.containsKey(className) && method.getEnabled()) {
-                    discovered.merge(className, 1, Integer::sum);
-                }
-            }
         }
 
         @Override
