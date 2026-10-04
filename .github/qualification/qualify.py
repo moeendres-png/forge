@@ -334,6 +334,11 @@ def derive_verdict(
     # may be valid, but whole-reactor test coverage is still only PARTIAL.
     coverage_gaps = surface.get("coverage_gaps")
     coverage_gaps = coverage_gaps if isinstance(coverage_gaps, dict) else {}
+    source_obligations_not_run = list(
+        coverage_gaps.get("source_test_obligation_classes_not_executed") or [])
+    source_annotation_inventory = coverage_gaps.get("source_test_annotation_inventory")
+    source_annotation_inventory = (
+        source_annotation_inventory if isinstance(source_annotation_inventory, dict) else {})
     framework_not_run = list(coverage_gaps.get("d24_framework_not_run_classes") or [])
     d24_inventory = coverage_gaps.get("d24_framework_not_run_source_inventory")
     d24_inventory = d24_inventory if isinstance(d24_inventory, dict) else {}
@@ -349,15 +354,16 @@ def derive_verdict(
     d22_disabled = list(coverage_gaps.get("d22_disabled_rules_tests") or [])
     coverage_complete = (
         surface.get("whole_reactor_coverage_complete") is True
+        and not source_obligations_not_run
         and not framework_not_run and not explicit_disabled and not d22_disabled
     )
     signal(
         "whole_reactor_coverage_complete",
         coverage_complete,
-        "D24_NOT_RUN={} D24_enabled_source_methods_not_run={} explicit_disabled={} "
-        "D22_disabled={}".format(
-            framework_not_run, d24_enabled_source_methods_not_run,
-            explicit_disabled, d22_disabled),
+        "source_test_obligations_NOT_RUN={} D24_NOT_RUN={} "
+        "D24_enabled_source_methods_not_run={} explicit_disabled={} D22_disabled={}".format(
+            source_obligations_not_run, framework_not_run,
+            d24_enabled_source_methods_not_run, explicit_disabled, d22_disabled),
     )
 
     # --- 4. Trusted launches completed -------------------------------------- #
@@ -699,9 +705,9 @@ def derive_verdict(
         )
     elif not by_name["whole_reactor_coverage_complete"]["satisfied"]:
         verdict, reason = PARTIAL, (
-            "trusted execution is valid for the executable surface, but source-policy "
-            "obligations remain NOT_RUN/disabled (D24/D20/D22); full Forge test coverage "
-            "is not claimed"
+            "trusted execution is valid for the executable surface, but trusted-source "
+            "TestNG obligations remain NOT_RUN/disabled (including D24/D20/D22); full "
+            "Forge test coverage is not claimed"
         )
     else:
         verdict, reason = PASS, (
@@ -715,6 +721,8 @@ def derive_verdict(
         "signals": signals,
         "coverage": {
             "whole_reactor_complete": coverage_complete,
+            "source_test_obligation_classes_not_executed": source_obligations_not_run,
+            "source_test_annotation_inventory": source_annotation_inventory,
             "d24_framework_not_run_classes": framework_not_run,
             "d24_framework_not_run_source_inventory": d24_inventory,
             "d24_enabled_source_methods_not_run": d24_enabled_source_methods_not_run,
