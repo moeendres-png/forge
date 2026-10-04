@@ -1,0 +1,19 @@
+{
+  "framework_blockers": [
+    "forge.card.CardMockTestCase",
+    "forge.gamesimulationtests.BaseGameSimulationTest"
+  ],
+  "note": "D20 visibility baseline only. D24 owns PowerMock migration/remediation. Any new missing source test class or any baseline entry that starts running must make the D20 validator red until this list is explicitly reviewed.",
+  "owner_issue": "moeendres-png/commander-playtest-lab#528",
+  "schema": "forge.known-not-run/1",
+  "source_test_classes_not_observed": [
+    "forge.card.CardDbCardMockTestCase",
+    "forge.card.CardDbLazyCardLoadingCardMockTestCase",
+    "forge.card.CardDbPerformanceTests",
+    "forge.card.CardDbWithNoImageCardDbMockTestCase",
+    "forge.card.CardEditionCollectionCardMockTestCase",
+    "forge.deck.DeckRecognizerTest",
+    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103",
+    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
+  ]
+}
