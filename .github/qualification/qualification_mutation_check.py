@@ -377,11 +377,11 @@ MUTATIONS = [
         "trusted javac would parse candidate-build-UID-writable inputs before the freeze boundary",
     ),
     Mutation(
-        "limit-candidate-production-to-test-bearing-modules",
+        "leave-installed-forge-siblings-on-the-classpath",
         "trusted_execution.py",
-        "    reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)\n",
-        "    reactor_modules = modules\n",
-        "candidate changes in upstream Forge reactor modules would disappear from the executed classpath",
+        "        if marker in normalized:\n",
+        "        if False:\n",
+        "installed stale Forge sibling jars would replace exact candidate reactor bytecode",
     ),
     Mutation(
         "read-d20-known-not-run-from-working-tree",
