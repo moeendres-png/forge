@@ -4,7 +4,6 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 
-import org.powermock.api.mockito.PowerMockito;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
@@ -25,8 +24,9 @@ public class CardDbLazyCardLoadingCardMockTestCase extends CardMockTestCase {
 
     @Override
     protected void initializeStaticData() {
-        StaticData data = CardDatabaseHelper.getStaticDataToPopulateOtherMocks(true);
-        PowerMockito.when(FModel.getMagicDb()).thenReturn(data);
+        StaticData data = CardDatabaseHelper.createFreshStaticDataForTestMethod(true);
+        CardDatabaseHelper.resetForTestMethod(data);
+        setMagicDb(data);
     }
 
     @Test
