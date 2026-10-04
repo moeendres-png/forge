@@ -1692,7 +1692,9 @@ class FrozenLaunchClasspath(unittest.TestCase):
         import inspect
         source = inspect.getsource(trusted_execution.execute_module)
         self.assertNotIn("candidate_classpath(", source)
-        self.assertIn("launch_entries", inspect.signature(trusted_execution.execute_module).parameters)
+        params = inspect.signature(trusted_execution.execute_module).parameters
+        self.assertIn("candidate_code_entries", params)
+        self.assertIn("trusted_dependency_entries", params)
 
 
 class IntegrityRecordShape(EvidenceCase):
