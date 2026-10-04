@@ -29,7 +29,7 @@ import forge.model.FModel;
 import forge.util.Localizer;
 import forge.util.TextUtil;
 
-public class CardMockTestCase {
+public abstract class CardMockTestCase {
 
     public static final String MOCKED_LOCALISED_STRING = "any localised string";
 
