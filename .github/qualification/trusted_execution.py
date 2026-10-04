@@ -393,6 +393,8 @@ def _java_code_only(source: str) -> str:
                 out.extend("  "); i += 2; state = "line"; continue
             if ch == "/" and nxt == "*":
                 out.extend("  "); i += 2; state = "block"; continue
+            if source.startswith('"""', i):
+                out.extend("   "); i += 3; state = "textblock"; continue
             if ch == '"':
                 out.append(" "); i += 1; state = "string"; continue
             if ch == "'":
@@ -407,6 +409,10 @@ def _java_code_only(source: str) -> str:
         if state == "block":
             if ch == "*" and nxt == "/":
                 out.extend("  "); i += 2; state = "code"; continue
+            out.append("\n" if ch == "\n" else " "); i += 1; continue
+        if state == "textblock":
+            if source.startswith('"""', i):
+                out.extend("   "); i += 3; state = "code"; continue
             out.append("\n" if ch == "\n" else " "); i += 1; continue
         if state in ("string", "char"):
             quote = '"' if state == "string" else "'"
@@ -438,7 +444,14 @@ def _testng_annotation_inventory(repo: Path, base: str, modules, classes) -> dic
             inventory[class_name] = {"source_present": False}
             continue
         code = _java_code_only(source)
-        annotations = list(re.finditer(r"@Test\b(?:\s*\((.*?)\))?", code, re.S))
+        simple_testng_test = bool(re.search(
+            r"\bimport\s+org\.testng\.annotations\.(?:Test|\*)\s*;", code))
+        pattern = (
+            r"@(?:org\.testng\.annotations\.Test|Test)\b(?:\s*\((.*?)\))?"
+            if simple_testng_test else
+            r"@org\.testng\.annotations\.Test\b(?:\s*\((.*?)\))?"
+        )
+        annotations = list(re.finditer(pattern, code, re.S))
         disabled = 0
         for match in annotations:
             args = match.group(1) or ""
@@ -461,10 +474,11 @@ def _d22_disabled_method_present(repo: Path, base: str, modules) -> bool:
             source = git(repo, "show", "{}:{}".format(base, path))
         except ExecutionError:
             continue
+        code = _java_code_only(source)
         marker = re.compile(
             r"@Test\s*\(\s*enabled\s*=\s*false\s*\).*?\b{}\s*\(".format(
                 re.escape(D22_DISABLED_METHOD)), re.S)
-        return bool(marker.search(source))
+        return bool(marker.search(code))
     return False
 
 
