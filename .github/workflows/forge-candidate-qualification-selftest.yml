@@ -4,8 +4,8 @@ name: Forge D17 qualification gate selftest
 # definition on master, so a change to the gate cannot qualify itself. This
 # workflow exercises the changed gate code on the pull request instead: the
 # verdict-rule controls, the mutation check that proves those controls are not
-# vacuous, and the runtime controls that run the real trusted driver and TestNG,
-# including a candidate test executed as a separate sandbox account.
+# vacuous, and runtime controls that run the receiptless trusted child harness
+# against hostile candidate production bytecode under a separate sandbox UID.
 #
 # It grants no qualification credit and needs no secret.
 
