@@ -1,8 +1,5 @@
 {
-  "framework_blockers": [
-    "forge.card.CardMockTestCase",
-    "forge.gamesimulationtests.BaseGameSimulationTest"
-  ],
+  "framework_blockers": [],
   "intentionally_disabled_source_classes": {
     "forge.BoosterDraft1Test": "0f72bfbdb62cb9f573b52a292aa28aab921c8c113ef1c7dfd37fcbea880b0d98",
     "forge.BoosterDraftTest": "184ed5e984c3b987397dd6d297e6376884444afa9a738e0a6468ccbc42cadc50",
@@ -17,17 +14,8 @@
     "forge.gui.game.CardDetailPanelTest": "856a70af025c86752d5ea96aceee3999b1ad66ed06b69429c288ba48f845cb49",
     "forge.model.FModelTest": "020e924cbeb55b4b261e0ec6c201cc3c51049dac9cf6408761116b68569a2a4c"
   },
-  "note": "D20 visibility baseline only. D24 owns PowerMock migration/remediation. Any new missing source test class or any baseline entry that starts running must make the D20 validator red until this list is explicitly reviewed. Explicit2026-10-04 adjudication:12 additional pre-existing TestNG-disabled classes are separate hash-bound NOT_RUN debt. Any source drift, removal or observed execution requires review. This never grants coverage PASS.",
-  "owner_issue": "moeendres-png/commander-playtest-lab#528",
+  "note": "D20 class-presence visibility baseline after D24 integration. The eight formerly silent PowerMock-derived concrete classes are now observed on Java 17 and Java 21 and are no longer class-level NOT_RUN; the two former PowerMock base nodes are abstract zero-test fixtures and are no longer framework blockers. Twelve additional pre-existing TestNG-disabled source classes remain separate SHA-256-bound NOT_RUN debt: any source drift, removal or observed execution requires review. D20 does not attest method-level completeness (UNKNOWN_NOT_ATTESTED). D24 separately pins three intentionally disabled methods: CR104.3f plus two CardDbPerformance benchmarks; they receive no PASS credit.",
+  "owner_issue": "moeendres-png/commander-playtest-lab#501",
   "schema": "forge.known-not-run/2",
-  "source_test_classes_not_observed": [
-    "forge.card.CardDbCardMockTestCase",
-    "forge.card.CardDbLazyCardLoadingCardMockTestCase",
-    "forge.card.CardDbPerformanceTests",
-    "forge.card.CardDbWithNoImageCardDbMockTestCase",
-    "forge.card.CardEditionCollectionCardMockTestCase",
-    "forge.deck.DeckRecognizerTest",
-    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103",
-    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
-  ]
+  "source_test_classes_not_observed": []
 }
