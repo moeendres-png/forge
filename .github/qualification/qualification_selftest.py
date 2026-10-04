@@ -1413,16 +1413,43 @@ class ParentReceiptAuthority(unittest.TestCase):
         with self.assertRaises(trusted_execution.ExecutionError):
             trusted_execution.verify_trusted_testng([other])
 
-    def test_candidate_test_output_and_installed_siblings_never_reach_the_classpath(self) -> None:
-        root = Path("/srv/d17-sandbox/candidate")
-        entries = [
-            "/srv/d17-sandbox/candidate/forge-game/target/test-classes",
-            "/srv/d17-sandbox/home/.m2/repository/forge/forge-core/2.0/forge-core-2.0.jar",
-            "/srv/d17-sandbox/home/.m2/repository/org/testng/testng/7.10.2/testng-7.10.2.jar",
-        ]
-        kept, dropped = trusted_execution.sanitize_classpath(entries, root, [])
-        self.assertEqual(kept, ["/srv/d17-sandbox/home/.m2/repository/org/testng/testng/7.10.2/testng-7.10.2.jar"])
-        self.assertEqual(sorted(dropped), sorted(entries[:2]))
+    def test_candidate_test_output_is_dropped_and_sibling_is_replaced_in_place(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-sibling-replace-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = tmp / "candidate"
+        candidate_core = root / "forge-core" / "target" / "classes"
+        candidate_core.mkdir(parents=True)
+        test_classes = root / "forge-game" / "target" / "test-classes"
+        test_classes.mkdir(parents=True)
+        sibling = tmp / "home" / ".m2" / "repository" / "forge" / "forge-core" / "2.0" / "forge-core-2.0.jar"
+        sibling.parent.mkdir(parents=True)
+        sibling.write_bytes(b"stale")
+        external = tmp / "home" / ".m2" / "repository" / "org" / "example" / "dep.jar"
+        external.parent.mkdir(parents=True)
+        external.write_bytes(b"dep")
+        entries = [str(external), str(sibling), str(test_classes)]
+        kept, dropped = trusted_execution.sanitize_classpath(
+            entries, root, {"forge-core": "forge-core"})
+        self.assertEqual(kept, [str(external), str(candidate_core)])
+        self.assertEqual(sorted(dropped), sorted([str(sibling), str(test_classes)]))
+
+    def test_unknown_or_missing_forge_sibling_fails_closed(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-sibling-refuse-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = tmp / "candidate"
+        root.mkdir()
+        sibling = tmp / "home" / ".m2" / "repository" / "forge" / "unknown" / "1" / "unknown.jar"
+        sibling.parent.mkdir(parents=True)
+        sibling.write_bytes(b"stale")
+        with self.assertRaises(trusted_execution.ExecutionError):
+            trusted_execution.sanitize_classpath(
+                [str(sibling)], root, {"forge-core": "forge-core"})
+        known = tmp / "home" / ".m2" / "repository" / "forge" / "forge-core" / "1" / "forge-core.jar"
+        known.parent.mkdir(parents=True)
+        known.write_bytes(b"stale")
+        with self.assertRaises(trusted_execution.ExecutionError):
+            trusted_execution.sanitize_classpath(
+                [str(known)], root, {"forge-core": "forge-core"})
 
 
 class RedForgedCandidateArtifacts(EvidenceCase):
@@ -1805,8 +1832,13 @@ class TrustedOrchestratorControls(unittest.TestCase):
             "reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)",
             source,
         )
-        self.assertIn("candidate_root, reactor_modules)", source)
+        self.assertIn(
+            "reactor_artifacts = trusted_reactor_artifacts(trusted_repo, args.comparison_base)",
+            source,
+        )
+        self.assertIn("candidate_root, reactor_artifacts)", source)
         self.assertIn('"trusted_reactor_modules": reactor_modules', source)
+        self.assertIn('"trusted_reactor_artifacts": reactor_artifacts', source)
 
     def test_trusted_reactor_module_inventory_is_recursive(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="forge-d17-reactor-"))
