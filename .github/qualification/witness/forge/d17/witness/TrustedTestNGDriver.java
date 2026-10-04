@@ -177,7 +177,11 @@ public final class TrustedTestNGDriver {
             return;
         }
 
-        if (counter.failures() > 0) {
+        // TestNG also reports configuration failures in its status word;
+        // those must not disappear merely because no test-method failure record
+        // carried them. HAS_FAILURE is bit 1; HAS_SKIPPED is handled below by
+        // the counter's explicit skip-class policy.
+        if (counter.failures() > 0 || (testng.getStatus() & 1) != 0) {
             System.exit(TEST_FAILURE);
             return;
         }
