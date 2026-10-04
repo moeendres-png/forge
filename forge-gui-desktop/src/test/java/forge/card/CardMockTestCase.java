@@ -11,6 +11,7 @@ import javax.imageio.ImageIO;
 import org.apache.commons.lang3.StringUtils;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.testng.ITestResult;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 
@@ -18,6 +19,7 @@ import forge.ImageCache;
 import forge.ImageKeys;
 import forge.Singletons;
 import forge.StaticData;
+import forge.d24.D24ExecutionGuardTest;
 import forge.gamesimulationtests.util.CardDatabaseHelper;
 import forge.gui.GuiBase;
 import forge.gui.interfaces.IGuiBase;
@@ -164,7 +166,8 @@ public abstract class CardMockTestCase {
     }
 
     @AfterMethod(alwaysRun = true)
-    protected void releaseMocks() {
+    protected void releaseMocks(final ITestResult result) {
+        D24ExecutionGuardTest.recordAffectedResult(result);
         closeStaticMocks();
         restoreLocalizer();
     }
