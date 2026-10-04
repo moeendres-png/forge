@@ -502,11 +502,14 @@ def verify_seal(document: dict) -> list[dict]:
     return problems
 
 
-def integrity(repo: Path, sha: str, rel_dir: str, seals: list[Path], user: str, probe_paths: list[Path]) -> dict:
+def integrity(repo: Path, sha: str, rel_dir: str, seals: list[Path], user: str,
+              probe_paths: list[Path], additional_users=()) -> dict:
+    users = [user] + [u for u in additional_users if u and u != user]
     doc = {
         "schema": SCHEMA_INTEGRITY,
         "status": "UNKNOWN",
         "user": user,
+        "users": users,
         "trusted_sha": sha,
         "trusted_tree": None,
         "seals": [],
@@ -528,14 +531,30 @@ def integrity(repo: Path, sha: str, rel_dir: str, seals: list[Path], user: str, 
             doc["seals"].append({"seal": str(seal_path), "problems": problems})
             if problems:
                 doc["violations"].append("sealed_evidence_changed: {}".format(problems[:5]))
-        survivors = alive(user)
-        doc["surviving_candidate_processes"] = survivors
-        if survivors:
-            doc["violations"].append("candidate_process_survived: {}".format(survivors[:5]))
-        writable = writable_by(user, probe_paths) + path_probe_findings(user)
-        doc["candidate_writable_trusted_paths"] = writable
-        if writable:
-            doc["violations"].append("trusted_path_writable_by_candidate: {}".format(writable[:5]))
+        survivors_by_user = {}
+        writable_by_user = {}
+        all_survivors = []
+        all_writable = []
+        for candidate_user in users:
+            survivors = alive(candidate_user)
+            survivors_by_user[candidate_user] = survivors
+            if survivors:
+                all_survivors.extend(["{}:{}".format(candidate_user, item) for item in survivors])
+                doc["violations"].append(
+                    "candidate_process_survived[{}]: {}".format(
+                        candidate_user, survivors[:5]))
+            writable = writable_by(candidate_user, probe_paths) + path_probe_findings(candidate_user)
+            writable_by_user[candidate_user] = writable
+            if writable:
+                all_writable.extend(
+                    [{"user": candidate_user, **item} for item in writable])
+                doc["violations"].append(
+                    "trusted_path_writable_by_candidate[{}]: {}".format(
+                        candidate_user, writable[:5]))
+        doc["surviving_candidate_processes"] = all_survivors
+        doc["surviving_candidate_processes_by_user"] = survivors_by_user
+        doc["candidate_writable_trusted_paths"] = all_writable
+        doc["candidate_writable_trusted_paths_by_user"] = writable_by_user
     except (SandboxError, OSError, ValueError, json.JSONDecodeError) as exc:
         doc["violations"].append("integrity_unverifiable: {}".format(exc))
         doc["status"] = "UNKNOWN"
@@ -651,7 +670,7 @@ def cmd_seal(args) -> int:
 
 def cmd_verify(args) -> int:
     doc = integrity(Path(args.repo), args.trusted_sha, args.rel_dir, [Path(s) for s in args.seal],
-                    args.user, [Path(p) for p in args.probe])
+                    args.user, [Path(p) for p in args.probe], args.additional_user)
     _write(args.out, doc)
     print("INTEGRITY = {}{}".format(doc["status"], " ({})".format("; ".join(doc["violations"])[:400]) if doc["violations"] else ""))
     return {"OK": 0, "VIOLATION": 1}.get(doc["status"], 2)
@@ -694,6 +713,7 @@ def main() -> int:
 
     v = sub.add_parser("verify")
     v.add_argument("--user", default=CANDIDATE_USER)
+    v.add_argument("--additional-user", action="append", default=[])
     v.add_argument("--repo", required=True)
     v.add_argument("--trusted-sha", required=True)
     v.add_argument("--rel-dir", default=".github/qualification")
