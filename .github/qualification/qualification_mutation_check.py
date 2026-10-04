@@ -228,6 +228,13 @@ MUTATIONS = [
         "the trusted denominator would silently shrink and let tests be deleted",
     ),
     Mutation(
+        "ignore-module-surefire-explicit-includes",
+        "trusted_execution.py",
+        "    if explicit:\n        return explicit\n",
+        "    if explicit:\n        return list(TEST_INCLUDE_PATTERNS)\n",
+        "D24-restored non-default test classes would be omitted from execution",
+    ),
+    Mutation(
         "use-candidate-test-source-as-qualification-authority",
         "trusted_execution.py",
         "    return comparison_base\n\n\ndef cmd_execute",
