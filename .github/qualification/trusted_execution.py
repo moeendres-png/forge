@@ -969,6 +969,21 @@ def cmd_surface(args) -> int:
     return 0
 
 
+def trusted_test_source_commit(comparison_base: str, candidate_sha: str) -> str:
+    """The only source commit from which qualification test bodies may be compiled.
+
+    Candidate-owned tests are data outside the authority boundary.  Keeping this
+    as an explicit contract makes source-deletion/body-weakening controls
+    testable and mutation-checkable.
+    """
+    if comparison_base == candidate_sha:
+        # Equality can legitimately occur for an honest default-branch candidate;
+        # authority still comes from the comparison-base role, never from the
+        # candidate role.
+        return comparison_base
+    return comparison_base
+
+
 def cmd_execute(args) -> int:
     import sandbox
 
@@ -994,6 +1009,7 @@ def cmd_execute(args) -> int:
         "driver_class": DRIVER_CLASS,
         "candidate_execution_identity": args.sandbox_user,
         "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
+        "trusted_test_source_sha": trusted_test_source_commit(args.comparison_base, args.candidate_sha),
         "candidate_test_sources_used_for_credit": False,
         "hostile_bytecode_containment_required": True,
         "ledger_authentication_scheme": "HMAC-SHA256 chain behind mandatory code-domain containment",
@@ -1038,7 +1054,9 @@ def cmd_execute(args) -> int:
         # 3. Trusted compilation of the comparison-base test policy.  Candidate
         # test source is never executed for qualification credit.
         export = work / "trusted-tests-export"
-        sandbox.export_commit(trusted_repo, args.comparison_base, export)
+        sandbox.export_commit(
+            trusted_repo, trusted_test_source_commit(args.comparison_base, args.candidate_sha), export
+        )
         # Runtime working-directory data comes from an immutable exact-candidate
         # Git export rather than from the candidate-writable build tree.
         run_export = work / "candidate-runtime-export"
