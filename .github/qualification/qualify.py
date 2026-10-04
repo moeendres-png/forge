@@ -60,7 +60,7 @@ from pathlib import Path
 
 REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/2"
 EXECUTION_MANIFEST_SCHEMA = "forge.candidate-qualification.execution-manifest/2"
-WITNESS_SCHEMA = "forge.d17.witness/2"
+WITNESS_SCHEMA = "forge.d17.parent-os-receipt/1"
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -78,10 +78,10 @@ VERDICT_KEYS = ("verdict", "status", "result", "outcome", "passed", "success")
 #: not a broken launch; its skips are judged separately by the skip policy, and
 #: its failures are judged by the trusted witness rather than by the exit code.
 #: Any other code (or unparseable totals) means the launch itself did not finish.
-TESTNG_LAUNCH_COMPLETED_CODES = (0, 2)
+TESTNG_LAUNCH_COMPLETED_CODES = (0,)
 
-#: The orchestrator's verdict on a ledger's HMAC chain; nothing else is credit.
-LEDGER_AUTHENTICATED = "HMAC_CHAIN_VERIFIED"
+#: Only a ledger created by the external trusted parent process is credit.
+LEDGER_AUTHENTICATED = "TRUSTED_PARENT_OS_RECEIPT"
 CONTAINMENT_ENFORCED = "SECURITY_MANAGER_ENFORCED"
 CONTAINMENT_UNAVAILABLE = "UNAVAILABLE"
 INTEGRITY_SCHEMA = "forge.candidate-qualification.integrity/1"
@@ -173,7 +173,11 @@ def read_witness(path: Path, module: str, nonce: str) -> dict:
             "witness module is {!r} but was launched for {!r}".format(header.get("module"), module)
         )
     if header.get("nonce") != nonce:
-        raise QualificationError("witness nonce does not match the trusted run nonce")
+        raise QualificationError("receipt run id does not match the trusted parent run")
+    if header.get("authority") != "trusted_parent_os_process":
+        raise QualificationError("receipt was not created by the trusted parent OS process")
+    if summary.get("authority") != "trusted_parent_os_process":
+        raise QualificationError("receipt summary lacks trusted parent OS authority")
 
     # Sequence must be gap-free and start at zero, so truncated or spliced
     # ledgers cannot validate.
@@ -309,6 +313,23 @@ def derive_verdict(
         build_definition_ok,
         "divergence={} maven_repository_authority={}".format(
             build_divergence, maven_authority),
+    )
+
+    receipt_run_id = manifest.get("receipt_run_id")
+    manifest_receipt_authority_ok = (
+        manifest.get("receipt_authority") == "TRUSTED_PARENT_OS_PROCESS"
+        and manifest.get("candidate_jvm_receipt_credentials") is False
+        and isinstance(receipt_run_id, str) and bool(receipt_run_id)
+        and receipt_run_id == manifest.get("nonce")
+    )
+    signal(
+        "external_parent_receipt_authority",
+        manifest_receipt_authority_ok,
+        "authority={!r} child_credentials={!r} run_id_bound={}".format(
+            manifest.get("receipt_authority"),
+            manifest.get("candidate_jvm_receipt_credentials"),
+            receipt_run_id == manifest.get("nonce") if isinstance(receipt_run_id, str) else False,
+        ),
     )
 
     # --- 3. The required surface is genuinely non-empty --------------------- #
@@ -511,6 +532,20 @@ def derive_verdict(
         ),
     )
 
+    module_receipt_authority = {}
+    for module in expected_modules:
+        entry = launch_entries.get(module) or {}
+        module_receipt_authority[module] = (
+            entry.get("receipt_authority") == "TRUSTED_PARENT_OS_PROCESS"
+            and entry.get("candidate_jvm_receipt_credentials") is False
+            and entry.get("receipt_run_id") == receipt_run_id
+        )
+    signal(
+        "module_receipts_bound_to_external_parent",
+        bool(module_receipt_authority) and all(module_receipt_authority.values()),
+        "module receipt authority={}".format(module_receipt_authority),
+    )
+
     # --- 12. Every credited ledger is the orchestrator-authenticated copy --- #
     digests = ledger_digests or {}
     unauthenticated = {}
@@ -661,6 +696,14 @@ def derive_verdict(
         )
     elif not by_name["no_failed_cases"]["satisfied"]:
         verdict, reason = FAIL, "trusted execution witness observed failing tests"
+    elif not by_name["external_parent_receipt_authority"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "credited execution is not bound to an external trusted parent receipt authority"
+        )
+    elif not by_name["module_receipts_bound_to_external_parent"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "one or more credited module receipts are not bound to the external trusted parent"
+        )
     elif not by_name["required_surface_non_empty"]["satisfied"]:
         verdict, reason = NOT_RUN, "no required surface was enumerated from the trusted base"
     elif not by_name["witness_ledgers_present"]["satisfied"]:
@@ -684,7 +727,7 @@ def derive_verdict(
         )
     elif not by_name["witness_ledgers_authenticated"]["satisfied"]:
         verdict, reason = FAIL, (
-            "a credited witness ledger is not the orchestrator-authenticated copy; "
+            "a credited receipt ledger is not the trusted parent-owned copy; "
             "see witness_ledgers_authenticated"
         )
     elif not by_name["hostile_candidate_bytecode_contained"]["satisfied"]:
