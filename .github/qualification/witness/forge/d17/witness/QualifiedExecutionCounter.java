@@ -26,6 +26,7 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
     private final Map<String, Integer> passCounts = new TreeMap<String, Integer>();
     private final Map<String, Integer> failureCounts = new TreeMap<String, Integer>();
     private final Map<String, Integer> skipCounts = new TreeMap<String, Integer>();
+    private final Map<String, Integer> methodCounts = new TreeMap<String, Integer>();
     private final Set<ITestResult> dispatched =
             Collections.newSetFromMap(new IdentityHashMap<ITestResult, Boolean>());
     private volatile Properties pinned;
@@ -70,6 +71,9 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         String className = result.getTestClass() == null
                 ? result.getInstance().getClass().getName()
                 : result.getTestClass().getName();
+        String methodName = result.getMethod() == null
+                ? "<unknown>" : result.getMethod().getMethodName();
+        bump(methodCounts, className + "#" + methodName);
         boolean invoked = dispatched.remove(result) && !runtimeAltered();
         int status = result.getStatus();
         invocations++;
@@ -120,6 +124,10 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
                     + entry.getValue().intValue()));
         }
         return total;
+    }
+
+    Map<String, Integer> perMethodTotal() {
+        return Collections.unmodifiableMap(methodCounts);
     }
 
     Set<String> skipClasses() {
