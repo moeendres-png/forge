@@ -103,7 +103,11 @@ public class FirstOptionRatchetTest {
                 if (name.equals("FirstOptionRatchetTest")) {
                     continue;
                 }
-                final Matcher m = FIRST_OPTION.matcher(new String(Files.readAllBytes(file), StandardCharsets.UTF_8));
+                final String source = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+                if (hasUnicodeEscape(source)) {
+                    throw new AssertionError(name + ": raw Java Unicode escape is unsupported by the lexical ratchet");
+                }
+                final Matcher m = FIRST_OPTION.matcher(source);
                 int count = 0;
                 while (m.find()) {
                     count++;
@@ -162,20 +166,26 @@ public class FirstOptionRatchetTest {
     private static final int PRODUCTION_FORCED_SINGLETONS = 34;
 
     /**
-     * Every other production pick, pinned by file and exact (whitespace-collapsed)
-     * line, with how often it occurs and why it is not a first-option choice.
+     * Every other production pick, pinned by file, exact line number and exact
+     * whitespace-collapsed line. Moving or changing a pinned line forces
+     * deliberate re-review; broader surrounding semantics remain outside this
+     * syntactic gate (FIRST_OPTION_RATCHET.md).
      */
     private static final String[][] PRODUCTION_EXCEPTIONS = {
-            {"BridgeCostDecisionMaker.java", "final Card first = picked.getFirst();", "2",
-                    "reads back the pilot's own one-card frame answer (frameCostCards max 1), not an option list"},
-            {"BridgeCostDecisionMaker.java", "&& payable.getZone() == player.getZone(cost.getFrom().get(0))", "1",
+            {"BridgeCostDecisionMaker.java", "260", "final Card first = picked.getFirst();",
+                    "reads back the pilot's own one-card discard frame answer (frameCostCards max 1), not an option list"},
+            {"BridgeCostDecisionMaker.java", "322",
+                    "&& payable.getZone() == player.getZone(cost.getFrom().get(0))",
                     "the cost's source zone, not a decision option"},
-            {"ExternalPlayerController.java", "targetOptions, decision.getTotalAmount(), decision.getRecipients().get(0)", "1",
+            {"BridgeCostDecisionMaker.java", "513", "final Card first = picked.getFirst();",
+                    "reads back the pilot's own one-card sacrifice frame answer (frameCostCards max 1), not an option list"},
+            {"ExternalPlayerController.java", "1512",
+                    "targetOptions, decision.getTotalAmount(), decision.getRecipients().get(0)",
                     "minimum amount of the engine's divided-allocation decision; every recipient carries the same"
                             + " minPerTarget (DividedAllocationDecision), so it is not a choice"},
-            {"ExternalPlayerController.java", "single.add(spells.get(0));", "1",
+            {"ExternalPlayerController.java", "2366", "single.add(spells.get(0));",
                     "forced singleton guarded by spells.size() == num && num == 1"},
-            {"SemanticReplay.java", "return matches.get(0);", "1",
+            {"SemanticReplay.java", "613", "return matches.get(0);",
                     "replay match proven unique: throws when no option or more than one option matches"},
     };
 
@@ -199,6 +209,20 @@ public class FirstOptionRatchetTest {
             this.text = text;
             this.forced = forced;
         }
+    }
+
+    /**
+     * Raw Java Unicode escapes are rejected rather than partially interpreted:
+     * Java translates them before lexical analysis, while this ratchet is only
+     * a bounded source-text scanner.
+     */
+    static boolean hasUnicodeEscape(String source) {
+        for (int i = 0; i + 1 < source.length(); i++) {
+            if (source.charAt(i) == '\\' && source.charAt(i + 1) == 'u') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Comments, text blocks, string and char literals blanked to spaces; offsets and newlines kept. */
@@ -328,18 +352,23 @@ public class FirstOptionRatchetTest {
         try (Stream<Path> files = Files.walk(mainSources())) {
             for (Path file : (Iterable<Path>) files.filter(p -> p.toString().endsWith(".java"))::iterator) {
                 final String source = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+                if (hasUnicodeEscape(source)) {
+                    problems.add(file.getFileName()
+                            + ": raw Java Unicode escape is unsupported by the lexical ratchet");
+                    continue;
+                }
                 for (Site site : sites(source)) {
                     if (site.forced) {
                         forced++;
                     } else {
-                        exceptions.merge(file.getFileName() + "|" + site.text, 1, Integer::sum);
+                        exceptions.merge(file.getFileName() + "|" + site.line + "|" + site.text, 1, Integer::sum);
                     }
                 }
             }
         }
         final Map<String, Integer> pinned = new TreeMap<>();
         for (String[] exception : PRODUCTION_EXCEPTIONS) {
-            pinned.put(exception[0] + "|" + exception[1], Integer.parseInt(exception[2]));
+            pinned.put(exception[0] + "|" + exception[1] + "|" + exception[2], 1);
         }
         for (Map.Entry<String, Integer> entry : exceptions.entrySet()) {
             final int allowed = pinned.getOrDefault(entry.getKey(), 0);
@@ -371,6 +400,7 @@ public class FirstOptionRatchetTest {
     public void productionGateIsNotVacuous() {
         Assert.assertTrue(only("if (options.size() == 1) {\n    return options.get(0);\n}").forced);
         Assert.assertTrue(only("if (legal.size() == 1 && !isOptional) {\n    return legal.get(0);\n}").forced);
+        Assert.assertTrue(only("if (legal.size() == 1) {\n    return legal\n            .get(0);\n}").forced);
         Assert.assertTrue(only("} else if (subsets.size() == 1) {\n    if (x) { y(); }\n"
                 + "    return new ArrayList<>(subsets.get(0));\n}").forced);
 
@@ -382,11 +412,13 @@ public class FirstOptionRatchetTest {
                 "return legal.stream().findAny().orElseThrow();",
                 "return Iterables.getFirst(options, null);",
                 "return frame.getOptions().get(0);",
+                "return options.getFirst();",
                 "return options.getLast();",
                 "return spells.iterator().next();",
                 "return legal.remove(0);",
                 "return legal.removeFirst();",
                 "return legal.get(0x0);",
+                "return legal.get(0L);",
                 "return legal.get((0));",
                 "return legal.listIterator().next();",
                 "return sorted.first();",
@@ -402,6 +434,7 @@ public class FirstOptionRatchetTest {
                 "if (!(legal.size() == 1)) {\n    return legal.get(0);\n}",
                 "if (legal.size() == 1) {\n    audit();\n}\nreturn legal.get(0);",
                 "// legal.size() == 1\nreturn legal.get(0);",
+                "String guard = \"if (legal.size() == 1) {\";\nreturn legal.get(0);",
                 "if (illegal.size() == 1) {\n    return legal.get(0);\n}",
                 "if (!subsets.isEmpty()) {\n    return subsets.get(0);\n}",
                 "if (legal.size() == 10) {\n    return legal.get(0);\n}",
@@ -412,6 +445,10 @@ public class FirstOptionRatchetTest {
                 "String s = \"\"\"\n    ;\n    if (legal.size() == 1) {\n    \"\"\";\nreturn legal.get(0);"}) {
             Assert.assertFalse(only(fake).forced, fake);
         }
+
+        // Java Unicode translation is intentionally unsupported and fails closed.
+        Assert.assertTrue(hasUnicodeEscape("class X { // " + '\\' + "u0061 }"));
+        Assert.assertFalse(hasUnicodeEscape("return legal.get(0);"));
 
         // Comments, literals and text blocks are not code, and code after a text block is.
         Assert.assertTrue(sites("// return options.get(0);\nString s = \"options.get(0)\";").isEmpty());
