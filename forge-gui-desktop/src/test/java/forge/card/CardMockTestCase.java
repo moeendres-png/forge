@@ -2,44 +2,41 @@ package forge.card;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Enumeration;
-import java.util.Locale;
-import java.util.ResourceBundle;
+import java.util.List;
 
 import javax.imageio.ImageIO;
 
 import org.apache.commons.lang3.StringUtils;
+import org.mockito.MockedStatic;
 import org.mockito.Mockito;
-import org.powermock.api.mockito.PowerMockito;
-import org.powermock.core.classloader.annotations.PowerMockIgnore;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.core.classloader.annotations.SuppressStaticInitializationFor;
-import org.powermock.modules.testng.PowerMockTestCase;
-//import org.testng.IObjectFactory;
+import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
-//import org.testng.annotations.ObjectFactory;
 
 import forge.ImageCache;
 import forge.ImageKeys;
 import forge.Singletons;
 import forge.StaticData;
 import forge.gamesimulationtests.util.CardDatabaseHelper;
+import forge.gui.GuiBase;
+import forge.gui.interfaces.IGuiBase;
 import forge.item.PaperCard;
 import forge.localinstance.properties.ForgeConstants;
 import forge.localinstance.properties.ForgePreferences;
+import forge.localinstance.properties.ForgeProfileProperties;
 import forge.model.FModel;
 import forge.util.Localizer;
 import forge.util.TextUtil;
 
-@PrepareForTest(value = { FModel.class, Singletons.class, ResourceBundle.class, ImageCache.class, ImageIO.class,
-        ImageKeys.class, ForgeConstants.class, Localizer.class })
-@SuppressStaticInitializationFor({ "forge.ImageCache", "forge.localinstance.properties.ForgeConstants" })
-@PowerMockIgnore({ "javax.xml.*", "org.xml.sax.*", "com.sun.org.apache.xerces.*", "org.w3c.dom.*",
-        "org.springframework.context.*", "org.apache.log4j.*", "jdk.internal.reflect.*", "javax.imageio.*" })
-public class CardMockTestCase extends PowerMockTestCase {
+public class CardMockTestCase {
 
     public static final String MOCKED_LOCALISED_STRING = "any localised string";
+
+    private final List<MockedStatic<?>> staticMocks = new ArrayList<>();
+    private MockedStatic<FModel> fModelMock;
+    private Localizer previousLocalizer;
+    private boolean previousLocalizerCaptured;
 
     protected static String getUserDir() {
         // Adapted - reduced version from ForgeProfileProperties (which is private)
@@ -65,127 +62,135 @@ public class CardMockTestCase extends PowerMockTestCase {
         return fallbackDataDir;
     }
 
-    protected void initForgeConstants() throws IllegalAccessException {
-        PowerMockito.mockStatic(ForgeConstants.class);
-        // Path Sep
-        Field fPathSep = PowerMockito.field(ForgeConstants.class, "PATH_SEPARATOR");
-        fPathSep.set(ForgeConstants.class, File.separator);
-        // Assets Dir
-        String assetDir = "../forge-gui/";
-        Field fAssetsDir = PowerMockito.field(ForgeConstants.class, "ASSETS_DIR");
-        fAssetsDir.set(ForgeConstants.class, assetDir);
-        // User Dir
-        String homeDir = CardMockTestCase.getUserDir();
-        Field fUserDir = PowerMockito.field(ForgeConstants.class, "USER_DIR");
-        fUserDir.set(ForgeConstants.class, homeDir);
-        // User Pref Dir
-        String prefDir = homeDir + "preferences" + File.separator;
-        Field fUserPrefsDir = PowerMockito.field(ForgeConstants.class, "USER_PREFS_DIR");
-        fUserPrefsDir.set(ForgeConstants.class, prefDir);
-        // Main Pref File
-        String mainPrefFile = prefDir + "forge.preferences";
-        Field fMainPrefFile = PowerMockito.field(ForgeConstants.class, "MAIN_PREFS_FILE");
-        fMainPrefFile.set(ForgeConstants.class, mainPrefFile);
-        // Res Dir
-        String resDir = assetDir + "res" + File.separator;
-        Field fResDir = PowerMockito.field(ForgeConstants.class, "RES_DIR");
-        fResDir.set(ForgeConstants.class, resDir);
-        // Card Data Dir
-        String cardDir = resDir + "cardsfolder" + File.separator;
-        Field fCardDataDir = PowerMockito.field(ForgeConstants.class, "CARD_DATA_DIR");
-        fCardDataDir.set(ForgeConstants.class, cardDir);
-        // Editions Dir
-        String editionsDir = resDir + "editions" + File.separator;
-        Field fEditionsDir = PowerMockito.field(ForgeConstants.class, "EDITIONS_DIR");
-        fEditionsDir.set(ForgeConstants.class, editionsDir);
-        // Block Data Dir
-        String blockDataDir = resDir + "blockdata" + File.separator;
-        Field fBlockData = PowerMockito.field(ForgeConstants.class, "BLOCK_DATA_DIR");
-        fBlockData.set(ForgeConstants.class, blockDataDir);
-        // User Custom Dir
-        String userCustomDir = homeDir + "custom" + File.separator;
-        Field fUserCustomDir = PowerMockito.field(ForgeConstants.class, "USER_CUSTOM_DIR");
-        fUserCustomDir.set(ForgeConstants.class, userCustomDir);
-        // User Custom card Dir
-        String userCustomCardDir = userCustomDir + "cards" + File.separator;
-        Field fUserCustoCardDir = PowerMockito.field(ForgeConstants.class, "USER_CUSTOM_CARDS_DIR");
-        fUserCustoCardDir.set(ForgeConstants.class, userCustomCardDir);
-        // User Custom Edition Dir
-        String userCustomEditionDir = userCustomDir + "editions" + File.separator;
-        Field fUserCustomEditionDir = PowerMockito.field(ForgeConstants.class, "USER_CUSTOM_EDITIONS_DIR");
-        fUserCustomEditionDir.set(ForgeConstants.class, userCustomEditionDir);
-        // Lang Dir
-        String langDir = resDir + "languages" + File.separator;
-        Field fLangDir = PowerMockito.field(ForgeConstants.class, "LANG_DIR");
-        fLangDir.set(ForgeConstants.class, langDir);
+    /**
+     * Initializes ForgeConstants without rewriting static-final fields. The production
+     * collaborators that normally supply profile locations are controlled only while
+     * the class initializes, then immediately restored.
+     */
+    protected void initForgeConstants() throws ClassNotFoundException {
+        final String userDir = getUserDir();
+        final String cacheDir = userDir + "cache" + File.separator;
+        final String decksDir = userDir + "decks" + File.separator;
+
+        final IGuiBase gui = Mockito.mock(IGuiBase.class);
+        Mockito.when(gui.getAssetsDir()).thenReturn("../forge-gui/");
+
+        try (MockedStatic<GuiBase> guiBaseMock = Mockito.mockStatic(GuiBase.class);
+                MockedStatic<ForgeProfileProperties> profileMock = Mockito.mockStatic(ForgeProfileProperties.class)) {
+            guiBaseMock.when(GuiBase::getInterface).thenReturn(gui);
+            guiBaseMock.when(GuiBase::isUsingAppDirectory).thenReturn(false);
+
+            profileMock.when(ForgeProfileProperties::getUserDir).thenReturn(userDir);
+            profileMock.when(ForgeProfileProperties::getCacheDir).thenReturn(cacheDir);
+            profileMock.when(ForgeProfileProperties::getCardPicsDir)
+                    .thenReturn(cacheDir + "pics" + File.separator);
+            profileMock.when(ForgeProfileProperties::getCardPicsSubDirs)
+                    .thenReturn(Collections.emptyMap());
+            profileMock.when(ForgeProfileProperties::getDecksDir).thenReturn(decksDir);
+            profileMock.when(ForgeProfileProperties::getDecksConstructedDir)
+                    .thenReturn(decksDir + "constructed" + File.separator);
+
+            Class.forName(ForgeConstants.class.getName(), true, ForgeConstants.class.getClassLoader());
+        }
     }
 
-    protected void setMock(Localizer mock) {
+    protected void setMock(final Localizer mock) {
         try {
-            Field instance = Localizer.class.getDeclaredField("instance");
+            final Field instance = Localizer.class.getDeclaredField("instance");
             instance.setAccessible(true);
-            instance.set(instance, mock);
-        } catch (Exception e) {
+            if (!previousLocalizerCaptured) {
+                previousLocalizer = (Localizer) instance.get(null);
+                previousLocalizerCaptured = true;
+            }
+            instance.set(null, mock);
+        } catch (ReflectiveOperationException e) {
             throw new RuntimeException(e);
         }
     }
 
     @BeforeMethod
     protected void initMocks() throws Exception {
-        // Loading a card also automatically loads the image, which we do not want (even
-        // if it wouldn't cause exceptions).
-        // The static initializer block in ImageCache can't fully be mocked
-        // (https://code.google.com/p/powermock/issues/detail?id=256), so we also need
-        // to mess with ImageIO...
-        initCardImageMocks();
+        closeStaticMocks();
+        restoreLocalizer();
+
         initForgeConstants();
-        // Mocking some more static stuff
         initForgePreferences();
+        initCardImageMocks();
         initializeStaticData();
     }
 
-    protected void initForgePreferences() throws IllegalAccessException {
-        PowerMockito.mockStatic(Singletons.class);
-        PowerMockito.mockStatic(FModel.class);
-        ForgePreferences forgePreferences = new ForgePreferences();
+    protected void initForgePreferences() {
+        mockStaticTracked(Singletons.class);
+        fModelMock = mockStaticTracked(FModel.class);
 
-        ResourceBundle dummyResourceBundle = new ResourceBundle() {
-            @Override
-            protected Object handleGetObject(String key) {
-                return key;
-            }
-
-            @Override
-            public Enumeration<String> getKeys() {
-                return Collections.emptyEnumeration();
-            }
-        };
-
-        PowerMockito.mockStatic(ResourceBundle.class);
-        PowerMockito.when(ResourceBundle.getBundle("en-US", Locale.ENGLISH)).thenReturn(dummyResourceBundle);
-        Localizer localizerMock = PowerMockito.mock(Localizer.class);
+        final ForgePreferences forgePreferences = new ForgePreferences();
+        final Localizer localizerMock = Mockito.mock(Localizer.class);
         setMock(localizerMock);
-        PowerMockito.field(Localizer.class, "resourceBundle").set(localizerMock, dummyResourceBundle);
-        PowerMockito.when(localizerMock.getMessage(Mockito.anyString())).thenReturn(MOCKED_LOCALISED_STRING);
-        PowerMockito.when(FModel.getPreferences()).thenReturn(forgePreferences);
+        Mockito.when(localizerMock.getMessage(Mockito.anyString())).thenReturn(MOCKED_LOCALISED_STRING);
+        fModelMock.when(FModel::getPreferences).thenReturn(forgePreferences);
+    }
+
+    protected boolean mockedCardHasImage() {
+        return true;
     }
 
     protected void initCardImageMocks() {
-        // make sure that loading images only happens in a GUI environment, so we no
-        // longer need to mock this
-        PowerMockito.mockStatic(ImageIO.class);
-        PowerMockito.mockStatic(ImageCache.class);
-        PowerMockito.mockStatic(ImageKeys.class);
-        PowerMockito.when(ImageKeys.hasImage(Mockito.any(PaperCard.class), Mockito.anyBoolean())).thenReturn(true);
+        mockStaticTracked(ImageIO.class);
+        mockStaticTracked(ImageCache.class);
+        final MockedStatic<ImageKeys> imageKeysMock = mockStaticTracked(ImageKeys.class);
+        final boolean hasImage = mockedCardHasImage();
+        imageKeysMock.when(() -> ImageKeys.hasImage(Mockito.any(PaperCard.class), Mockito.anyBoolean()))
+                .thenReturn(hasImage);
+        imageKeysMock.when(() -> ImageKeys.hasImage(Mockito.any(PaperCard.class))).thenReturn(hasImage);
     }
 
     protected void initializeStaticData() {
-        StaticData data = CardDatabaseHelper.getStaticDataToPopulateOtherMocks();
-        PowerMockito.when(FModel.getMagicDb()).thenReturn(data);
+        setMagicDb(CardDatabaseHelper.getStaticDataToPopulateOtherMocks());
     }
 
-    /*@ObjectFactory
-    public IObjectFactory getObjectFactory() {
-        return new org.powermock.modules.testng.PowerMockObjectFactory();
-    }*/
+    protected final void setMagicDb(final StaticData data) {
+        if (fModelMock == null) {
+            throw new IllegalStateException("FModel static mock is not initialized");
+        }
+        fModelMock.when(FModel::getMagicDb).thenReturn(data);
+    }
+
+    protected final <T> MockedStatic<T> mockStaticTracked(final Class<T> type) {
+        final MockedStatic<T> mock = Mockito.mockStatic(type);
+        staticMocks.add(mock);
+        return mock;
+    }
+
+    @AfterMethod(alwaysRun = true)
+    protected void releaseMocks() {
+        closeStaticMocks();
+        restoreLocalizer();
+    }
+
+    private void closeStaticMocks() {
+        for (int i = staticMocks.size() - 1; i >= 0; i--) {
+            final MockedStatic<?> mock = staticMocks.get(i);
+            if (!mock.isClosed()) {
+                mock.close();
+            }
+        }
+        staticMocks.clear();
+        fModelMock = null;
+    }
+
+    private void restoreLocalizer() {
+        if (!previousLocalizerCaptured) {
+            return;
+        }
+        try {
+            final Field instance = Localizer.class.getDeclaredField("instance");
+            instance.setAccessible(true);
+            instance.set(null, previousLocalizer);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        } finally {
+            previousLocalizer = null;
+            previousLocalizerCaptured = false;
+        }
+    }
 }
