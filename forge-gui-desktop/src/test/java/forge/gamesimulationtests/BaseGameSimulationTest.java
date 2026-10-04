@@ -11,7 +11,7 @@ import io.sentry.Sentry;
 import org.testng.Assert;
 import org.testng.annotations.BeforeMethod;
 
-public class BaseGameSimulationTest extends CardMockTestCase {
+public abstract class BaseGameSimulationTest extends CardMockTestCase {
 
     @BeforeMethod
     @Override
