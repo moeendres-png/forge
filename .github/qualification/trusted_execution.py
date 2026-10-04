@@ -82,9 +82,9 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/1"
-EXECUTION_MANIFEST_SCHEMA = "forge.candidate-qualification.execution-manifest/1"
-WITNESS_SCHEMA = "forge.d17.witness/1"
+REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/2"
+EXECUTION_MANIFEST_SCHEMA = "forge.candidate-qualification.execution-manifest/2"
+WITNESS_SCHEMA = "forge.d17.witness/2"
 
 #: Trusted JVM flags, taken from the trusted comparison base rather than from the
 #: candidate POM so that a candidate cannot remove them to change behaviour.
@@ -103,6 +103,48 @@ DEFAULT_TRUSTED_ARGLINE = [
 #: required surface matches what Forge's existing gate would have discovered.
 #: These are globs, matched with real glob semantics.
 TEST_INCLUDE_PATTERNS = ("Test*.java", "*Test.java", "*Tests.java", "*TestCase.java")
+
+# D24/#528: source tests that TestNG 7 cannot currently discover because their
+# PowerMockTestCase ancestry depends on the removed IObjectFactory API.  They are
+# source-policy obligations, not part of the executable TestNG dry-run count.
+# A class automatically leaves this gap when the trusted comparison base really
+# executes it; D17 never turns this list into PASS credit.
+D24_FRAMEWORK_BLOCKED_CLASSES = (
+    "forge.card.CardDbCardMockTestCase",
+    "forge.card.CardDbLazyCardLoadingCardMockTestCase",
+    "forge.card.CardDbPerformanceTests",
+    "forge.card.CardDbWithNoImageCardDbMockTestCase",
+    "forge.card.CardEditionCollectionCardMockTestCase",
+    "forge.deck.DeckRecognizerTest",
+    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103",
+    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+)
+D24_FRAMEWORK_BLOCKER_BASES = (
+    "forge.card.CardMockTestCase",
+    "forge.gamesimulationtests.BaseGameSimulationTest",
+)
+
+# D20/#501 read-only inventory: explicit class-level disabled source debt is a
+# separate evidence class from D24 framework NOT_RUN and from runtime stress
+# skips.  It is included only while the class exists in the trusted source tree
+# and remains absent from the executable dry-run surface.
+EXPLICIT_DISABLED_SOURCE_CLASSES = (
+    "forge.BoosterDraft1Test",
+    "forge.BoosterDraftTest",
+    "forge.GuiDownloadPicturesLQTest",
+    "forge.GuiDownloadSetPicturesLQTest",
+    "forge.PanelTest",
+    "forge.RunTest",
+    "forge.deck.generate.Generate2ColorDeckTest",
+    "forge.deck.generate.Generate3ColorDeckTest",
+    "forge.deck.generate.Generate5ColorDeckTest",
+    "forge.gui.ListChooserTest",
+    "forge.gui.game.CardDetailPanelTest",
+    "forge.model.FModelTest",
+)
+
+D22_DISABLED_CLASS = "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
+D22_DISABLED_METHOD = "test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses"
 
 WITNESS_CLASS = "forge.d17.witness.QualifiedExecutionListener"
 WITNESS_SOURCE = "witness/forge/d17/witness/QualifiedExecutionListener.java"
@@ -294,6 +336,33 @@ def _parse_testng_totals(text: str):
     }
 
 
+def _source_test_classes(repo: Path, base: str, modules) -> set:
+    found = set()
+    for module in modules:
+        listing = git(repo, "ls-tree", "-r", "--name-only", base, "--",
+                      "{}/src/test/java".format(module))
+        prefix = module + "/src/test/java/"
+        for path in listing.splitlines():
+            if path.startswith(prefix) and path.endswith(".java"):
+                found.add(path[len(prefix):-len(".java")].replace("/", "."))
+    return found
+
+
+def _d22_disabled_method_present(repo: Path, base: str, modules) -> bool:
+    suffix = D22_DISABLED_CLASS.replace(".", "/") + ".java"
+    for module in modules:
+        path = "{}/src/test/java/{}".format(module, suffix)
+        try:
+            source = git(repo, "show", "{}:{}".format(base, path))
+        except ExecutionError:
+            continue
+        marker = re.compile(
+            r"@Test\s*\(\s*enabled\s*=\s*false\s*\).*?\b{}\s*\(".format(
+                re.escape(D22_DISABLED_METHOD)), re.S)
+        return bool(marker.search(source))
+    return False
+
+
 def build_required_surface(trusted_repo: Path, base: str, modules, java, argline, xvfbrun, cp_rel) -> dict:
     log("comparison base: compile and resolve classpaths")
     compile_and_resolve(trusted_repo, modules, cp_rel, "comparison base")
@@ -315,6 +384,34 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
             surface["modules"][module]["required_skipped"],
             len(surface["modules"][module]["classes"]),
         ))
+
+    executable = {
+        name for entry in surface["modules"].values() for name in entry.get("classes", [])
+    }
+    source_classes = _source_test_classes(trusted_repo, base, modules)
+    framework_not_run = sorted(
+        name for name in D24_FRAMEWORK_BLOCKED_CLASSES
+        if name in source_classes and name not in executable
+    )
+    explicit_disabled = sorted(
+        name for name in EXPLICIT_DISABLED_SOURCE_CLASSES
+        if name in source_classes and name not in executable
+    )
+    d22_disabled = []
+    if _d22_disabled_method_present(trusted_repo, base, modules):
+        d22_disabled.append(D22_DISABLED_CLASS + "#" + D22_DISABLED_METHOD)
+    surface["coverage_gaps"] = {
+        "d24_framework_not_run_classes": framework_not_run,
+        "d24_framework_blocker_bases": [
+            name for name in D24_FRAMEWORK_BLOCKER_BASES if name in source_classes
+        ],
+        "explicitly_disabled_source_classes": explicit_disabled,
+        "d22_disabled_rules_tests": d22_disabled,
+        "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
+    }
+    surface["whole_reactor_coverage_complete"] = not (
+        framework_not_run or explicit_disabled or d22_disabled
+    )
     return surface
 
 
@@ -624,20 +721,24 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
     of the same source between modules.
     """
     result = {"scanned_classes": 0, "findings": [], "tampered_jars": [], "unverified_jars": [],
-              "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None, "launch_entries": []}
+              "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None,
+              "launch_entries": [], "candidate_code_entries": [], "trusted_dependency_entries": []}
     _scan_class_tree("trusted-compiled tests", tests_dir, result)
     candidate_root = Path(os.path.realpath(candidate_root))
     candidate_m2 = Path(os.path.realpath(candidate_m2))
     staging, launch_root, cache = freeze if freeze else (None, None, {})
 
-    def remember(key: str, rel: str, before: dict) -> None:
+    def remember(key: str, rel: str, before: dict, kind: str) -> None:
         cache[key] = {
             "rel": rel,
+            "kind": kind,
             "findings": result["findings"][len(before["findings"]):],
             "scanned": result["scanned_classes"] - before["scanned"],
         }
         if launch_root is not None:
-            result["launch_entries"].append(str(launch_root / rel))
+            frozen = str(launch_root / rel)
+            result["launch_entries"].append(frozen)
+            result[kind].append(frozen)
 
     for entry in entries:
         real = Path(os.path.realpath(entry))
@@ -647,7 +748,9 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             result["findings"].extend(hit["findings"])
             result["scanned_classes"] += hit["scanned"]
             if launch_root is not None:
-                result["launch_entries"].append(str(launch_root / hit["rel"]))
+                frozen = str(launch_root / hit["rel"])
+                result["launch_entries"].append(frozen)
+                result[hit["kind"]].append(frozen)
             continue
         before = {"findings": list(result["findings"]), "scanned": result["scanned_classes"]}
         if real.is_dir():
@@ -660,7 +763,7 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             _scan_class_tree(entry, real, result, freeze_to=(staging / rel) if staging else None)
             if staging is not None:
                 (staging / rel).mkdir(parents=True, exist_ok=True)
-            remember(key, rel, before)
+            remember(key, rel, before, "candidate_code_entries")
             continue
         if not real.exists():
             continue  # frozen launches list only what exists now
@@ -678,7 +781,7 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
                 if staging is not None:
                     (staging / rel).parent.mkdir(parents=True, exist_ok=True)
                     (staging / rel).write_bytes(theirs)
-                remember(key, rel, before)
+                remember(key, rel, before, "trusted_dependency_entries")
             continue
         if real.is_relative_to(candidate_root) and real.suffix == ".jar":
             data = _regular_file_bytes(real)
@@ -690,7 +793,7 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             if staging is not None:
                 (staging / rel).parent.mkdir(parents=True, exist_ok=True)
                 (staging / rel).write_bytes(data)
-            remember(key, rel, before)
+            remember(key, rel, before, "candidate_code_entries")
             continue
         result["unverified_jars"].append(key)
     return result
@@ -765,8 +868,9 @@ def verify_ledger(data: bytes, key: bytes, nonce: str) -> "tuple[list[str] | Non
     return lines, None
 
 
-def execute_module(candidate_root: Path, module: str, classes, launch_dir: Path, bundle: Path,
-                   testng_jars, nonce: str, java: str, argline, xvfbrun, launch_entries, dropped,
+def execute_module(run_root: Path, module: str, classes, launch_dir: Path, bundle: Path,
+                   testng_jars, nonce: str, java: str, argline, xvfbrun,
+                   candidate_code_entries, trusted_dependency_entries, dropped,
                    user: str, home: Path, evidence_witness: Path):
     """Launch one module's required classes as the sandbox account, under the trusted driver.
 
@@ -776,23 +880,32 @@ def execute_module(candidate_root: Path, module: str, classes, launch_dir: Path,
     """
     import sandbox
 
-    entries = list(launch_entries)
     staged_testng = [str(bundle / "testng" / Path(j).name) for j in testng_jars]
     tests = bundle / "tests" / module
-    full_cp = assemble_classpath(bundle / "witness", staged_testng + [str(tests)] + entries)
+    # Only trusted witness/TestNG bytecode is on the JVM system classpath.
+    # Candidate production and trusted-base tests enter through restricted,
+    # separately identified child loaders inside TrustedTestNGDriver.
+    full_cp = assemble_classpath(bundle / "witness", staged_testng)
     ledger = launch_dir / (module + ".witness.jsonl")
     cmd = list(xvfbrun) + [java] + list(argline) + [
-        "-XX:+DisableAttachMechanism", "-cp", full_cp, DRIVER_CLASS,
+        "-Djava.security.manager=allow", "-XX:+DisableAttachMechanism",
+        "-cp", full_cp, DRIVER_CLASS,
         "--module", module, "--nonce", nonce, "--ledger", str(ledger),
+        "--protected-root", str(launch_dir),
         "--output-dir", str(launch_dir / ("testng-" + module)),
+        "--trusted-test-root", str(tests),
     ]
+    for entry in candidate_code_entries:
+        cmd += ["--candidate-code", entry]
+    for entry in trusted_dependency_entries:
+        cmd += ["--trusted-dependency", entry]
     for jar in staged_testng:
         cmd += ["--trusted-jar", jar]
     for name in classes:
         cmd += ["--class", name]
     key = secrets.token_bytes(32)
     try:
-        proc = sandbox.run_candidate(user, home, candidate_root / module, cmd, timeout=7200,
+        proc = sandbox.run_candidate(user, home, run_root / module, cmd, timeout=7200,
                                      stdin_bytes=key.hex().encode("ascii") + b"\n")
         code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
     except sandbox.SandboxError as exc:
@@ -803,12 +916,17 @@ def execute_module(candidate_root: Path, module: str, classes, launch_dir: Path,
         "required_classes": list(classes),
         "launch_exit_code": code,
         "execution_identity": user,
-        "classpath_digest": hashlib.sha256(full_cp.encode("utf-8")).hexdigest(),
+        "classpath_digest": hashlib.sha256(
+            (full_cp + "\n" + "\n".join(candidate_code_entries)
+             + "\n" + "\n".join(trusted_dependency_entries)).encode("utf-8")
+        ).hexdigest(),
         "testng_totals": _parse_testng_totals(stdout + stderr),
         "testng_version_entry": os.path.basename(staged_testng[0]) if staged_testng else None,
         "stale_or_candidate_test_entries_dropped": dropped,
         "log_tail": (stdout + stderr)[-4000:],
     }
+    if code == 78:
+        entry["hostile_bytecode_containment"] = "UNAVAILABLE"
     if raw is None:
         entry["ledger_authentication"] = "MISSING"
         return entry
@@ -822,6 +940,12 @@ def execute_module(candidate_root: Path, module: str, classes, launch_dir: Path,
     entry["ledger_authentication"] = LEDGER_AUTHENTICATED
     entry["ledger_sha256"] = sha256_file(trusted_copy)
     entry["ledger_lines"] = len(lines)
+    try:
+        summary = json.loads(lines[-1])
+        entry["hostile_bytecode_containment"] = summary.get("containment")
+        entry["containment_violation"] = summary.get("containment_violation")
+    except (ValueError, IndexError):
+        entry["hostile_bytecode_containment"] = None
     return entry
 
 
@@ -869,8 +993,10 @@ def cmd_execute(args) -> int:
         "witness_source": WITNESS_SOURCE,
         "driver_class": DRIVER_CLASS,
         "candidate_execution_identity": args.sandbox_user,
-        "test_bytecode_origin": "trusted_compile_of_locked_git_export",
-        "ledger_authentication_scheme": "HMAC-SHA256 chain, per-module key on driver stdin",
+        "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
+        "candidate_test_sources_used_for_credit": False,
+        "hostile_bytecode_containment_required": True,
+        "ledger_authentication_scheme": "HMAC-SHA256 chain behind mandatory code-domain containment",
         "candidate_artifacts_used_as_evidence": False,
         "modules": {},
     }
@@ -909,9 +1035,14 @@ def cmd_execute(args) -> int:
         if build.returncode != 0:
             raise ExecutionError("candidate build failed (exit {})".format(build.returncode))
 
-        # 3. Trusted compilation of the exact-SHA test sources.
-        export = work / "export"
-        sandbox.export_commit(trusted_repo, args.candidate_sha, export)
+        # 3. Trusted compilation of the comparison-base test policy.  Candidate
+        # test source is never executed for qualification credit.
+        export = work / "trusted-tests-export"
+        sandbox.export_commit(trusted_repo, args.comparison_base, export)
+        # Runtime working-directory data comes from an immutable exact-candidate
+        # Git export rather than from the candidate-writable build tree.
+        run_export = work / "candidate-runtime-export"
+        sandbox.export_commit(trusted_repo, args.candidate_sha, run_export)
         records, scans, frozen, dropped = {}, {}, {}, {}
         for module in modules:
             entries, dropped[module] = sanitize_classpath(
@@ -943,9 +1074,11 @@ def cmd_execute(args) -> int:
                 continue
             log("executing {} ({} required classes) as {}".format(module, len(required), args.sandbox_user))
             manifest["modules"][module] = execute_module(
-                candidate_root, module, required, launch_dir, bundle, testng_jars, nonce,
-                args.java, argline, xvfbrun, scans[module]["launch_entries"], dropped[module],
-                args.sandbox_user, home, evidence_dir / "witness",
+                run_export, module, required, launch_dir, bundle, testng_jars, nonce,
+                args.java, argline, xvfbrun,
+                scans[module]["candidate_code_entries"],
+                scans[module]["trusted_dependency_entries"],
+                dropped[module], args.sandbox_user, home, evidence_dir / "witness",
             )
             log("  {} exit={} ledger={} totals={}".format(
                 module, manifest["modules"][module]["launch_exit_code"],
