@@ -1726,6 +1726,24 @@ class RedLaunchClasspathAdmission(EvidenceCase):
         self.honest()
         self.assertEqual(self.verdict()["verdict"], qualify.PASS)
 
+    def test_candidate_production_testng_reference_is_rejected_even_if_test_api(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-prod-testng-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tests = tmp / "tests"
+        candidate = tmp / "candidate"
+        out = candidate / "forge-game" / "target" / "classes" / "forge"
+        candidate_m2 = tmp / "m2"
+        trusted_m2 = tmp / "trusted-m2"
+        for path in (tests, out, candidate_m2, trusted_m2):
+            path.mkdir(parents=True)
+        (out / "Product.class").write_bytes(
+            synthetic_class(["forge/Product", "org/testng/Assert"]))
+        scan = trusted_execution.scan_launch_classpath(
+            tests, [str(candidate / "forge-game" / "target" / "classes")],
+            candidate, candidate_m2, trusted_m2)
+        problems = scan["findings"][0]["problems"]
+        self.assertIn("references org/testng/Assert", problems)
+
     def test_listener_registration_is_fail_even_with_all_tests_passing(self) -> None:
         self.honest()
         finding = [{"entry": "trusted-compiled tests", "class": "pkg/C0.class",
@@ -1833,14 +1851,14 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("candidate_code_entries", params)
         self.assertIn("trusted_dependency_entries", params)
 
-    def test_runtime_testng_allowlist_does_not_open_all_annotations(self) -> None:
+    def test_candidate_runtime_domain_cannot_load_any_testng_class(self) -> None:
         source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
                   / "Containment.java").read_text()
-        block = source.split("private static boolean allowedTestNg", 1)[1].split(
-            "private static boolean isPlatform", 1)[0]
-        self.assertNotIn('name.startsWith("org.testng.annotations.")', block)
-        self.assertIn('name.equals("org.testng.annotations.Test")', block)
-        self.assertNotIn('name.equals("org.testng.annotations.Listeners")', block)
+        candidate = source.split("static final class CandidateCodeLoader", 1)[1].split(
+            "static final class TrustedTestLoader", 1)[0]
+        self.assertIn('if (name.startsWith("org.testng."))', candidate)
+        self.assertIn('denyAuthority("candidate attempted to load TestNG class " + name)', candidate)
+        self.assertNotIn("allowedTestNg(", source)
 
     def test_candidate_loader_parent_cannot_expose_trusted_dependency_bridge(self) -> None:
         source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
