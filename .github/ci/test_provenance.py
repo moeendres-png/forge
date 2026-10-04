@@ -695,8 +695,9 @@ class Controls(unittest.TestCase):
 
     def test_worktree_drift_and_untracked_test_input_are_red(self):
         self.java('example.RealTest')
+        (self.root/'.gitignore').write_text('exit.txt\nknown.json\nmodule/target/\n')
         subprocess.run(['git','init','-q',str(self.root)],check=True)
-        subprocess.run(['git','-C',str(self.root),'add','pom.xml','module/src'],check=True)
+        subprocess.run(['git','-C',str(self.root),'add','pom.xml','.gitignore','module/src'],check=True)
         subprocess.run(['git','-C',str(self.root),'-c','user.name=Control','-c','user.email=control@example.invalid','commit','-qm','source identity control'],check=True)
         clean=self.orig(self.root);self.assertEqual([],clean['errors'])
         source=self.root/'module/src/test/java/example/RealTest.java'
