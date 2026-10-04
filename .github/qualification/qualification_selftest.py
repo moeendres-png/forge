@@ -1035,6 +1035,8 @@ class RedTrustDomain(EvidenceCase):
             per[klass] = per.get(klass, 0) + 1
         lines.append(json.dumps({"kind": "summary", "tests": len(records), "failed": 0, "skipped": 0,
                                  "per_class_total": per, "skip_classes": {}, "fail_classes": {},
+                                 "containment": qualify.CONTAINMENT_ENFORCED,
+                                 "containment_violation": "null",
                                  "last_seq": len(records) - 1}, sort_keys=True))
         path.write_text("\n".join(lines) + "\n")
         evidence = self.verdict(manifest=manifest, authenticated=False)
