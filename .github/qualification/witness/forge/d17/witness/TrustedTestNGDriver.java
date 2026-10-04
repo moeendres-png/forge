@@ -16,31 +16,23 @@ import org.testng.TestNG;
 /**
  * Trusted entry point of every D17 candidate test JVM.
  *
- * <p>Compiled from the trusted default branch against the pinned, digest-checked
- * TestNG, staged read-only, and placed first on the classpath. It runs as the
- * separate candidate account, so it holds no write authority over trusted state.
+ * <p>The process system classpath contains only trusted witness bytecode and the
+ * digest-pinned TestNG closure.  Candidate production bytecode is loaded through
+ * {@link Containment.CandidateCodeLoader}; trusted comparison-base tests are
+ * loaded through a separate {@link Containment.TrustedTestLoader}.  A mandatory
+ * SecurityManager containment guard is installed before either domain is
+ * initialized.  There is no uncontained fallback.
  *
- * <ul>
- *   <li>The ledger key arrives on stdin, as one hex line, before any candidate
- *       class is loaded. It is never a system property, argument, environment
- *       variable or file, and stdin is closed once it has been read.</li>
- *   <li>Only the keyed {@link QualifiedExecutionListener} is added. TestNG's
- *       default reporters are off, and its service-loader discovery of
- *       listeners sees only the trusted jars named on the command line, so a
- *       {@code META-INF/services/org.testng.ITestNGListener} in a candidate
- *       resource or dependency cannot register a listener that changes what
- *       runs or how it is counted.</li>
- *   <li>The required classes come from the trusted orchestrator. The driver
- *       prints TestNG-style totals from the keyed listener's own counts; those
- *       lines only show that the launch completed, and credit comes from the
- *       authenticated ledger alone.</li>
- * </ul>
- *
- * <p>Residual, stated: candidate test code runs in this JVM, so deliberate
- * in-process tampering (reflection on this process's memory) is not ruled out.
- * It must come from reviewable candidate source.
+ * <p>The HMAC key remains defense-in-depth for ledger truncation/replay.  It is
+ * read before candidate classes are loaded and is inaccessible to candidate
+ * bytecode through the enforced loader/security boundary.  Candidate code is
+ * not permitted to obtain the system loader, access the witness package, use
+ * suppress-access-check reflection, replace the security manager, load native
+ * code, execute a process, or mutate the protected witness directory.
  */
 public final class TrustedTestNGDriver {
+
+    private static final int CONTAINMENT_UNAVAILABLE = 78;
 
     private TrustedTestNGDriver() {
     }
@@ -66,13 +58,26 @@ public final class TrustedTestNGDriver {
         return key;
     }
 
+    private static URL[] urls(List<String> values) throws IOException {
+        List<URL> out = new ArrayList<URL>();
+        for (String value : values) {
+            out.add(Paths.get(value).toUri().toURL());
+        }
+        return out.toArray(new URL[0]);
+    }
+
     public static void main(String[] args) throws Exception {
         String module = null;
         String nonce = null;
         Path ledger = null;
+        Path protectedRoot = null;
         String outputDir = null;
+        String trustedTests = null;
         List<URL> trustedSpi = new ArrayList<URL>();
+        List<String> candidateCode = new ArrayList<String>();
+        List<String> trustedDependencies = new ArrayList<String>();
         List<String> classes = new ArrayList<String>();
+
         for (int i = 0; i < args.length; i++) {
             String flag = args[i];
             if (i + 1 >= args.length) {
@@ -86,8 +91,16 @@ public final class TrustedTestNGDriver {
                 nonce = value;
             } else if ("--ledger".equals(flag)) {
                 ledger = Paths.get(value);
+            } else if ("--protected-root".equals(flag)) {
+                protectedRoot = Paths.get(value);
             } else if ("--output-dir".equals(flag)) {
                 outputDir = value;
+            } else if ("--trusted-test-root".equals(flag)) {
+                trustedTests = value;
+            } else if ("--candidate-code".equals(flag)) {
+                candidateCode.add(value);
+            } else if ("--trusted-dependency".equals(flag)) {
+                trustedDependencies.add(value);
             } else if ("--trusted-jar".equals(flag)) {
                 trustedSpi.add(Paths.get(value).toUri().toURL());
             } else if ("--class".equals(flag)) {
@@ -97,36 +110,53 @@ public final class TrustedTestNGDriver {
                 System.exit(3);
             }
         }
-        if (module == null || nonce == null || ledger == null || outputDir == null
-                || trustedSpi.isEmpty() || classes.isEmpty()) {
-            System.err.println("TrustedTestNGDriver: --module, --nonce, --ledger, --output-dir, "
-                    + "--trusted-jar and at least one --class are required");
+
+        if (module == null || nonce == null || ledger == null || protectedRoot == null
+                || outputDir == null || trustedTests == null || trustedSpi.isEmpty()
+                || classes.isEmpty()) {
+            System.err.println("TrustedTestNGDriver: --module, --nonce, --ledger, "
+                    + "--protected-root, --output-dir, --trusted-test-root, --trusted-jar "
+                    + "and at least one --class are required");
             System.exit(3);
         }
 
         byte[] key = readKey(System.in);
-        QualifiedExecutionListener witness = new QualifiedExecutionListener(module, nonce, ledger, key);
 
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
+        final Containment.Session containment;
+        try {
+            containment = Containment.install(
+                    urls(trustedDependencies),
+                    urls(candidateCode),
+                    urls(java.util.List.of(trustedTests)),
+                    protectedRoot);
+        } catch (UnsupportedOperationException | SecurityException failure) {
+            System.err.println("D17_CONTAINMENT_UNAVAILABLE: " + failure);
+            System.exit(CONTAINMENT_UNAVAILABLE);
+            return;
+        }
+
+        QualifiedExecutionListener witness =
+                new QualifiedExecutionListener(module, nonce, ledger, key, containment.guard);
+
         List<Class<?>> selected = new ArrayList<Class<?>>();
         for (String name : classes) {
-            // A required class that cannot load is still required: it is simply
-            // never observed, and the trusted per-class floor fails.
             try {
-                selected.add(Class.forName(name, false, loader));
+                selected.add(Class.forName(name, false, containment.tests));
             } catch (ClassNotFoundException | LinkageError exc) {
                 System.err.println("TrustedTestNGDriver: required class not loadable: " + name + ": " + exc);
             }
         }
 
-        // TestNG's runtime knobs are system properties; none may be preset, so
-        // the witness can treat any it sees during the run as set by test code.
+        // TestNG runtime knobs are process global.  The properties object itself
+        // is guarded; trusted-base tests may use normal test APIs while hostile
+        // candidate production frames cannot mutate testng.* state.
         for (String name : System.getProperties().stringPropertyNames()) {
             if (name.startsWith("testng.")) {
                 System.clearProperty(name);
             }
         }
         witness.pinSystemProperties();
+
         TestNG testng = new TestNG(false);
         testng.setUseDefaultListeners(false);
         testng.setServiceLoaderClassLoader(new URLClassLoader(trustedSpi.toArray(new URL[0]), null));
@@ -136,13 +166,16 @@ public final class TrustedTestNGDriver {
         testng.addListener(witness);
         testng.run();
 
+        if (!containment.intact()) {
+            witness.noteContainmentViolation("post-run containment integrity check failed");
+        }
+
         long total = witness.invocations();
         long failed = witness.failures();
         long skipped = witness.skips();
         System.out.println("Total tests run: " + total + ", Passes: " + (total - failed - skipped)
                 + ", Failures: " + failed + ", Skips: " + skipped);
-        // Completed (0, or 2 when the suite completed with skips) versus crashed is
-        // judged by the trusted side; failures are judged by the ledger.
-        System.exit(testng.getStatus() == 0 ? 0 : (failed > 0 ? 1 : 2));
+        System.exit(testng.getStatus() == 0 && containment.intact()
+                ? 0 : (failed > 0 || !containment.intact() ? 1 : 2));
     }
 }
