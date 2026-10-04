@@ -420,6 +420,9 @@ public class HostileMain {
                     loader.loadClass("org.testng.Reporter");
                     break;
                 }
+                case "forbidden-testng-annotation":
+                    Class.forName("org.testng.annotations.Listeners");
+                    break;
                 case "properties-object":
                     System.getProperties();
                     break;
@@ -540,6 +543,7 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
         "system-loader",
         "context-loader",
         "parent-loader",
+        "forbidden-testng-annotation",
         "properties-object",
         "set-properties",
         "new-classloader",
