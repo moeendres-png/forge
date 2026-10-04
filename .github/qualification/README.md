@@ -74,10 +74,10 @@ classifies the launch inputs in `launch_classpath_admission`:
   nested POMs, `.mvn/**` or the Maven wrapper makes the qualification
   `UNKNOWN`. Maven runs offline against the pre-resolved, read-only trusted
   repository and candidate annotation processing is disabled. Installed Forge
-  sibling artifacts are removed and replaced by every actually-built
-  `target/classes` from the **full reactor module inventory derived recursively
-  from the trusted comparison-base POM**, not merely the three test-bearing
-  modules.
+  sibling artifacts that actually appear on a module's resolved classpath are
+  replaced **in place** by the matching exact-candidate `target/classes`.
+  The artifactId→module map is derived recursively from the trusted
+  comparison-base reactor POM; unknown or missing sibling outputs fail closed.
 - **Dependencies/plugins** are read from the trusted Maven repository. Candidate
   output cannot shadow a trusted dependency in the execution classloader; the
   dependency domain is logically parent-first but is **not** the Candidate
