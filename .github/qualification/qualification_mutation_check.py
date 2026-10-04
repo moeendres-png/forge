@@ -399,6 +399,13 @@ MUTATIONS = [
         "trusted-file re-derivation would compare the checkout with itself",
     ),
     Mutation(
+        "open-all-testng-annotations-to-candidate-loader",
+        "witness/forge/d17/witness/Containment.java",
+        '        return name.equals("org.testng.annotations.Test")\n',
+        '        return name.startsWith("org.testng.annotations.")\n',
+        "computed-name candidate bytecode could resolve @Listeners/@Factory authority APIs",
+    ),
+    Mutation(
         "expose-trusted-dependency-bridge-as-candidate-parent",
         "witness/forge/d17/witness/Containment.java",
         "            super(urls, ClassLoader.getPlatformClassLoader());\n            this.dependencies = dependencies;\n",
