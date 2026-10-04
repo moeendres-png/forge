@@ -364,12 +364,11 @@ MUTATIONS = [
         "a TestNG dry-run success would be credited as an executed PASS",
     ),
     Mutation(
-        "launch-from-candidate-classpath-file",
+        "put-candidate-bytecode-on-system-classpath",
         "trusted_execution.py",
-        "    entries = list(launch_entries)\n",
-        "    entries, _ = sanitize_classpath(candidate_classpath(candidate_root, module, \"target/d17-cp.txt\"), "
-        "candidate_root, [module])\n",
-        "a later launch would load what an earlier launch's code rewrote",
+        '    full_cp = assemble_classpath(bundle / "witness", staged_testng)\n',
+        '    full_cp = assemble_classpath(bundle / "witness", staged_testng + list(candidate_code_entries))\n',
+        "candidate production bytecode would share the trusted system-loader authority domain",
     ),
 ]
 
