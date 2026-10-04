@@ -1143,6 +1143,19 @@ class RedTrustDomain(EvidenceCase):
         signals = {s["signal"]: s for s in qualification_of(evidence)["signals"]}
         self.assertIn("REJECTED", signals["witness_ledgers_authenticated"]["detail"])
 
+    def test_build_and_execution_must_use_distinct_untrusted_identities(self) -> None:
+        import copy
+
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["candidate_build_identity"] = SANDBOX_USER
+        manifest["build_execution_identity_separated"] = False
+        manifest["candidate_build"]["user"] = SANDBOX_USER
+        collapsed_integrity = integrity_ok(SANDBOX_USER, SANDBOX_USER)
+        evidence = self.verdict(manifest=manifest, integrity=collapsed_integrity)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("distinct untrusted OS identities", evidence["reason"])
+
     def test_a_launch_under_another_identity_is_not_credit(self) -> None:
         import copy
 
