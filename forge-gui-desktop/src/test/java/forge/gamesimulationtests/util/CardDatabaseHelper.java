@@ -1,6 +1,7 @@
 package forge.gamesimulationtests.util;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -47,6 +48,13 @@ public final class CardDatabaseHelper {
         return data;
     }
 
+    public static synchronized void resetForTestMethod(StaticData data) {
+        activate(data);
+        clearCrossFixtureCardDbState();
+        resetCardDb(data.getCommonCards());
+        resetCardDb(data.getVariantCards());
+    }
+
     private static StaticData initialize(boolean loadCardsLazily) {
         final CardStorageReader reader = new CardStorageReader(ForgeConstants.CARD_DATA_DIR,
                 null, loadCardsLazily);
@@ -71,6 +79,17 @@ public final class CardDatabaseHelper {
             lastInstance.set(null, data);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Unable to activate test StaticData fixture", e);
+        }
+    }
+
+    private static void resetCardDb(CardDb cardDb) {
+        cardDb.setCardArtPreference(true, false);
+        try {
+            Method reIndex = CardDb.class.getDeclaredMethod("reIndex");
+            reIndex.setAccessible(true);
+            reIndex.invoke(cardDb);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Unable to re-index CardDb test fixture", e);
         }
     }
 
