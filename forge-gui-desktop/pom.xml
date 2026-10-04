@@ -328,7 +328,7 @@ try {
             <artifactId>java-image-scaling</artifactId>
             <version>0.8.6</version>
         </dependency>
-<dependency>
+        <dependency>
             <groupId>org.testng</groupId>
             <artifactId>testng</artifactId>
             <version>7.10.2</version>
