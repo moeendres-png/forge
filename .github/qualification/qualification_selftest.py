@@ -188,6 +188,8 @@ def required_surface(modules=None, totals=None, classes=None, base=None, class_c
         "coverage_gaps": {
             "d24_framework_not_run_classes": [],
             "d24_framework_blocker_bases": [],
+            "d24_framework_not_run_source_inventory": {},
+            "d24_enabled_source_methods_not_run": 0,
             "explicitly_disabled_source_classes": [],
             "d22_disabled_rules_tests": [],
             "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
@@ -509,12 +511,22 @@ class PositiveExactShaPath(EvidenceCase):
         surface["coverage_gaps"]["d24_framework_not_run_classes"] = [
             "forge.deck.DeckRecognizerTest"
         ]
+        surface["coverage_gaps"]["d24_framework_not_run_source_inventory"] = {
+            "forge.deck.DeckRecognizerTest": {
+                "source_present": True,
+                "test_annotations": 84,
+                "explicitly_disabled_annotations": 0,
+                "enabled_source_methods": 84,
+            }
+        }
+        surface["coverage_gaps"]["d24_enabled_source_methods_not_run"] = 84
         evidence = self.verdict(surface=surface)
         self.assertNotPass(evidence, qualify.PARTIAL)
         coverage = qualification_of(evidence)["coverage"]
         self.assertFalse(coverage["whole_reactor_complete"])
         self.assertEqual(coverage["d24_framework_not_run_classes"],
                          ["forge.deck.DeckRecognizerTest"])
+        self.assertEqual(coverage["d24_enabled_source_methods_not_run"], 84)
 
     def test_disabled_rules_test_is_not_conflated_with_d24_or_stress_skip(self) -> None:
         import copy
