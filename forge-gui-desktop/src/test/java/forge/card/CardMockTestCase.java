@@ -112,6 +112,7 @@ public abstract class CardMockTestCase {
 
     @BeforeMethod
     protected void initMocks() throws Exception {
+        D24ExecutionGuardTest.recordAffectedDiscovery(getClass());
         closeStaticMocks();
         restoreLocalizer();
 
