@@ -187,6 +187,19 @@ public class DeclaredSkipTest {
             allowed_skips=["probe.DeclaredSkipTest"])
         self.assertEqual(proc.returncode, 31, proc.stderr)
 
+    def test_testng_configuration_failure_is_red(self) -> None:
+        tests = self.compile_sources({
+            "probe.ConfigFailureTest": """package probe;
+import org.testng.annotations.BeforeMethod;
+import org.testng.annotations.Test;
+public class ConfigFailureTest {
+ @BeforeMethod public void setup(){ throw new RuntimeException("configuration failure"); }
+ @Test public void body(){}
+}"""
+        }, "config-failure")
+        proc = self.launch(tests, {"probe.ConfigFailureTest": 1})
+        self.assertEqual(proc.returncode, 10, proc.stderr)
+
     def test_undeclared_skip_is_red(self) -> None:
         tests = self.compile_sources({
             "probe.SkipTest": """package probe;
