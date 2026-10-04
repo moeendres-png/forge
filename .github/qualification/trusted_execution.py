@@ -544,29 +544,54 @@ def _regular_file_bytes(path: Path):
         return handle.read()
 
 
-def _scan_class_tree(label: str, root: Path, result: dict) -> None:
+def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | None" = None) -> None:
+    """Scan every class under ``root``; with ``freeze_to``, copy the regular files read.
+
+    The copy is made from the same bytes the scan judged, so what later runs is
+    exactly what was admitted. Symlinks, FIFOs and devices are never followed or
+    copied.
+    """
     for directory, dirnames, filenames in os.walk(str(root), followlinks=False):
-        for name in dirnames:
+        for name in list(dirnames):
             if os.path.islink(os.path.join(directory, name)):
+                dirnames.remove(name)
                 result["findings"].append({"entry": label, "class": os.path.relpath(os.path.join(directory, name), root),
                                            "problems": ["symlinked directory on the launch classpath"]})
         for name in filenames:
-            if not name.endswith(".class"):
-                continue
             path = Path(directory) / name
             rel = path.relative_to(root).as_posix()
             data = _regular_file_bytes(path)
-            if data is None:
-                result["findings"].append({"entry": label, "class": rel, "problems": ["not a regular class file"]})
-                continue
-            result["scanned_classes"] += 1
-            problems = bytecode_findings(rel[: -len(".class")], data)
-            if problems:
-                result["findings"].append({"entry": label, "class": rel, "problems": problems})
+            if name.endswith(".class"):
+                if data is None:
+                    result["findings"].append({"entry": label, "class": rel, "problems": ["not a regular class file"]})
+                    continue
+                result["scanned_classes"] += 1
+                problems = bytecode_findings(rel[: -len(".class")], data)
+                if problems:
+                    result["findings"].append({"entry": label, "class": rel, "problems": problems})
+            if freeze_to is not None and data is not None:
+                target = freeze_to / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+
+
+def _scan_jar_bytes(label: str, data: bytes, result: dict) -> None:
+    import io
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as jar:
+            for name in jar.namelist():
+                if name.endswith(".class"):
+                    result["scanned_classes"] += 1
+                    problems = bytecode_findings(name[: -len(".class")], jar.read(name))
+                    if problems:
+                        result["findings"].append({"entry": label, "class": name, "problems": problems})
+    except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        result["findings"].append({"entry": label, "class": None, "problems": ["unreadable jar: {}".format(exc)]})
 
 
 def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candidate_m2: Path,
-                          trusted_m2: "Path | None") -> dict:
+                          trusted_m2: "Path | None", freeze: "tuple[Path, Path, dict] | None" = None) -> dict:
     """Admit the launch classpath before any candidate test code runs next to the witness.
 
     Candidate-authored bytecode (the trusted-compiled test classes and every
@@ -574,53 +599,85 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
     allowed TestNG API and nothing in the witness package. A dependency jar is
     admitted only byte-identical to the trusted runner's Maven repository: the
     candidate account owns its own copy and can rewrite any jar in it.
+
+    With ``freeze=(staging, launch_root, cache)`` every admitted entry is copied,
+    from the bytes judged, into ``staging`` (later staged root-owned and
+    read-only as ``launch_root``), and ``result["launch_entries"]`` lists those
+    copies. Launches use only that list: the candidate's own classpath file,
+    output directories and Maven repository stay writable by code running in an
+    earlier launch, so nothing is read from them again. ``cache`` shares copies
+    of the same source between modules.
     """
     result = {"scanned_classes": 0, "findings": [], "tampered_jars": [], "unverified_jars": [],
-              "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None}
+              "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None, "launch_entries": []}
     _scan_class_tree("trusted-compiled tests", tests_dir, result)
     candidate_root = Path(os.path.realpath(candidate_root))
     candidate_m2 = Path(os.path.realpath(candidate_m2))
+    staging, launch_root, cache = freeze if freeze else (None, None, {})
+
+    def remember(key: str, rel: str, before: dict) -> None:
+        cache[key] = {
+            "rel": rel,
+            "findings": result["findings"][len(before["findings"]):],
+            "scanned": result["scanned_classes"] - before["scanned"],
+        }
+        if launch_root is not None:
+            result["launch_entries"].append(str(launch_root / rel))
+
     for entry in entries:
         real = Path(os.path.realpath(entry))
+        key = str(real)
+        if key in cache:
+            hit = cache[key]
+            result["findings"].extend(hit["findings"])
+            result["scanned_classes"] += hit["scanned"]
+            if launch_root is not None:
+                result["launch_entries"].append(str(launch_root / hit["rel"]))
+            continue
+        before = {"findings": list(result["findings"]), "scanned": result["scanned_classes"]}
         if real.is_dir():
-            if real.is_relative_to(candidate_root):
-                _scan_class_tree(entry, real, result)
-            else:
+            if not real.is_relative_to(candidate_root):
                 # The candidate wrote the classpath file: a directory outside its
                 # own tree is neither its build output nor admitted.
-                result["unverified_jars"].append(str(real))
+                result["unverified_jars"].append(key)
+                continue
+            rel = "cp/{}".format(len(cache))
+            _scan_class_tree(entry, real, result, freeze_to=(staging / rel) if staging else None)
+            if staging is not None:
+                (staging / rel).mkdir(parents=True, exist_ok=True)
+            remember(key, rel, before)
             continue
         if not real.exists():
-            continue  # nothing loads from a missing entry
+            continue  # frozen launches list only what exists now
         if real.is_relative_to(candidate_m2):
-            rel = real.relative_to(candidate_m2)
-            trusted = (trusted_m2 / rel) if trusted_m2 else None
+            rel_path = real.relative_to(candidate_m2)
+            trusted = (trusted_m2 / rel_path) if trusted_m2 else None
             mine = _regular_file_bytes(real)
             theirs = _regular_file_bytes(trusted) if trusted else None
             if mine is None or theirs is None:
-                result["unverified_jars"].append(str(rel))
+                result["unverified_jars"].append(str(rel_path))
             elif hashlib.sha256(mine).digest() != hashlib.sha256(theirs).digest():
-                result["tampered_jars"].append(str(rel))
+                result["tampered_jars"].append(str(rel_path))
+            else:
+                rel = "deps/" + rel_path.as_posix()
+                if staging is not None:
+                    (staging / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (staging / rel).write_bytes(theirs)
+                remember(key, rel, before)
             continue
         if real.is_relative_to(candidate_root) and real.suffix == ".jar":
             data = _regular_file_bytes(real)
             if data is None:
                 result["findings"].append({"entry": entry, "class": None, "problems": ["not a regular jar"]})
                 continue
-            import io
-            import zipfile
-            try:
-                with zipfile.ZipFile(io.BytesIO(data)) as jar:
-                    for name in jar.namelist():
-                        if name.endswith(".class"):
-                            result["scanned_classes"] += 1
-                            problems = bytecode_findings(name[: -len(".class")], jar.read(name))
-                            if problems:
-                                result["findings"].append({"entry": entry, "class": name, "problems": problems})
-            except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
-                result["findings"].append({"entry": entry, "class": None, "problems": ["unreadable jar: {}".format(exc)]})
+            _scan_jar_bytes(entry, data, result)
+            rel = "cp/{}.jar".format(len(cache))
+            if staging is not None:
+                (staging / rel).parent.mkdir(parents=True, exist_ok=True)
+                (staging / rel).write_bytes(data)
+            remember(key, rel, before)
             continue
-        result["unverified_jars"].append(str(real))
+        result["unverified_jars"].append(key)
     return result
 
 
@@ -694,12 +751,17 @@ def verify_ledger(data: bytes, key: bytes, nonce: str) -> "tuple[list[str] | Non
 
 
 def execute_module(candidate_root: Path, module: str, classes, launch_dir: Path, bundle: Path,
-                   testng_jars, nonce: str, java: str, argline, xvfbrun, cp_rel, modules,
+                   testng_jars, nonce: str, java: str, argline, xvfbrun, launch_entries, dropped,
                    user: str, home: Path, evidence_witness: Path):
-    """Launch one module's required classes as the sandbox account, under the trusted driver."""
+    """Launch one module's required classes as the sandbox account, under the trusted driver.
+
+    ``launch_entries`` are the admitted, frozen copies in the trusted bundle. The
+    candidate's classpath file and output directories are never read again here:
+    code running in an earlier module's launch could have rewritten them.
+    """
     import sandbox
 
-    entries, dropped = sanitize_classpath(candidate_classpath(candidate_root, module, cp_rel), candidate_root, modules)
+    entries = list(launch_entries)
     staged_testng = [str(bundle / "testng" / Path(j).name) for j in testng_jars]
     tests = bundle / "tests" / module
     full_cp = assemble_classpath(bundle / "witness", staged_testng + [str(tests)] + entries)
@@ -835,19 +897,21 @@ def cmd_execute(args) -> int:
         # 3. Trusted compilation of the exact-SHA test sources.
         export = work / "export"
         sandbox.export_commit(trusted_repo, args.candidate_sha, export)
-        records, scans = {}, {}
+        records, scans, frozen, dropped = {}, {}, {}, {}
         for module in modules:
-            entries, _ = sanitize_classpath(candidate_classpath(candidate_root, module, args.cp_rel),
-                                            candidate_root, modules)
+            entries, dropped[module] = sanitize_classpath(
+                candidate_classpath(candidate_root, module, args.cp_rel), candidate_root, modules)
             out = staging / "tests" / module
             records[module] = trusted_compile_tests(export, module, [str(j) for j in testng_jars] + entries,
                                                     out, args.java)
             records[module]["compiled_required"] = sorted(
                 set(surface["modules"][module]["classes"]) & compiled_class_names(out))
-            # Before any candidate test code runs next to the witness.
+            # Before any candidate test code runs next to the witness: admit the
+            # classpath and freeze the admitted bytes into the trusted bundle.
             scans[module] = scan_launch_classpath(
                 out, entries, candidate_root, home / ".m2" / "repository",
-                Path(args.trusted_maven_repo) if args.trusted_maven_repo else None)
+                Path(args.trusted_maven_repo) if args.trusted_maven_repo else None,
+                freeze=(staging / "classpath", bundle / "classpath", frozen))
         manifest["trusted_test_compilation"] = records
         manifest["launch_classpath_admission"] = scans
         sandbox.stage_readonly(staging, bundle)
@@ -865,8 +929,8 @@ def cmd_execute(args) -> int:
             log("executing {} ({} required classes) as {}".format(module, len(required), args.sandbox_user))
             manifest["modules"][module] = execute_module(
                 candidate_root, module, required, launch_dir, bundle, testng_jars, nonce,
-                args.java, argline, xvfbrun, args.cp_rel, modules, args.sandbox_user, home,
-                evidence_dir / "witness",
+                args.java, argline, xvfbrun, scans[module]["launch_entries"], dropped[module],
+                args.sandbox_user, home, evidence_dir / "witness",
             )
             log("  {} exit={} ledger={} totals={}".format(
                 module, manifest["modules"][module]["launch_exit_code"],

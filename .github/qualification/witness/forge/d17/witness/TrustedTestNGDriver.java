@@ -119,6 +119,13 @@ public final class TrustedTestNGDriver {
             }
         }
 
+        // TestNG's runtime knobs are system properties; none may be preset, so
+        // the witness can treat any it sees during the run as set by test code.
+        for (String name : System.getProperties().stringPropertyNames()) {
+            if (name.startsWith("testng.")) {
+                System.clearProperty(name);
+            }
+        }
         TestNG testng = new TestNG(false);
         testng.setUseDefaultListeners(false);
         testng.setServiceLoaderClassLoader(new URLClassLoader(trustedSpi.toArray(new URL[0]), null));

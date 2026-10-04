@@ -197,6 +197,10 @@ def read_witness(path: Path, module: str, nonce: str) -> dict:
         status = record["status"]
         if status not in ("PASS", "FAIL", "SKIP"):
             raise QualificationError("witness invocation {} has status {!r}".format(index, status))
+        # The listener records a PASS only for a result TestNG really dispatched
+        # to its method (never a dry-run success); anything else is not credit.
+        if status == "PASS" and record.get("invoked") is not True:
+            raise QualificationError("witness invocation {} is a PASS without dispatch".format(index))
         name = record["class"]
         per_class_total[name] = per_class_total.get(name, 0) + 1
         bucket = {"PASS": per_class_pass, "SKIP": per_class_skip, "FAIL": per_class_fail}[status]
@@ -437,7 +441,9 @@ def derive_verdict(
         code = record.get("exit_code") if isinstance(record, dict) else None
         compiled = record.get("compiled_required") if isinstance(record, dict) else None
         if not isinstance(record, dict):
-            not_trusted_compiled[module] = "no trusted compilation record"
+            # Trusted infrastructure stopped before compiling (pin mismatch,
+            # sandbox not ready): not a candidate failure, and never credit.
+            continue
         elif isinstance(code, bool) or code != 0:
             not_trusted_compiled[module] = "trusted javac exit {!r}".format(code)
         elif not isinstance(compiled, list) or sorted(compiled) != wanted:
@@ -461,7 +467,9 @@ def derive_verdict(
     unadmitted: "dict[str, object]" = {}
     for module in expected_modules:
         scan = admission.get(module)
-        if not isinstance(scan, dict) or not all(
+        if not isinstance(compilation.get(module), dict):
+            unadmitted[module] = "no trusted compilation record"
+        elif not isinstance(scan, dict) or not all(
             isinstance(scan.get(key), list) for key in ("findings", "tampered_jars", "unverified_jars")
         ):
             unadmitted[module] = "no admission record"
@@ -540,8 +548,8 @@ def derive_verdict(
         )
     elif not by_name["launch_classpath_admitted"]["satisfied"]:
         verdict, reason = UNKNOWN, (
-            "the launch classpath was not admitted (missing record or a dependency jar "
-            "absent from the trusted repository); see launch_classpath_admitted"
+            "the launch classpath was not admitted (missing compilation or admission record, "
+            "or a dependency jar absent from the trusted repository); see launch_classpath_admitted"
         )
     else:
         verdict, reason = PASS, (

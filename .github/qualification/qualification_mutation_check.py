@@ -309,7 +309,7 @@ MUTATIONS = [
     Mutation(
         "accept-tampered-dependency-jar",
         "trusted_execution.py",
-        "                result[\"tampered_jars\"].append(str(rel))",
+        "                result[\"tampered_jars\"].append(str(rel_path))",
         "                pass",
         "a dependency jar the candidate account rewrote would be admitted",
     ),
@@ -333,6 +333,22 @@ MUTATIONS = [
         '--trusted-sha "$AUTHORITY_SHA"',
         '--trusted-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"',
         "trusted-file re-derivation would compare the checkout with itself",
+    ),
+    # --- dispatch and frozen launches (review e05e6f17) -------------------- #
+    Mutation(
+        "credit-pass-without-dispatch",
+        "qualify.py",
+        '        if status == "PASS" and record.get("invoked") is not True:',
+        "        if False:",
+        "a TestNG dry-run success would be credited as an executed PASS",
+    ),
+    Mutation(
+        "launch-from-candidate-classpath-file",
+        "trusted_execution.py",
+        "    entries = list(launch_entries)\n",
+        "    entries, _ = sanitize_classpath(candidate_classpath(candidate_root, module, \"target/d17-cp.txt\"), "
+        "candidate_root, [module])\n",
+        "a later launch would load what an earlier launch's code rewrote",
     ),
 ]
 

@@ -262,6 +262,54 @@ public class NumericTest {
 """
 
 
+DRYRUN_UNCHANGED = """package probe;
+import org.testng.Assert;
+import org.testng.annotations.Test;
+public class AUnchangedTest {
+    @Test public void broken() { Assert.fail("a real regression in unchanged code"); }
+}
+"""
+
+DRYRUN_SWITCH = """package probe;
+import org.testng.annotations.BeforeSuite;
+import org.testng.annotations.Test;
+public class ZCandidateTest {
+    @BeforeSuite public void quiet() { System.setProperty("testng.mode.dryrun", "true"); }
+    @Test public void harmless() { }
+}
+"""
+
+
+class DispatchRuntimeControls(RuntimeCase):
+    """Review P1-A at e05e6f17: TestNG's dry-run mode reports success without invoking the method."""
+
+    def test_a_dry_run_switched_on_by_candidate_code_is_never_a_pass(self) -> None:
+        classes = self.compile_candidate({"AUnchangedTest": DRYRUN_UNCHANGED, "ZCandidateTest": DRYRUN_SWITCH})
+        # Admitted: the switch is a plain system property, not TestNG API.
+        self.assertEqual(AdmissionRuntimeControls.scan(self, classes)["findings"], [])
+        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+        out = self.tmp / "dryrun"
+        out.mkdir()
+        _, raw = self.launch(["probe.AUnchangedTest", "probe.ZCandidateTest"], [str(classes)], out, key, nonce)
+        lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
+        self.assertIsNone(problem)
+        records = [json.loads(l) for l in lines]
+        statuses = {r["method"]: (r["status"], r["invoked"]) for r in records if r["kind"] == "invocation"}
+        self.assertEqual(statuses["broken"][0], "FAIL", statuses)
+        self.assertNotIn(("PASS", False), statuses.values())
+
+    def test_honest_passes_are_dispatched(self) -> None:
+        classes = self.compile_candidate({"HonestTest": HONEST})
+        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+        out = self.tmp / "dispatched"
+        out.mkdir()
+        _, raw = self.launch(["probe.HonestTest"], [str(classes)], out, key, nonce)
+        lines, _ = trusted_execution.verify_ledger(raw, key, nonce)
+        invocations = [json.loads(l) for l in lines if json.loads(l)["kind"] == "invocation"]
+        self.assertTrue(invocations)
+        self.assertTrue(all(r["status"] == "PASS" and r["invoked"] is True for r in invocations))
+
+
 class AdmissionRuntimeControls(RuntimeCase):
     """Review P1 at 63731d9f, on real javac output: the admission scan sees what TestNG would honour."""
 

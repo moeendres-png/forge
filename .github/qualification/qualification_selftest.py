@@ -283,7 +283,7 @@ def write_witness(witness_dir: Path, module: str, invocations, nonce=NONCE,
     for index, (klass, method, status) in enumerate(invocations):
         lines.append(json.dumps({
             "kind": "invocation", "seq": index, "class": klass, "method": method,
-            "status": status, "context": "TestNG", "thread": "TestNG-0",
+            "status": status, "invoked": status != "SKIP", "context": "TestNG", "thread": "TestNG-0",
         }, sort_keys=True))
         per_total[klass] = per_total.get(klass, 0) + 1
         bucket = {"PASS": {}, "SKIP": per_skip, "FAIL": per_fail}[status]
@@ -938,7 +938,7 @@ class RedTrustDomain(EvidenceCase):
                              "module": "forge-game", "nonce": NONCE}, sort_keys=True)]
         for index, (klass, method, status) in enumerate(records):
             lines.append(json.dumps({"kind": "invocation", "seq": index, "class": klass, "method": method,
-                                     "status": status, "context": "TestNG", "thread": "TestNG-0"},
+                                     "status": status, "invoked": status != "SKIP", "context": "TestNG", "thread": "TestNG-0"},
                                     sort_keys=True))
         per = {}
         for klass, _, _ in records:
@@ -1537,12 +1537,56 @@ class RedLaunchClasspathAdmission(EvidenceCase):
         manifest = self._with("forge-game", "compiled_required", ["pkg.C0"], record="trusted_test_compilation")
         self.assertNotPass(self.verdict(manifest=manifest), qualify.FAIL)
 
-    def test_missing_compile_record_is_fail(self) -> None:
+    def test_missing_compile_record_is_unknown(self) -> None:
+        """Trusted infrastructure that stopped before compiling is not a candidate FAIL, nor credit."""
         import copy
         self.honest()
         manifest = copy.deepcopy(self.manifest)
         del manifest["trusted_test_compilation"]
-        self.assertNotPass(self.verdict(manifest=manifest), qualify.FAIL)
+        self.assertNotPass(self.verdict(manifest=manifest), qualify.UNKNOWN)
+
+
+class FrozenLaunchClasspath(unittest.TestCase):
+    """Review P1-B at e05e6f17: later launches must not read candidate-writable classpath state."""
+
+    def test_admitted_bytes_are_frozen_and_launched_from_the_copy(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-freeze-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tests, root = tmp / "tests", tmp / "candidate"
+        trusted_m2, candidate_m2 = tmp / "trusted-m2", tmp / "home" / ".m2" / "repository"
+        out = root / "forge-game" / "target" / "classes" / "forge"
+        for base in (tests, out, trusted_m2, candidate_m2):
+            base.mkdir(parents=True)
+        (out / "Game.class").write_bytes(synthetic_class(["forge/Game"]))
+        rel = Path("org/dep/1/dep-1.jar")
+        for repo in (trusted_m2, candidate_m2):
+            (repo / rel).parent.mkdir(parents=True)
+            (repo / rel).write_bytes(b"jar bytes")
+        entries = [str(root / "forge-game" / "target" / "classes"), str(candidate_m2 / rel),
+                   str(root / "not-yet-there")]
+        staging, launch_root, cache = tmp / "staging", tmp / "bundle", {}
+        scan = trusted_execution.scan_launch_classpath(tests, entries, root, candidate_m2, trusted_m2,
+                                                       freeze=(staging, launch_root, cache))
+        self.assertEqual(scan["findings"], [])
+        launched = scan["launch_entries"]
+        self.assertEqual(len(launched), 2, launched)
+        self.assertTrue(all(entry.startswith(str(launch_root)) for entry in launched))
+        frozen_dir = staging / Path(launched[0]).relative_to(launch_root)
+        self.assertEqual((frozen_dir / "forge" / "Game.class").read_bytes(), synthetic_class(["forge/Game"]))
+        # An earlier launch rewriting the candidate's tree changes nothing frozen.
+        (out / "Game.class").write_bytes(synthetic_class(["forge/Game", "org/testng/Reporter"]))
+        (root / "not-yet-there").mkdir()
+        self.assertEqual((frozen_dir / "forge" / "Game.class").read_bytes(), synthetic_class(["forge/Game"]))
+        # The same source admitted for a second module reuses the copy and its findings.
+        again = trusted_execution.scan_launch_classpath(tests, entries[:2], root, candidate_m2, trusted_m2,
+                                                        freeze=(staging, launch_root, cache))
+        self.assertEqual(again["launch_entries"], launched)
+
+    def test_execute_module_never_reads_the_candidate_classpath_file(self) -> None:
+        import inspect
+        source = inspect.getsource(trusted_execution.execute_module)
+        self.assertNotIn("candidate_classpath(", source)
+        self.assertIn("launch_entries", inspect.signature(trusted_execution.execute_module).parameters)
 
 
 class IntegrityRecordShape(EvidenceCase):
@@ -1558,11 +1602,20 @@ class IntegrityRecordShape(EvidenceCase):
         evidence = self.verdict(integrity=doc)
         self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
 
+    def test_a_pass_that_was_never_dispatched_is_not_credit(self) -> None:
+        """Review P1-A at e05e6f17: a dry-run success carries invoked=false."""
+        self.honest()
+        path = self.witness_dir / "forge-game.witness.jsonl"
+        path.write_text(path.read_text().replace('"invoked": true', '"invoked": false', 1))
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertTrue(any("without dispatch" in p for p in qualification_of(evidence)["problems"]))
+
     def test_a_tail_after_the_summary_is_not_credit(self) -> None:
         self.honest()
         path = self.witness_dir / "forge-game.witness.jsonl"
         path.write_text(path.read_text() + json.dumps({
-            "kind": "invocation", "seq": 99, "class": "pkg.C0", "method": "late", "status": "PASS",
+            "kind": "invocation", "seq": 99, "class": "pkg.C0", "method": "late", "status": "PASS", "invoked": True,
             "context": "TestNG", "thread": "TestNG-0"}, sort_keys=True) + "\n")
         self.assertNotEqual(self.verdict()["verdict"], qualify.PASS)
 

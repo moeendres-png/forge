@@ -212,13 +212,32 @@ Stated as part of the evidence, not hidden.
   classpath is therefore admitted before candidate code runs (see
   *Launch-classpath admission*). Deliberate reflection with computed names (for
   example reading the listener's key or reaching TestNG internals through
-  strings assembled at runtime) is not ruled out by a static scan and remains a
-  residual. What the design guarantees: candidate code cannot write trusted
+  strings assembled at runtime, defining classes from bytes, or reading the
+  listener's key from memory) is not ruled out: **a candidate acting
+  deliberately inside the test JVM is not contained.** The admission scan,
+  the dispatch check and the `testng.*` property check close the declarative and
+  configuration routes (`@Listeners`, hooks, factories, `Reporter`, dry-run and
+  other runtime knobs), and the HMAC chain stops forgery from outside the
+  process. They are not a sandbox for code that sets out to subvert the JVM it
+  shares with the witness. Whether that residual is acceptable is an Owner
+  decision. What the design guarantees: candidate code cannot write trusted
   state, cannot change which test bytecode runs, cannot load a class that
   references TestNG beyond test annotations and assertions or the witness
   package, cannot swap a dependency jar, cannot forge a ledger line from outside
   the process, and cannot make a forged ledger pass the orchestrator's
   verification.
+* **Dependency changes are UNKNOWN.** A candidate that adds or upgrades a
+  dependency runs with a jar absent from the trusted repository, which is
+  unverified, so it can never PASS until the default branch carries the jar.
+* **Dry run and runtime knobs.** The driver clears every `testng.*` system
+  property before the run. A result counts as PASS only if TestNG dispatched its
+  method while neither dry-run mode nor any `testng.*` property was set
+  (`"invoked": true` in the ledger, re-checked by `qualify.py`).
+* **Frozen classpath.** Each module's admitted classpath is copied, from the
+  bytes judged, into the root-owned bundle, and launches use only those copies.
+  Code running in an earlier module's launch can rewrite the candidate's
+  classpath file, output directories and Maven repository, but never what a
+  later launch loads.
 * **Scheduled jobs.** `reap` and `verify` check that no candidate process is
   alive. A `cron`/`at` job the sandbox account schedules could start later; it
   reaches only state the account can already write.

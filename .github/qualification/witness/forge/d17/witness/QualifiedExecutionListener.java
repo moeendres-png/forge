@@ -8,6 +8,9 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -19,6 +22,7 @@ import org.testng.IInvokedMethodListener;
 import org.testng.ITestContext;
 import org.testng.ITestListener;
 import org.testng.ITestResult;
+import org.testng.internal.RuntimeBehavior;
 
 /**
  * Trusted execution witness for the D17 exact-SHA candidate qualification.
@@ -83,6 +87,14 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
     private String chain;
 
     /**
+     * Results TestNG actually dispatched to a test method. A success TestNG
+     * reports without invoking the method (its dry-run mode, which candidate
+     * code can switch on with one system property) is recorded as a failure.
+     */
+    private final Set<ITestResult> dispatched =
+            Collections.newSetFromMap(new IdentityHashMap<ITestResult, Boolean>());
+
+    /**
      * Constructed only by the trusted driver, never by TestNG reflection: the
      * listener has no public no-argument constructor, so a {@code -listener}
      * argument or service registration cannot instantiate an unkeyed copy.
@@ -124,6 +136,25 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
             }
         }
         return out.append('"').toString();
+    }
+
+    /**
+     * TestNG reads its runtime knobs from {@code testng.*} system properties, and
+     * candidate code can set one at any time. In dry-run mode TestNG reports a
+     * success, and still fires this listener, without running the method body.
+     * The driver clears every {@code testng.*} property before the run, so one
+     * present now was set by code under test.
+     */
+    static boolean runtimeAltered() {
+        if (RuntimeBehavior.isDryRun()) {
+            return true;
+        }
+        for (String name : System.getProperties().stringPropertyNames()) {
+            if (name.startsWith("testng.")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void bump(Map<String, Integer> counts, String key) {
@@ -177,8 +208,10 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
                 ? "<unknown>" : result.getMethod().getMethodName();
         int status = result.getStatus();
 
+        boolean invoked = dispatched.remove(result) && !runtimeAltered();
+
         String verdict;
-        if (status == ITestResult.FAILURE) {
+        if (status == ITestResult.FAILURE || (status != ITestResult.SKIP && !invoked)) {
             verdict = "FAIL";
             bump(failureCounts, className);
             failures++;
@@ -195,6 +228,7 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
                 + ",\"class\":" + quote(className)
                 + ",\"method\":" + quote(methodName)
                 + ",\"status\":" + quote(verdict)
+                + ",\"invoked\":" + invoked
                 + ",\"context\":" + quote(String.valueOf(context.getName()))
                 + ",\"thread\":" + quote(String.valueOf(Thread.currentThread().getName()))
                 + "}");
@@ -228,7 +262,15 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
 
     @Override
     public void beforeInvocation(IInvokedMethod method, ITestResult result) {
-        // Execution provenance begins at dispatch; nothing is recorded pre-flight.
+        // Execution provenance begins at dispatch: remember that this result's
+        // test method is really about to be invoked; nothing is written
+        // pre-flight. No candidate code runs between this callback and TestNG's
+        // own dry-run decision for the method.
+        if (method != null && method.isTestMethod() && result != null && !runtimeAltered()) {
+            synchronized (this) {
+                dispatched.add(result);
+            }
+        }
     }
 
     @Override
