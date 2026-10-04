@@ -1745,6 +1745,32 @@ class TrustedOrchestratorControls(unittest.TestCase):
             trusted_execution.assemble_classpath("/w", []), "/w"
         )
 
+    def test_required_classes_consume_trusted_module_surefire_includes(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-surefire-includes-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        (repo / "mod" / "src" / "test" / "java" / "pkg").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.email", "a@b.invalid"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), check=True)
+        (repo / "pom.xml").write_text("<project/>\n")
+        (repo / "mod" / "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><build><plugins><plugin>'
+            '<artifactId>maven-surefire-plugin</artifactId><configuration><includes>'
+            '<include>**/ComprehensiveRulesSection*.java</include>'
+            '</includes></configuration></plugin></plugins></build></project>\n')
+        (repo / "mod" / "src" / "test" / "java" / "pkg" / "ComprehensiveRulesSection104.java").write_text(
+            "package pkg; class ComprehensiveRulesSection104 {}\n")
+        (repo / "mod" / "src" / "test" / "java" / "pkg" / "Ordinary.java").write_text(
+            "package pkg; class Ordinary {}\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=str(repo), check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo), text=True).strip()
+        self.assertEqual(
+            trusted_execution.required_classes_for_module(repo, "mod", base),
+            ["pkg.ComprehensiveRulesSection104"],
+        )
+
     def test_trusted_test_compile_uses_only_frozen_candidate_inputs(self) -> None:
         import inspect
         source = inspect.getsource(trusted_execution.cmd_execute)
