@@ -1,0 +1,17 @@
+{
+  "baseline_sha": "20dc40379a21202175706a85d5c64b96460b9d2c",
+  "before": {
+    "provenance_integrity": "PASS",
+    "collector_ok": true
+  },
+  "after": {
+    "provenance_integrity": "FAIL",
+    "collector_ok": false,
+    "reasons": [
+      "report outside this Maven execution interval: module/target/surefire-reports/TEST-Real.xml"
+    ]
+  },
+  "control": "Same valid raw XML with oldmtime1; old plain exit envelope has no freshness binding, new current source/run execution receipt rejects stale report",
+  "evidence_class": "SYNTHETIC_FULL_COLLECTOR_FRESHNESS_CONTROL",
+  "qualification_credit": "none"
+}
