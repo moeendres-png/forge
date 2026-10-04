@@ -242,6 +242,13 @@ MUTATIONS = [
         "hostile candidate bytecode could violate the witness authority and still qualify",
     ),
     Mutation(
+        "ignore-generic-source-not-run-obligations",
+        "qualify.py",
+        "        and not source_obligations_not_run\n",
+        "        and True\n",
+        "a newly undiscovered trusted-source @Test class could disappear behind the executable denominator",
+    ),
+    Mutation(
         "promote-known-not-run-coverage-to-pass",
         "qualify.py",
         '    elif not by_name["whole_reactor_coverage_complete"]["satisfied"]:',
