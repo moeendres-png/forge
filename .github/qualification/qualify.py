@@ -351,12 +351,15 @@ def derive_verdict(
             for item in d24_inventory.values() if isinstance(item, dict)
         )
     explicit_disabled = list(coverage_gaps.get("explicitly_disabled_source_classes") or [])
+    other_disabled_methods = list(
+        coverage_gaps.get("other_explicit_disabled_test_methods") or [])
     d20_baseline_drift = list(coverage_gaps.get("d20_baseline_drift") or [])
     d22_disabled = list(coverage_gaps.get("d22_disabled_rules_tests") or [])
     coverage_complete = (
         surface.get("whole_reactor_coverage_complete") is True
         and not source_obligations_not_run
         and not framework_not_run and not explicit_disabled
+        and not other_disabled_methods
         and not d20_baseline_drift and not d22_disabled
     )
     signal(
@@ -364,10 +367,10 @@ def derive_verdict(
         coverage_complete,
         "source_test_obligations_NOT_RUN={} D24_NOT_RUN={} "
         "D24_enabled_source_methods_not_run={} explicit_disabled={} "
-        "D20_baseline_drift={} D22_disabled={}".format(
+        "other_disabled_methods={} D20_baseline_drift={} D22_disabled={}".format(
             source_obligations_not_run, framework_not_run,
             d24_enabled_source_methods_not_run, explicit_disabled,
-            d20_baseline_drift, d22_disabled),
+            other_disabled_methods, d20_baseline_drift, d22_disabled),
     )
 
     # --- 4. Trusted launches completed -------------------------------------- #
@@ -731,6 +734,7 @@ def derive_verdict(
             "d24_framework_not_run_source_inventory": d24_inventory,
             "d24_enabled_source_methods_not_run": d24_enabled_source_methods_not_run,
             "explicitly_disabled_source_classes": explicit_disabled,
+            "other_explicit_disabled_test_methods": other_disabled_methods,
             "d20_baseline_drift": d20_baseline_drift,
             "d20_known_not_run_schema": coverage_gaps.get("d20_known_not_run_schema"),
             "d22_disabled_rules_tests": d22_disabled,
