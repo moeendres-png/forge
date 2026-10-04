@@ -18,11 +18,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         java: ['17', '21']
     name: Test with Java ${{ matrix.Java }}
     steps:
       - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
+        with:
+          persist-credentials: false
 
       - name: Setup java
         uses: actions/setup-java@e9fbacdec3bb3b6036605a3e6f7995d66773a8c6 # v3.14.2
@@ -31,11 +34,57 @@ jobs:
           java-version: ${{ matrix.java }}
           cache: 'maven'
 
+      - name: D20 provenance controls
+        run: python3 -I .github/ci/test_provenance.py selftest -v
+
       - name: Install virtual framebuffer (if not available) to allow running GUI on a headless server
         run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
 
       - name: Run tests in virtual framebuffer
+        env:
+          D20_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
         run: |
+          set -uo pipefail
+          python3 -I .github/ci/test_provenance.py execution-start --repo . --maven-exit-file "$RUNNER_TEMP/d20-maven-exit.txt" --java-version "${{ matrix.java }}" --event-name "$GITHUB_EVENT_NAME" --event-sha "$GITHUB_SHA" --pr-head-sha "$D20_PR_HEAD_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
           export DISPLAY=":1"
           Xvfb :1 -screen 0 800x600x8 &
+          set +e
           mvn -U -B clean test
+          rc=$?
+          set -e
+          python3 -I .github/ci/test_provenance.py execution-finish --repo . --maven-exit-file "$RUNNER_TEMP/d20-maven-exit.txt" --java-version "${{ matrix.java }}" --event-name "$GITHUB_EVENT_NAME" --event-sha "$GITHUB_SHA" --pr-head-sha "$D20_PR_HEAD_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --exit-code "$rc"
+          exit "$rc"
+
+      - name: Collect D20 source-bound test provenance
+        if: always()
+        shell: bash
+        env:
+          D20_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 -I .github/ci/test_provenance.py collect \
+            --repo . \
+            --known-not-run .github/ci/known-not-run.json \
+            --maven-exit-file "$RUNNER_TEMP/d20-maven-exit.txt" \
+            --java-version "${{ matrix.java }}" \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-source-tree "$(git rev-parse "$GITHUB_SHA^{tree}")" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-sha "$GITHUB_SHA" \
+            --pr-head-sha "$D20_PR_HEAD_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/d20-evidence/FORGE_TEST_PROVENANCE.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload D20 provenance and raw test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: forge-test-provenance-java-${{ matrix.java }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/d20-evidence/FORGE_TEST_PROVENANCE.json
+            ${{ runner.temp }}/d20-maven-exit.txt
+            **/target/surefire-reports/TEST-*.xml
+          if-no-files-found: error
+          retention-days: 30
