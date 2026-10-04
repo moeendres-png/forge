@@ -30,8 +30,8 @@ public final class TrustedTestNGDriver {
     static final int UNDECLARED_SKIP = 11;
     static final int EXECUTION_COUNT_MISMATCH = 12;
     static final int CONTAINMENT_VIOLATION = 13;
-    static final int DECLARED_SKIP_BASE = 20;
-    static final int MAX_ENCODED_DECLARED_SKIPS = 200;
+    static final int DECLARED_SKIP_BASE = 30;
+    static final int MAX_ENCODED_DECLARED_SKIPS = 39;
     static final int CONTAINMENT_UNAVAILABLE = 78;
     static final int DRIVER_ERROR = 79;
 
