@@ -44,10 +44,10 @@ provenance.** That revision was rejected at review and replaced.
 | Candidate identity is exact | Full lowercase 40-hex only; the fetched ref must resolve to exactly that commit; the TREE is re-proven inside the candidate workspace before any candidate code runs. |
 | No synthetic-merge fallback | `refs/pull/<n>/merge` is not an acceptable fetch ref. No merge is computed and no mergeability field is read anywhere. |
 | Execution is witnessed, not reported | A trusted listener, compiled here and placed first on the classpath, records every dispatch. Candidate reports are never consulted. |
-| Candidate code never runs as the validator | The candidate build and every candidate test JVM run as the separate account `d17cand` (`sandbox.py`). The environment is allowlisted, and every candidate process is reaped after each run. A probe run as that account must find no writable trusted path (the checkout, evidence, the runner's Maven cache, workflow command files, staged bundles), or the sandbox refuses to start. |
+| Candidate code never runs as the validator | Candidate Maven/plugins and every candidate-production JVM run as the separate account `d17cand` (`sandbox.py`). Qualification test bodies come only from the trusted comparison base; candidate-owned test bodies are never executed for credit. The environment is allowlisted, and every candidate process is reaped after each run. |
 | Trusted bytecode and toolchains are out of reach | Before any candidate code runs, the driver and listener are compiled against the digest-pinned TestNG 7.10.2 closure. They are staged root-owned and read-only under `/var/lib/d17-trusted` (`/opt` is world-writable on hosted runners), together with the JDK and Maven that later trusted steps use. |
-| The executed test bytecode is not the candidate's build output | Test sources are exported from the locked commit with `git archive` and compiled by trusted code with `-proc:none`. No `.class` file or TestNG service registration is copied from test resources, and compiled classes must stay byte-identical. The candidate's own `target/test-classes` and installed Forge sibling jars are dropped from the launch classpath. |
-| The ledger is authenticated | The key reaches the trusted driver on stdin only, never as a property, argument, environment variable or file. Every ledger line is HMAC-chained. The orchestrator verifies the chain before copying the ledger into trusted evidence and records the copy's digest. `qualify.py` credits only that copy. A line that candidate code adds, alters, reorders or replays rejects the ledger. |
+| The executed test bytecode is trusted policy | Test sources are exported from the **trusted comparison-base commit**, never from the candidate role, and compiled by trusted code with `-proc:none` against the frozen candidate production classpath. Candidate `target/test-classes` is never executed for credit. The manifest binds `trusted_test_source_sha` to the comparison-base source lock. |
+| Hostile bytecode is contained before ledger authentication matters | The system classpath contains only the trusted driver/listener and digest-pinned TestNG. Trusted comparison-base tests and candidate production bytecode use separate child loaders. A mandatory Java-21 SecurityManager guard denies candidate production code system-loader access, witness-package access, access-check suppression, SecurityManager replacement, process/native-code execution, protected witness-path mutation and TestNG global-property mutation. A denied operation is sticky and makes the run FAIL even if caught. The HMAC ledger remains defense in depth. If containment is unavailable, the verdict is UNKNOWN; there is no uncontained fallback. |
 | Candidate listeners cannot change what runs or counts | TestNG's default listeners are off, and its service-loader discovery sees only the trusted jars, so a candidate `META-INF/services/org.testng.ITestNGListener` is never loaded. |
 | Integrity is verified, not assumed | `sandbox.py verify` re-derives every trusted file from Git, re-checks the evidence seals and checks that no candidate process is alive. `qualify.py` turns a violation into `FAIL` and a missing or foreign `INTEGRITY.json` into `UNKNOWN`. |
 | Stale evidence cannot be reused | The evidence directory is deleted and recreated each run; every witness ledger is bound to a fresh nonce and a gap-free sequence, and its summary is recomputed from its records. |
@@ -129,16 +129,17 @@ Signals are evaluated strongest-negative-first:
 `QUALIFY_OUT_OF_BAND_CLASSES` declares test classes outside the qualified
 surface.
 
-The surface is intentionally **the whole reactor**, not a subset. The three
-modules below are the only ones with test sources in the default reactor, and
-all three must report. The trusted denominator is measured, not assumed: on Forge
-master `b95c07b3436bf582274ea458520ca30aa379d6e7` the dry run enumerates
-**666 tests** — `forge-game` 3, `forge-gui-desktop` 450,
-`forge-protocol2-bridge` 213 — matching the existing `test-build.yaml` gate
-exactly. An earlier revision used `-pl forge-gui-desktop -am`, which silently
-dropped `forge-protocol2-bridge`'s 213 tests (32 % of the suite); that is
-recorded as a mistake and is now prevented by a mutation control on the include
-patterns.
+All three test-bearing reactor modules must report, but **666 is no longer
+described as full Forge test coverage**. It is only the TestNG-discoverable
+execution denominator observed on the historical comparison base. D24/#528
+proved that PowerMock-derived source tests are silently absent from that
+denominator under TestNG 7. D17 therefore records a second trusted source-policy
+inventory: D24 framework-NOT_RUN classes, explicit disabled source classes from
+the read-only D20 inventory, and the separately owned disabled CR104.3f method.
+Any such obligation keeps `whole_reactor_coverage_complete=false` and an
+otherwise honest execution returns `PARTIAL`, never PASS. When D24 actually
+restores a class to execution on the trusted comparison base it automatically
+leaves the D24 gap list.
 
 Only a skip in a declared out-of-band class is excluded. A skip in any other
 class is `PARTIAL`. `skipped_total`, `observed_skipped_classes`,
@@ -199,61 +200,35 @@ is what makes the red controls non-vacuous.
 Both are stdlib-only. Forge has no Python test infrastructure, so `unittest` is
 used deliberately rather than adding a dependency.
 
-## Residual limitations
+## Containment and remaining limits
 
-Stated as part of the evidence, not hidden.
-
-* **The same JVM is shared.** Candidate test code, candidate main code and
-  dependency code run in the trusted driver's JVM, as the sandbox account.
-  TestNG honours `@Listeners`, `IHookable`, `IConfigurable` and object factories
-  declared in test classes, and its public API lets any in-process code reach the
-  running suite (`Reporter.getCurrentTestResult().getTestContext().getSuite()`).
-  One such registration rewrites the outcome of every other class. The launch
-  classpath is therefore admitted before candidate code runs (see
-  *Launch-classpath admission*). Deliberate reflection with computed names (for
-  example reading the listener's key or reaching TestNG internals through
-  strings assembled at runtime, defining classes from bytes, or reading the
-  listener's key from memory) is not ruled out: **a candidate acting
-  deliberately inside the test JVM is not contained.** The admission scan
-  closes the declarative TestNG routes (`@Listeners`, hooks, factories,
-  `Reporter`). The dispatch check closes `testng.*` runtime knobs set as
-  ordinary properties, including dry-run mode, and a replaced `Properties`
-  object. The HMAC chain stops forgery from outside the process. Each later
-  review found another plain-JDK route around a point check (a properties
-  object answering differently per caller, then a thread racing the reads), so
-  these checks are mitigations, not a boundary. They are not a sandbox for code that sets out to subvert the JVM it
-  shares with the witness. Whether that residual is acceptable is an Owner
-  decision. What the design guarantees: candidate code cannot write trusted
-  state, cannot change which test bytecode runs, cannot load a class that
-  references TestNG beyond test annotations and assertions or the witness
-  package, cannot swap a dependency jar, cannot forge a ledger line from outside
-  the process, and cannot make a forged ledger pass the orchestrator's
-  verification.
-* **Dependency changes are UNKNOWN.** A candidate that adds or upgrades a
-  dependency runs with a jar absent from the trusted repository, which is
-  unverified, so it can never PASS until the default branch carries the jar.
-* **Dry run and runtime knobs.** The driver clears every `testng.*` system
-  property before the run. A result counts as PASS only if TestNG dispatched its
-  method while neither dry-run mode nor any `testng.*` property was set
-  (`"invoked": true` in the ledger, re-checked by `qualify.py`).
-* **Frozen classpath.** Each module's admitted classpath is copied, from the
-  bytes judged, into the root-owned bundle, and launches use only those copies.
-  Code running in an earlier module's launch can rewrite the candidate's
-  classpath file, output directories and Maven repository, but never what a
-  later launch loads.
-* **Working directory data.** Launches run in the candidate's module directory,
-  and Forge tests read data files from there (`../forge-gui/res`). Code in an
-  earlier module's launch can rewrite data a later launch reads. Only what loads
-  from the classpath is frozen.
-* **Scheduled jobs.** `reap` and `verify` check that no candidate process is
-  alive. A `cron`/`at` job the sandbox account schedules could start later; it
-  reaches only state the account can already write.
-* **It cannot prove a candidate-owned test method is semantically strong.** That
-  is review, not CI.
-* **It is not a required status check.** It is informational until a separate
-  decision promotes it.
-* **Candidate definition divergence is reported, not enforced.** Enforcing it
-  would duplicate lab CI-02's required-check mutation detection (#483).
+* **REQUIRE_CONTAINMENT is enforced, not waived.** Candidate production bytecode
+  does not share the system loader with the witness. The mandatory containment
+  guard is installed before trusted-base tests initialize candidate code.
+  Candidate attempts to obtain the system loader, suppress access checks,
+  replace the SecurityManager/properties object, execute processes, load native
+  code, mutate the protected witness directory or TestNG global knobs are sticky
+  violations. The listener records the containment state and `qualify.py`
+  requires `SECURITY_MANAGER_ENFORCED` from both manifest and witness.
+* **Runtime support is bounded.** This design deliberately uses the JDK 17/21
+  SecurityManager compatibility mechanism. A runtime where that mechanism is
+  unavailable is `UNKNOWN`, not an implicit downgrade to the older shared-JVM
+  mitigation model. D17 does not claim future-JDK containment from this design.
+* **D24 coverage remains external debt.** Framework-undiscoverable PowerMock
+  tests are recorded as `NOT_RUN`; explicit disabled source classes and the
+  D22 CR104.3f method remain distinct evidence classes. They cannot be converted
+  into PASS by the executable dry-run denominator.
+* **Dependency changes are UNKNOWN.** A candidate-added/upgraded dependency that
+  is absent from the trusted Maven repository is not admitted.
+* **Frozen classpath and immutable runtime data.** Candidate build output and
+  verified dependency jars are frozen into the root-owned bundle before any
+  candidate-production test execution. Launch working-directory data comes from
+  a separately verified exact-candidate Git export, not from the writable build
+  tree.
+* **HMAC is defense in depth, not the containment boundary.** The ledger key is
+  supplied only to the trusted driver. Qualification credit additionally
+  requires the independent hostile-bytecode containment signal and filesystem
+  integrity; a valid-looking ledger without those signals cannot PASS.
 
 ## Scope boundary with D20/#501
 
