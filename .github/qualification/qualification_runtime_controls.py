@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -256,8 +257,8 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
 
     def test_candidate_cannot_write_protected_child_output(self) -> None:
         output = self.exec_sandbox / "runtime-control-output"
-        body = 'java.nio.file.Files.writeString(java.nio.file.Path.of(%r), "forged");' % (
-            str(output / "forged"),)
+        body = 'java.nio.file.Files.writeString(java.nio.file.Path.of(%s), "forged");' % (
+            json.dumps(str(output / "forged")),)
         candidate = self.candidate_with_attack(body)
         tests = self.trusted_attack_test(extra_cp=[candidate])
         proc = self.launch(tests, {"probe.AttackTest": 1}, candidate_code=[candidate])
