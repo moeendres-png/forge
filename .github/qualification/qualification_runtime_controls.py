@@ -417,6 +417,21 @@ public class HostileMain {
                 throw new RuntimeException(io);
             }
         });
+        blocked += caught(() -> {
+            try {
+                ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)
+                        .dumpHeap(ledger + ".hprof", true);
+            } catch (java.io.IOException io) {
+                throw new RuntimeException(io);
+            }
+        });
+        blocked += caught(() -> {
+            try {
+                Files.readAllBytes(Path.of("/proc/self/mem"));
+            } catch (java.io.IOException io) {
+                throw new RuntimeException(io);
+            }
+        });
 
         Thread racer = new Thread(() -> {
             try {
@@ -451,7 +466,7 @@ import static org.testng.Assert.assertEquals;
 import org.testng.annotations.Test;
 public class TrustedAttackCallerTest {
     @Test public void hostileAuthorityAttemptsCannotBeHidden() {
-        assertEquals(HostileMain.attack(LEDGER), 6);
+        assertEquals(HostileMain.attack(LEDGER), 8);
     }
 }
 """
