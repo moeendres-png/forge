@@ -548,12 +548,10 @@ class PositiveExactShaPath(EvidenceCase):
         import copy
         self.honest()
         manifest = copy.deepcopy(self.manifest)
+        # Keep otherwise-valid evidence so this control is discriminating: the
+        # build-definition divergence alone must prevent PASS.
         manifest["candidate_build_definition_divergence"] = ["pom.xml"]
-        manifest["error"] = "candidate changes Maven build authority: pom.xml"
-        manifest["modules"] = {}
-        manifest.pop("trusted_test_compilation", None)
-        manifest.pop("launch_classpath_admission", None)
-        evidence = self.verdict(manifest=manifest, authenticated=False)
+        evidence = self.verdict(manifest=manifest)
         self.assertNotPass(evidence, qualify.UNKNOWN)
         self.assertIn("Maven build/plugin authority", evidence["reason"])
 
@@ -1570,6 +1568,13 @@ class TrustedOrchestratorControls(unittest.TestCase):
         self.assertEqual(
             trusted_execution.assemble_classpath("/w", []), "/w"
         )
+
+    def test_candidate_maven_build_runs_offline_against_trusted_repository(self) -> None:
+        import inspect
+        source = inspect.getsource(trusted_execution.cmd_execute)
+        self.assertIn('"-o", "-B", "-q"', source)
+        self.assertIn('"-Dmaven.repo.local=" + str(trusted_maven_repo)', source)
+        self.assertIn("build_definition_divergence(", source)
 
     def test_required_surface_include_patterns_match_surefire_defaults(self) -> None:
         self.assertEqual(
