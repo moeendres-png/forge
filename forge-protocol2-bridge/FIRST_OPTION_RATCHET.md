@@ -29,7 +29,8 @@
    one of two things.
    - **A forced singleton.** The innermost block containing the pick must be
      opened by `if (<same collection>.size() == 1)`, or `else if (...)`. The guard
-     may only be conjoined (`&&`) with negated plain flags such as `!isOptional`.
+     may only be conjoined (`&&`) with the bridge's existing optionality
+     guards `!isOptional`, `!optional`, or `!cancelAllowed`.
      These do not count:
      - a positive flag or a call;
      - a disjunction or a negation of the size test;
@@ -70,9 +71,9 @@ blind spots include:
     `descendingIterator().next()`, nested-argument `toArray(...)[0]`, or
     numeric-separator zero spellings;
 - a receiver or aliased collection reassigned/mutated after the size-one guard;
-- optionality semantics: a syntactic `size() == 1` plus a negated plain flag is
-  not proof that declining is impossible or that the flag name means what it
-  suggests;
+- optionality semantics: even the three explicitly recognised optionality flag
+  names are only syntactic evidence here; the ratchet does not prove that
+  declining is impossible or that those flags preserve their intended meaning;
 - helper methods whose internal selection uses an unrecognised spelling;
 - a pinned exception whose surrounding semantics change without moving or
   changing the pinned line;
