@@ -1,0 +1,461 @@
+package forge.bridge;
+
+import org.testng.Assert;
+import org.testng.annotations.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+
+/**
+ * Static evidence-harness gate: a test may not answer a decision frame with
+ * whatever option the frame happens to list first ({@code options.get(0)},
+ * {@code opts.get(0)}, {@code offered.get(0)}, ...).
+ * A pick must say why it is sound: {@link BridgeTestSupport#equivalentPayment}
+ * (OUTCOME_EQUIVALENT_PROVEN), {@link BridgeTestSupport#reachabilityOnlyChoice}
+ * (REACHABILITY_ONLY_NO_BEHAVIOR_CREDIT), or an explicit label/predicate.
+ *
+ * <p>The 245 legacy picks in older evidence tests are frozen as a ratchet:
+ * no file may gain one, a file not listed may have none, and a count that
+ * drops must be lowered here so it cannot silently grow back. Adjudicating
+ * the legacy picks is tracked separately; this gate only stops new ones.</p>
+ */
+public class FirstOptionRatchetTest {
+
+    /*
+     * Bounded claim (D23, commander-playtest-lab#504). Both gates below are
+     * syntactic debt control. They stop new first-option picks in the bridge's
+     * tests and keep every first-element pick its production code spells in a
+     * recognised way (see PICK) either a
+     * structurally guarded forced singleton or a pinned, reviewed exception.
+     * They are NOT a runtime proof that no production-reachable decision falls
+     * back to a first option; that proof belongs to the candidate's runtime
+     * qualification (its unsupported paths fail closed and its decisions are
+     * observed at runtime), never to these tests.
+     */
+
+    /** A test pick of the first element of a frame's option list, under any of the spellings used here. */
+    private static final Pattern FIRST_OPTION = Pattern.compile(
+            "\\b(options|opts|offered[A-Za-z]*|choices|candidates|legal[A-Za-z]*|getOptions\\s*\\(\\s*\\))"
+                    + "\\s*\\.\\s*(get\\s*\\(\\s*0\\s*\\)|getFirst\\s*\\(\\s*\\)"
+                    + "|iterator\\s*\\(\\s*\\)\\s*\\.\\s*next\\s*\\(\\s*\\)"
+                    + "|stream\\s*\\(\\s*\\)\\s*\\.\\s*find(First|Any)\\s*\\(\\s*\\))");
+
+    /** Legacy first-option picks per test source (path below forge/bridge); may only go down. */
+    private static final Map<String, Integer> LEGACY = new TreeMap<>(Map.ofEntries(
+            Map.entry("BridgeEngineTest", 7),
+            Map.entry("BridgeProtocolProcessTest", 1),
+            Map.entry("WS202ExecutableSurfaceTest", 48),
+            Map.entry("WS202SeparateProcessTest", 12),
+            Map.entry("WS216GapClosureTest", 30),
+            Map.entry("WS216SeparateProcessTest", 17),
+            Map.entry("WS217DividedAllocationTest", 10),
+            Map.entry("WS217SeparateProcessTest", 1),
+            Map.entry("WS227ReplayChild", 5),
+            Map.entry("WS227SemanticReplayTest", 14),
+            Map.entry("WS234S3BridgeTest", 21),
+            Map.entry("WS236F4BridgeTest", 6),
+            Map.entry("WsR10KedissBridgeFamilyTest", 4),
+            Map.entry("WsR10MagmaBridgeFamilyTest", 9),
+            Map.entry("WsR11BoseijuBridgeFamilyTest", 6),
+            Map.entry("WsR11FuseBridgeFamilyTest", 5),
+            Map.entry("WsR11JeskaBridgeFamilyTest", 4),
+            Map.entry("WsR13PathBridgeFamilyTest", 10),
+            Map.entry("WsR15ConcessionFamilyTest", 2),
+            Map.entry("WsR15MulticountCombatTest", 2),
+            Map.entry("WsR15MulticountTriggerTest", 2),
+            Map.entry("WsR16SixPlayerFamilyTest", 2),
+            Map.entry("WsR9FinaleX10BridgeFamilyTest", 6),
+            Map.entry("WsR9RetargetBridgeFamilyTest", 21)));
+
+    private static Path testSources() {
+        final List<Path> candidates = new ArrayList<>();
+        final String basedir = System.getProperty("basedir");
+        if (basedir != null) {
+            candidates.add(Paths.get(basedir, "src", "test", "java", "forge", "bridge"));
+        }
+        candidates.add(Paths.get("src", "test", "java", "forge", "bridge"));
+        candidates.add(Paths.get("forge-protocol2-bridge", "src", "test", "java", "forge", "bridge"));
+        for (Path candidate : candidates) {
+            if (Files.isDirectory(candidate)) {
+                return candidate;
+            }
+        }
+        throw new AssertionError("bridge test sources not found (gate cannot run): " + candidates);
+    }
+
+    @Test
+    public void noTestGainsAFirstOptionPick() throws IOException {
+        final Path root = testSources();
+        final Map<String, Integer> found = new TreeMap<>();
+        try (Stream<Path> files = Files.walk(root)) {
+            for (Path file : (Iterable<Path>) files.filter(p -> p.toString().endsWith(".java"))::iterator) {
+                final String name = root.relativize(file).toString().replace('\\', '/').replaceAll("\\.java$", "");
+                if (name.equals("FirstOptionRatchetTest")) {
+                    continue;
+                }
+                final String source = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+                if (hasUnicodeEscape(source)) {
+                    throw new AssertionError(name + ": raw Java Unicode escape is unsupported by the lexical ratchet");
+                }
+                final Matcher m = FIRST_OPTION.matcher(source);
+                int count = 0;
+                while (m.find()) {
+                    count++;
+                }
+                if (count > 0) {
+                    found.put(name, count);
+                }
+            }
+        }
+        final List<String> problems = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : found.entrySet()) {
+            final int allowed = LEGACY.getOrDefault(entry.getKey(), 0);
+            if (entry.getValue() > allowed) {
+                problems.add(entry.getKey() + ": " + entry.getValue() + " first-option picks, allowed "
+                        + allowed + " (choose explicitly or use a documented disposition)");
+            } else if (entry.getValue() < allowed) {
+                problems.add(entry.getKey() + ": now " + entry.getValue() + ", lower its LEGACY entry from "
+                        + allowed + " so it cannot grow back");
+            }
+        }
+        for (Map.Entry<String, Integer> entry : LEGACY.entrySet()) {
+            if (!found.containsKey(entry.getKey())) {
+                problems.add(entry.getKey() + ": no picks left (or file gone), remove its LEGACY entry");
+            }
+        }
+        Assert.assertTrue(problems.isEmpty(), String.join("\n", problems));
+    }
+
+    // ------------------------------------------------------------------ //
+    // Production gate
+
+    /** A literal zero index, also spelled 0x0, 0L or (0). */
+    private static final String ZERO = "\\(\\s*(?:\\(\\s*)*0(?:[xXbB]0*|0*)[lL]?(?:\\s*\\))*\\s*\\)";
+
+    /**
+     * The first-element pick spellings the production gate recognises, on any
+     * receiver: {@code get(0)}, {@code remove(0)}, {@code getFirst()},
+     * {@code removeFirst()}, {@code getLast()}, {@code first()},
+     * {@code iterator().next()}, {@code listIterator().next()},
+     * {@code findFirst()}, {@code findAny()}, {@code toArray()[0]},
+     * {@code Iterables.get*} and {@code Iterators.get*}. It runs on source with
+     * comments, string literals and text blocks blanked, so a pick split over
+     * lines is still found. Other spellings are blind spots
+     * (FIRST_OPTION_RATCHET.md).
+     */
+    private static final Pattern PICK = Pattern.compile(
+            "\\.\\s*(?:get\\s*" + ZERO + "|remove\\s*" + ZERO
+                    + "|getFirst\\s*\\(\\s*\\)|removeFirst\\s*\\(\\s*\\)|getLast\\s*\\(\\s*\\)"
+                    + "|first\\s*\\(\\s*\\)"
+                    + "|(?:list)?[iI]terator\\s*\\(\\s*\\)\\s*\\.\\s*next\\s*\\(\\s*\\)"
+                    + "|findFirst\\s*\\(\\s*\\)|findAny\\s*\\(\\s*\\)"
+                    + "|toArray\\s*\\([^()]*\\)\\s*\\[\\s*0\\s*\\])"
+                    + "|\\b(?:Iterables|Iterators)\\s*\\.\\s*get[A-Za-z]*\\s*\\(");
+
+    /** Structurally guarded picks: the pick sits directly in the block of {@code if (<receiver>.size() == 1 [&& !optionalFlag]...)}. */
+    private static final int PRODUCTION_FORCED_SINGLETONS = 34;
+
+    /**
+     * Every other production pick, pinned by file, exact line number and exact
+     * whitespace-collapsed line. Moving or changing a pinned line forces
+     * deliberate re-review; broader surrounding semantics remain outside this
+     * syntactic gate (FIRST_OPTION_RATCHET.md).
+     */
+    private static final String[][] PRODUCTION_EXCEPTIONS = {
+            {"BridgeCostDecisionMaker.java", "260", "final Card first = picked.getFirst();",
+                    "reads back the pilot's own one-card discard frame answer (frameCostCards max 1), not an option list"},
+            {"BridgeCostDecisionMaker.java", "322",
+                    "&& payable.getZone() == player.getZone(cost.getFrom().get(0))",
+                    "the cost's source zone, not a decision option"},
+            {"BridgeCostDecisionMaker.java", "513", "final Card first = picked.getFirst();",
+                    "reads back the pilot's own one-card sacrifice frame answer (frameCostCards max 1), not an option list"},
+            {"ExternalPlayerController.java", "1512",
+                    "targetOptions, decision.getTotalAmount(), decision.getRecipients().get(0)",
+                    "minimum amount of the engine's divided-allocation decision; every recipient carries the same"
+                            + " minPerTarget (DividedAllocationDecision), so it is not a choice"},
+            {"ExternalPlayerController.java", "2366", "single.add(spells.get(0));",
+                    "forced singleton guarded by spells.size() == num && num == 1"},
+            {"SemanticReplay.java", "613", "return matches.get(0);",
+                    "replay match proven unique: throws when no option or more than one option matches"},
+    };
+
+    private static Path mainSources() {
+        final Path tests = testSources();
+        final Path main = tests.getParent().getParent().getParent().getParent().resolve("main").resolve("java");
+        if (!Files.isDirectory(main)) {
+            throw new AssertionError("bridge main sources not found (gate cannot run): " + main);
+        }
+        return main;
+    }
+
+    /** One first-element pick: where, on which receiver, and whether it is a structurally guarded singleton. */
+    static final class Site {
+        final int line;
+        final String text;
+        final boolean forced;
+
+        Site(int line, String text, boolean forced) {
+            this.line = line;
+            this.text = text;
+            this.forced = forced;
+        }
+    }
+
+    /**
+     * Raw Java Unicode escapes are rejected rather than partially interpreted:
+     * Java translates them before lexical analysis, while this ratchet is only
+     * a bounded source-text scanner.
+     */
+    static boolean hasUnicodeEscape(String source) {
+        for (int i = 0; i + 1 < source.length(); i++) {
+            if (source.charAt(i) == '\\' && source.charAt(i + 1) == 'u') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Comments, text blocks, string and char literals blanked to spaces; offsets and newlines kept. */
+    static String blankCommentsAndLiterals(String source) {
+        final char[] out = source.toCharArray();
+        int i = 0;
+        while (i < out.length) {
+            final char c = source.charAt(i);
+            final char next = i + 1 < out.length ? source.charAt(i + 1) : '\0';
+            int end;
+            if (c == '/' && next == '/') {
+                end = source.indexOf('\n', i);
+                end = end < 0 ? out.length : end;
+            } else if (c == '/' && next == '*') {
+                end = source.indexOf("*/", i + 2);
+                end = end < 0 ? out.length : end + 2;
+            } else if (source.startsWith("\"\"\"", i)) {
+                end = i + 3;
+                while (end < out.length && !source.startsWith("\"\"\"", end)) {
+                    end += source.charAt(end) == '\\' ? 2 : 1;
+                }
+                end = Math.min(out.length, end + 3);
+            } else if (c == '"' || c == '\'') {
+                end = i + 1;
+                while (end < out.length && source.charAt(end) != c && source.charAt(end) != '\n') {
+                    end += source.charAt(end) == '\\' ? 2 : 1;
+                }
+                end = Math.min(out.length, end + 1);
+            } else {
+                i++;
+                continue;
+            }
+            for (int k = i; k < end; k++) {
+                if (out[k] != '\n') {
+                    out[k] = ' ';
+                }
+            }
+            i = end;
+        }
+        return new String(out);
+    }
+
+    static List<Site> sites(String source) {
+        final String code = blankCommentsAndLiterals(source);
+        final String[] lines = source.split("\n", -1);
+        final List<Site> found = new ArrayList<>();
+        final Matcher m = PICK.matcher(code);
+        while (m.find()) {
+            final int start = m.start();
+            int line = 1;
+            for (int k = 0; k < start; k++) {
+                if (code.charAt(k) == '\n') {
+                    line++;
+                }
+            }
+            final String receiver = code.charAt(start) == '.' ? receiverBefore(code, start) : null;
+            final boolean forced = receiver != null && guardedBy(code, start, receiver);
+            found.add(new Site(line, lines[line - 1].trim().replaceAll("\\s+", " "), forced));
+        }
+        return found;
+    }
+
+    /** The plain (possibly dotted) name a pick is made on, or null when it is a call result or other expression. */
+    private static String receiverBefore(String code, int dot) {
+        int end = dot;
+        while (end > 0 && Character.isWhitespace(code.charAt(end - 1))) {
+            end--;
+        }
+        int begin = end;
+        while (begin > 0 && (Character.isJavaIdentifierPart(code.charAt(begin - 1)) || code.charAt(begin - 1) == '.')) {
+            begin--;
+        }
+        final String name = code.substring(begin, end);
+        if (name.isEmpty() || !Character.isJavaIdentifierStart(name.charAt(0)) || name.endsWith(".")) {
+            return null;
+        }
+        return name;
+    }
+
+    /**
+     * True only when the innermost block that contains the pick is opened by
+     * {@code if (<receiver>.size() == 1)} or {@code else if (...)}, optionally
+     * conjoined ({@code &&}) only with the bridge's known optionality guards
+     * {@code !isOptional}, {@code !optional}, or {@code !cancelAllowed}. A
+     * different negated identifier, positive flag, a call, a disjunction, a
+     * negation of the size test, a
+     * guard whose block closed before the pick, a comment, or a guard on a
+     * different collection does not count.
+     */
+    private static boolean guardedBy(String code, int pick, String receiver) {
+        int depth = 0;
+        int open = -1;
+        for (int k = pick - 1; k >= 0; k--) {
+            final char c = code.charAt(k);
+            if (c == '}') {
+                depth++;
+            } else if (c == '{') {
+                if (depth == 0) {
+                    open = k;
+                    break;
+                }
+                depth--;
+            }
+        }
+        if (open < 0) {
+            return false;
+        }
+        int from = open - 1;
+        while (from >= 0 && ";{}".indexOf(code.charAt(from)) < 0) {
+            from--;
+        }
+        final String header = code.substring(from + 1, open).replaceAll("\\s+", "");
+        return header.matches("(?:else)?if\\(" + Pattern.quote(receiver)
+                + "\\.size\\(\\)==1(?:&&!(?:isOptional|optional|cancelAllowed))*\\)");
+    }
+
+    /**
+     * Every recognised first-element pick (see PICK) in the bridge's production code is either a
+     * structurally guarded forced singleton (counted and pinned) or a pinned,
+     * reviewed exception. Anything else would answer a real decision with
+     * whatever was listed first.
+     */
+    @Test
+    public void productionPicksAreForcedSingletons() throws IOException {
+        final List<String> problems = new ArrayList<>();
+        final Map<String, Integer> exceptions = new TreeMap<>();
+        int forced = 0;
+        try (Stream<Path> files = Files.walk(mainSources())) {
+            for (Path file : (Iterable<Path>) files.filter(p -> p.toString().endsWith(".java"))::iterator) {
+                final String source = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+                if (hasUnicodeEscape(source)) {
+                    problems.add(file.getFileName()
+                            + ": raw Java Unicode escape is unsupported by the lexical ratchet");
+                    continue;
+                }
+                for (Site site : sites(source)) {
+                    if (site.forced) {
+                        forced++;
+                    } else {
+                        exceptions.merge(file.getFileName() + "|" + site.line + "|" + site.text, 1, Integer::sum);
+                    }
+                }
+            }
+        }
+        final Map<String, Integer> pinned = new TreeMap<>();
+        for (String[] exception : PRODUCTION_EXCEPTIONS) {
+            pinned.put(exception[0] + "|" + exception[1] + "|" + exception[2], 1);
+        }
+        for (Map.Entry<String, Integer> entry : exceptions.entrySet()) {
+            final int allowed = pinned.getOrDefault(entry.getKey(), 0);
+            if (entry.getValue() != allowed) {
+                problems.add(entry.getKey() + ": " + entry.getValue() + " unguarded first-element pick(s), pinned "
+                        + allowed + " (guard it with if (<collection>.size() == 1) or adjudicate it here)");
+            }
+        }
+        for (Map.Entry<String, Integer> entry : pinned.entrySet()) {
+            if (!exceptions.containsKey(entry.getKey())) {
+                problems.add(entry.getKey() + ": pinned exception no longer present, remove it");
+            }
+        }
+        if (forced != PRODUCTION_FORCED_SINGLETONS) {
+            problems.add(forced + " guarded forced-singleton picks in production code, expected "
+                    + PRODUCTION_FORCED_SINGLETONS + " (adjust deliberately, never silently)");
+        }
+        Assert.assertTrue(problems.isEmpty(), String.join("\n", problems));
+    }
+
+    private static Site only(String snippet) {
+        final List<Site> found = sites(snippet);
+        Assert.assertEquals(found.size(), 1, "expected one pick in: " + snippet);
+        return found.get(0);
+    }
+
+    /** The gate must find every spelling of a pick and accept only a real guard (non-vacuity). */
+    @Test
+    public void productionGateIsNotVacuous() {
+        Assert.assertTrue(only("if (options.size() == 1) {\n    return options.get(0);\n}").forced);
+        Assert.assertTrue(only("if (legal.size() == 1 && !isOptional) {\n    return legal.get(0);\n}").forced);
+        Assert.assertTrue(only("if (legal.size() == 1) {\n    return legal\n            .get(0);\n}").forced);
+        Assert.assertTrue(only("} else if (subsets.size() == 1) {\n    if (x) { y(); }\n"
+                + "    return new ArrayList<>(subsets.get(0));\n}").forced);
+
+        // Detected whatever the collection is called or however the pick is spelled; none guarded.
+        for (String unguarded : new String[] {
+                "return subsets.get(0);",
+                "return legal\n        .get(0);",
+                "return legal.stream().findFirst().get();",
+                "return legal.stream().findAny().orElseThrow();",
+                "return Iterables.getFirst(options, null);",
+                "return frame.getOptions().get(0);",
+                "return options.getFirst();",
+                "return options.getLast();",
+                "return spells.iterator().next();",
+                "return legal.remove(0);",
+                "return legal.removeFirst();",
+                "return legal.get(0x0);",
+                "return legal.get(0L);",
+                "return legal.get((0));",
+                "return legal.listIterator().next();",
+                "return sorted.first();",
+                "return (Card) legal.toArray()[0];",
+                "return Iterators.getNext(legal.iterator(), null);",
+                "return new ArrayList<>(legal).get(0);"}) {
+            Assert.assertFalse(only(unguarded).forced, unguarded);
+        }
+
+        // Guards that do not guard.
+        for (String fake : new String[] {
+                "if (legal.size() == 1 || !isOptional) {\n    return legal.get(0);\n}",
+                "if (!(legal.size() == 1)) {\n    return legal.get(0);\n}",
+                "if (legal.size() == 1) {\n    audit();\n}\nreturn legal.get(0);",
+                "// legal.size() == 1\nreturn legal.get(0);",
+                "String guard = \"if (legal.size() == 1) {\";\nreturn legal.get(0);",
+                "if (illegal.size() == 1) {\n    return legal.get(0);\n}",
+                "if (!subsets.isEmpty()) {\n    return subsets.get(0);\n}",
+                "if (legal.size() == 10) {\n    return legal.get(0);\n}",
+                "if (legal.size() >= 1) {\n    return legal.get(0);\n}",
+                "if (legal.size() == 1) return legal.get(0);",
+                "if (legal.size() == 1 && isOptional) {\n    return legal.get(0);\n}",
+                "if (legal.size() == 1 && !isMandatory) {\n    return legal.get(0);\n}",
+                "if (legal.size() == 1 && shrinkLegal()) {\n    return legal.get(0);\n}",
+                "String s = \"\"\"\n    ;\n    if (legal.size() == 1) {\n    \"\"\";\nreturn legal.get(0);"}) {
+            Assert.assertFalse(only(fake).forced, fake);
+        }
+
+        // Java Unicode translation is intentionally unsupported and fails closed.
+        Assert.assertTrue(hasUnicodeEscape("class X { // " + '\\' + "u0061 }"));
+        Assert.assertFalse(hasUnicodeEscape("return legal.get(0);"));
+
+        // Comments, literals and text blocks are not code, and code after a text block is.
+        Assert.assertTrue(sites("// return options.get(0);\nString s = \"options.get(0)\";").isEmpty());
+        Assert.assertTrue(sites("String s = \"\"\"\n    options.get(0) /* \\\"\"\" \n    \"\"\";").isEmpty());
+        Assert.assertFalse(only("return \"\"\"\n    picked %s\n    \"\"\".formatted(options.get(0));").forced);
+        Assert.assertFalse(only("String s = \"\"\"\n    see forge/bridge/*.java\n    \"\"\";\nreturn offered.get(0);").forced);
+    }
+}
