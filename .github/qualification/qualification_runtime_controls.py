@@ -406,13 +406,7 @@ public class HostileMain {
         int blocked = 0;
         blocked += caught(() -> ClassLoader.getSystemClassLoader());
         blocked += caught(() -> System.setProperties(new Properties()));
-        blocked += caught(() -> {
-            try {
-                new URLClassLoader(new URL[0]);
-            } catch (java.io.IOException impossible) {
-                throw new RuntimeException(impossible);
-            }
-        });
+        blocked += caught(() -> new URLClassLoader(new URL[0]));
         blocked += caught(() -> System.exit(0));
         blocked += caught(() -> System.loadLibrary("d17_nonexistent_native"));
         blocked += caught(() -> {
