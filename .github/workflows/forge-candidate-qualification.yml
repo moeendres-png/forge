@@ -67,8 +67,13 @@ env:
   # separate account, in this sandbox; trusted bytecode and toolchains are
   # staged root-owned and read-only under /var/lib (on hosted runners /opt is
   # world-writable and not sticky, so nothing trusted may live there).
-  D17_SANDBOX_USER: d17cand
-  D17_SANDBOX_DIR: /srv/d17-sandbox
+  # Build/plugin code and hostile production bytecode never share a UID.
+  # A delayed build-user process therefore cannot inspect or mutate the
+  # execution JVM/ledger even if it somehow outlives the build reap.
+  D17_BUILD_USER: d17build
+  D17_EXEC_USER: d17exec
+  D17_SANDBOX_DIR: /srv/d17-build-sandbox
+  D17_EXEC_SANDBOX_DIR: /srv/d17-exec-sandbox
   D17_BUNDLE_DIR: /var/lib/d17-trusted/bundle
   D17_RUNTIME_DIR: /var/lib/d17-trusted/runtime
   D17_TRUSTED_JDK: /var/lib/d17-trusted/jdk
@@ -284,7 +289,7 @@ jobs:
           # which is also the PATH prepare probes.
           export PATH="$D17_TRUSTED_PATH"
           /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare \
-            --user "$D17_SANDBOX_USER" \
+            --user "$D17_BUILD_USER" \
             --repo "$GITHUB_WORKSPACE" \
             --candidate-sha "$CANDIDATE_SHA" \
             --sandbox-dir "$D17_SANDBOX_DIR" \
@@ -338,7 +343,9 @@ jobs:
             --candidate-tree "$CANDIDATE_TREE" \
             --comparison-base "$COMPARISON_BASE" \
             --sandbox-dir "$D17_SANDBOX_DIR" \
-            --sandbox-user "$D17_SANDBOX_USER" \
+            --sandbox-user "$D17_BUILD_USER" \
+            --execution-user "$D17_EXEC_USER" \
+            --execution-sandbox-dir "$D17_EXEC_SANDBOX_DIR" \
             --sandbox-prepare "$EVIDENCE_DIR/SANDBOX_PREPARE.json" \
             --bundle-dir "$D17_BUNDLE_DIR" \
             --work-dir "$RUNNER_TEMP/d17-work" \
@@ -373,7 +380,8 @@ jobs:
           seals=()
           for seal in "$RUNNER_TEMP"/d17-seals/*.json; do seals+=(--seal "$seal"); done
           /usr/bin/python3 -I -S -B .github/qualification/sandbox.py verify \
-            --user "$D17_SANDBOX_USER" \
+            --user "$D17_EXEC_USER" \
+            --additional-user "$D17_BUILD_USER" \
             --repo "$GITHUB_WORKSPACE" \
             --trusted-sha "$AUTHORITY_SHA" \
             "${seals[@]}" \
