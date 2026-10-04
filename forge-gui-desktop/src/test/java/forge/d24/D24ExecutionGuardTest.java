@@ -13,13 +13,16 @@ import java.util.stream.Stream;
 
 import org.testng.Assert;
 import org.testng.ISuite;
-import org.testng.ISuiteResult;
-import org.testng.ITestContext;
+import org.testng.IInvokedMethod;
+import org.testng.IInvokedMethodListener;
+import org.testng.ISuiteListener;
 import org.testng.ITestNGMethod;
 import org.testng.ITestResult;
 import org.testng.annotations.AfterSuite;
+import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 
+@Listeners(D24ExecutionGuardTest.ExecutionListener.class)
 public class D24ExecutionGuardTest {
     private static final Map<String, Integer> DECLARED_TEST_METHODS = Map.ofEntries(
             Map.entry("forge.deck.DeckRecognizerTest", 84),
@@ -162,30 +165,15 @@ public class D24ExecutionGuardTest {
     }
 
     @AfterSuite(alwaysRun = true)
-    public void verifyLiveAffectedExecution(final ITestContext context) {
+    public void verifyLiveAffectedExecution() {
         if (System.getProperty("test") != null) {
             return;
         }
 
-        ISuite suite = context.getSuite();
-        Map<String, Integer> discovered = zeroCounts();
-        Map<String, Integer> passed = zeroCounts();
-        Map<String, Integer> failed = zeroCounts();
-        Map<String, Integer> skipped = zeroCounts();
-
-        for (ITestNGMethod method : suite.getAllMethods()) {
-            String className = method.getTestClass().getRealClass().getName();
-            if (discovered.containsKey(className) && method.getEnabled()) {
-                discovered.merge(className, 1, Integer::sum);
-            }
-        }
-
-        for (ISuiteResult suiteResult : suite.getResults().values()) {
-            ITestContext testContext = suiteResult.getTestContext();
-            addResults(passed, testContext.getPassedTests().getAllResults());
-            addResults(failed, testContext.getFailedTests().getAllResults());
-            addResults(skipped, testContext.getSkippedTests().getAllResults());
-        }
+        Map<String, Integer> discovered = new HashMap<>(ExecutionListener.discovered);
+        Map<String, Integer> passed = new HashMap<>(ExecutionListener.passed);
+        Map<String, Integer> failed = new HashMap<>(ExecutionListener.failed);
+        Map<String, Integer> skipped = new HashMap<>(ExecutionListener.skipped);
 
         Map<String, Integer> invoked = zeroCounts();
         for (String className : invoked.keySet()) {
@@ -211,15 +199,53 @@ public class D24ExecutionGuardTest {
                 + " skip=" + totalSkipped + " disabled_not_run=" + EXPECTED_DISABLED.size());
     }
 
-    private static void addResults(Map<String, Integer> counts, Set<ITestResult> results) {
-        for (ITestResult result : results) {
-            String className = result.getInstance().getClass().getName();
-            if (counts.containsKey(className)) {
-                counts.merge(className, 1, Integer::sum);
+    public static final class ExecutionListener implements ISuiteListener, IInvokedMethodListener {
+        private static Map<String, Integer> discovered = zeroCounts();
+        private static Map<String, Integer> passed = zeroCounts();
+        private static Map<String, Integer> failed = zeroCounts();
+        private static Map<String, Integer> skipped = zeroCounts();
+
+        @Override
+        public void onStart(org.testng.ISuite suite) {
+            discovered = zeroCounts();
+            passed = zeroCounts();
+            failed = zeroCounts();
+            skipped = zeroCounts();
+
+            for (ITestNGMethod method : suite.getAllMethods()) {
+                String className = method.getTestClass().getRealClass().getName();
+                if (discovered.containsKey(className) && method.getEnabled()) {
+                    discovered.merge(className, 1, Integer::sum);
+                }
+            }
+        }
+
+        @Override
+        public void afterInvocation(IInvokedMethod method, ITestResult result) {
+            if (!method.isTestMethod()) {
+                return;
+            }
+            String className = result.getTestClass().getRealClass().getName();
+            if (!passed.containsKey(className)) {
+                return;
+            }
+
+            switch (result.getStatus()) {
+            case ITestResult.SUCCESS:
+                passed.merge(className, 1, Integer::sum);
+                break;
+            case ITestResult.FAILURE:
+            case ITestResult.SUCCESS_PERCENTAGE_FAILURE:
+                failed.merge(className, 1, Integer::sum);
+                break;
+            case ITestResult.SKIP:
+                skipped.merge(className, 1, Integer::sum);
+                break;
+            default:
+                throw new AssertionError("unexpected TestNG status for " + className + ": " + result.getStatus());
             }
         }
     }
-
 
     private static Map<String, Integer> zeroCounts() {
         Map<String, Integer> result = new HashMap<>();
