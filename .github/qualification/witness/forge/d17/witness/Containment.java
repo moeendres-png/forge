@@ -1,7 +1,8 @@
 package forge.d17.witness;
 
 import java.io.FilePermission;
-import java.lang.reflect.ReflectPermission;\nimport java.lang.management.ManagementPermission;
+import java.lang.reflect.ReflectPermission;
+import java.lang.management.ManagementPermission;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Path;
@@ -127,10 +128,15 @@ public final class Containment {
      * loader beneath it.
      */
     static final class TrustedTestLoader extends URLClassLoader {
+        private final CandidateCodeLoader candidate;
         private final ClassLoader trusted;
 
-        TrustedTestLoader(URL[] urls, ClassLoader parent, ClassLoader trusted) {
-            super(urls, parent);
+        TrustedTestLoader(URL[] urls, CandidateCodeLoader candidate, ClassLoader trusted) {
+            // CandidateCodeLoader is deliberately a delegate, not the parent.
+            // Otherwise hostile candidate code is an ancestor of the context
+            // loader and can obtain that loader without a getClassLoader check.
+            super(urls, ClassLoader.getPlatformClassLoader());
+            this.candidate = candidate;
             this.trusted = trusted;
         }
 
@@ -149,9 +155,11 @@ public final class Containment {
             Class<?> loaded = findLoadedClass(name);
             if (loaded == null) {
                 try {
+                    // The trusted comparison-base test tree is child-first.
                     loaded = findClass(name);
                 } catch (ClassNotFoundException missing) {
-                    loaded = super.loadClass(name, false);
+                    // Product behavior comes only from the candidate domain.
+                    loaded = candidate.loadClass(name);
                 }
             }
             if (resolve) {
