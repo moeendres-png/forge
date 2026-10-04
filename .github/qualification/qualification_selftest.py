@@ -251,6 +251,7 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
         "candidate_artifacts_used_as_evidence": False,
         "candidate_execution_identity": SANDBOX_USER,
         "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
+        "trusted_test_source_sha": base or "b" * 40,
         "candidate_test_sources_used_for_credit": False,
         "hostile_bytecode_containment_required": True,
         "modules": {
@@ -477,6 +478,23 @@ class PositiveExactShaPath(EvidenceCase):
         self.assertIs(boundary["candidate_build_artifacts_used_as_evidence"], False)
         self.assertIs(boundary["candidate_reports_read_for_credit"], False)
         self.assertEqual(boundary["execution_observed_by"], WITNESS_CLASS)
+
+    def test_candidate_owned_test_source_cannot_become_qualification_authority(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["trusted_test_source_sha"] = self.fixture.candidate
+        manifest["candidate_test_sources_used_for_credit"] = True
+        manifest["test_bytecode_origin"] = "candidate"
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("test bodies", evidence["reason"])
+
+    def test_test_source_selector_always_returns_comparison_base(self) -> None:
+        self.assertEqual(
+            trusted_execution.trusted_test_source_commit("a" * 40, "b" * 40),
+            "a" * 40,
+        )
 
     def test_d24_framework_not_run_makes_honest_candidate_partial(self) -> None:
         import copy
