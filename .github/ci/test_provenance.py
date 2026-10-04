@@ -151,6 +151,8 @@ def parse_report(repo, path):
         if path.is_symlink() or resolved != absolute:
             raise ValueError('symlinked/escaped XML report path')
         raw = path.read_bytes()
+        if b'\x00' in raw:
+            raise ValueError('unsupported XML report encoding')
         if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
             raise ValueError('non-regular/unsupported XML report')
         root = ET.fromstring(raw)
@@ -187,13 +189,20 @@ def parse_report(repo, path):
         duration = dec(node.get("time"))
         total_time += duration
         status = PASS
+        outcome = "PASS"
         for child in list(node):
             kind = lname(child.tag)
-            if kind in ("failure", "error"):
+            if kind == "failure":
                 status = FAIL
+                outcome = "FAILURE"
+                break
+            if kind == "error":
+                status = FAIL
+                outcome = "ERROR"
                 break
             if kind == "skipped":
                 status = "SKIP"
+                outcome = "SKIP"
                 break
         if classname:
             observed.add(classname.split("$", 1)[0])
@@ -202,6 +211,7 @@ def parse_report(repo, path):
                 "classname": classname,
                 "name": node.get("name") or "",
                 "status": status,
+                "outcome": outcome,
                 "time_seconds": format(duration, "f"),
             }
         )
@@ -209,6 +219,7 @@ def parse_report(repo, path):
         {
             "path": path.relative_to(repo).as_posix(),
             "sha256": sha256(path),
+            "suite_counters": dict(counters),
             "testcase_count": len(cases),
             "time_seconds": format(total_time, "f"),
         },
@@ -408,8 +419,10 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         "normalized_results": {
             "testcase_count": len(cases),
             "duration_seconds": format(total_time, "f"),
-            "failures": sum(c["status"] == FAIL for c in cases),
-            "skipped": sum(c["status"] == "SKIP" for c in cases),
+            "passed": sum(c["outcome"] == "PASS" for c in cases),
+            "failures": sum(c["outcome"] == "FAILURE" for c in cases),
+            "errors": sum(c["outcome"] == "ERROR" for c in cases),
+            "skipped": sum(c["outcome"] == "SKIP" for c in cases),
             "testcases": sorted(
                 cases, key=lambda c: (c["classname"], c["name"], c["status"])
             ),
@@ -716,6 +729,27 @@ class Controls(unittest.TestCase):
             parse_report(self.root, path)
         r,ok=self.run_collect(self.known());self.assertFalse(ok)
         self.assertEqual(FAIL,r['provenance_integrity'])
+
+    def test_encoded_dtd_or_entity_input_is_red(self):
+        self.java('example.RealTest');path=self.report('example.RealTest')
+        xml='<!DOCTYPE testsuite [<!ENTITY x "boom">]><testsuite tests="1" failures="0" errors="0" skipped="0"><testcase classname="example.RealTest" name="x" time="0.25"/></testsuite>'
+        path.write_bytes(xml.encode('utf-16'))
+        r,ok=self.run_collect(self.known());self.assertFalse(ok)
+        self.assertEqual(FAIL,r['provenance_integrity'])
+
+    def test_structured_failure_error_skip_counters_are_distinct(self):
+        self.java('example.RealTest');path=self.report('example.RealTest')
+        path.write_text(
+            '<testsuite tests="4" failures="1" errors="1" skipped="1">'
+            '<testcase classname="example.RealTest" name="pass" time="0.10"/>'
+            '<testcase classname="example.RealTest" name="failure" time="0.20"><failure/></testcase>'
+            '<testcase classname="example.RealTest" name="error" time="0.30"><error/></testcase>'
+            '<testcase classname="example.RealTest" name="skip" time="0.40"><skipped/></testcase></testsuite>\n'
+        )
+        report,cases,_=parse_report(self.root,path)
+        self.assertEqual({'tests':4,'failures':1,'errors':1,'skipped':1},report['suite_counters'])
+        outcomes=[c['outcome'] for c in cases]
+        self.assertEqual(['PASS','FAILURE','ERROR','SKIP'],outcomes)
 
     def test_source_disabled_debt_is_partial_hash_bound_and_not_exempt(self):
         self.java('example.RealTest');self.report('example.RealTest');self.java('example.DisabledTest')
