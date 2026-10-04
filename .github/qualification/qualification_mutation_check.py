@@ -391,6 +391,13 @@ MUTATIONS = [
         '--trusted-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"',
         "trusted-file re-derivation would compare the checkout with itself",
     ),
+    Mutation(
+        "expose-trusted-dependency-bridge-as-candidate-parent",
+        "witness/forge/d17/witness/Containment.java",
+        "            super(urls, ClassLoader.getPlatformClassLoader());\n            this.dependencies = dependencies;\n",
+        "            super(urls, dependencies);\n            this.dependencies = dependencies;\n",
+        "candidate code could obtain its parent loader and load trusted TestNG authority through it",
+    ),
     # --- dispatch and frozen launches (review e05e6f17) -------------------- #
     Mutation(
         "credit-pass-without-dispatch",
