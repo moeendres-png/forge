@@ -2,6 +2,14 @@ name: Test build
 
 on: [push, pull_request]
 
+# D18 (#499): a newer head of the same pull request supersedes this run, so
+# the older run is cancelled. Every other event (a push to master or to a
+# qualification branch, a tag, workflow_dispatch, schedule) gets a group of
+# its own and is never cancelled. Contract: .github/ci/test_concurrency_contract.py
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # least privilege: these jobs only read the repository
 permissions:
   contents: read
