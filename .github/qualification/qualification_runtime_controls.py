@@ -173,7 +173,7 @@ public class HonestTest {
  @Test public void adds(){ assertEquals(HonestProduct.add(2,3),5); }
 }"""
         }, "honest-test", extra_cp=[candidate])
-        proc = self.launch(tests, {"probe.HonestTest": 1}, candidate_code=[candidate])
+        proc = self.launch(tests, {"probe.HonestTest": 1}, {"probe.HonestTest#adds": 1}, candidate_code=[candidate])
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_declared_skip_is_encoded_in_os_exit_status(self) -> None:
@@ -186,7 +186,7 @@ public class DeclaredSkipTest {
 }"""
         }, "declared-skip")
         proc = self.launch(
-            tests, {"probe.DeclaredSkipTest": 1},
+            tests, {"probe.DeclaredSkipTest": 1}, {"probe.DeclaredSkipTest#skipped": 1},
             allowed_skips=["probe.DeclaredSkipTest"])
         self.assertEqual(proc.returncode, 31, proc.stderr)
 
@@ -200,7 +200,7 @@ public class ConfigFailureTest {
  @Test public void body(){}
 }"""
         }, "config-failure")
-        proc = self.launch(tests, {"probe.ConfigFailureTest": 1})
+        proc = self.launch(tests, {"probe.ConfigFailureTest": 1}, {"probe.ConfigFailureTest#body": 1})
         self.assertEqual(proc.returncode, 10, proc.stderr)
 
     def test_undeclared_skip_is_red(self) -> None:
@@ -212,7 +212,7 @@ public class SkipTest {
  @Test public void skipped(){ throw new SkipException("no"); }
 }"""
         }, "undeclared-skip")
-        proc = self.launch(tests, {"probe.SkipTest": 1})
+        proc = self.launch(tests, {"probe.SkipTest": 1}, {"probe.SkipTest#skipped": 1})
         self.assertEqual(proc.returncode, 11, proc.stderr)
 
     def test_suppressed_invocation_count_is_red(self) -> None:
@@ -222,7 +222,7 @@ import org.testng.annotations.Test;
 public class OneTest { @Test public void one(){} }
 """
         }, "count-mismatch")
-        proc = self.launch(tests, {"probe.OneTest": 2})
+        proc = self.launch(tests, {"probe.OneTest": 2}, {"probe.OneTest#one": 2})
         self.assertEqual(proc.returncode, 12, proc.stderr)
 
 
@@ -258,6 +258,7 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
                     class_name="AttackTest{}".format(index), extra_cp=[candidate])
                 proc = self.launch(
                     tests, {"probe.AttackTest{}".format(index): 1},
+                    {"probe.AttackTest{}#attackIsRefused".format(index): 1},
                     candidate_code=[candidate])
                 self.assertEqual(
                     proc.returncode, 13,
@@ -268,7 +269,8 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'ClassLoader p=AttackProduct.class.getClassLoader().getParent(); '
             'p.loadClass("org.testng.Reporter");')
         tests = self.trusted_attack_test(extra_cp=[candidate])
-        proc = self.launch(tests, {"probe.AttackTest": 1}, candidate_code=[candidate])
+        proc = self.launch(tests, {"probe.AttackTest": 1}, {"probe.AttackTest#attackIsRefused": 1},
+                           candidate_code=[candidate])
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_candidate_cannot_write_protected_child_output(self) -> None:
@@ -277,7 +279,8 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             json.dumps(str(output / "forged")),)
         candidate = self.candidate_with_attack(body)
         tests = self.trusted_attack_test(extra_cp=[candidate])
-        proc = self.launch(tests, {"probe.AttackTest": 1}, candidate_code=[candidate])
+        proc = self.launch(tests, {"probe.AttackTest": 1}, {"probe.AttackTest#attackIsRefused": 1},
+                           candidate_code=[candidate])
         self.assertEqual(proc.returncode, 13, proc.stderr)
 
     def test_candidate_cannot_shadow_trusted_dependency(self) -> None:
@@ -298,7 +301,7 @@ public class ShadowTest { @Test public void trustedWins(){ assertEquals(Shared.v
 """
         }, "shadow-test", extra_cp=[trusted])
         proc = self.launch(
-            tests, {"probe.ShadowTest": 1},
+            tests, {"probe.ShadowTest": 1}, {"probe.ShadowTest#trustedWins": 1},
             candidate_code=[candidate], trusted_dependencies=[trusted])
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
