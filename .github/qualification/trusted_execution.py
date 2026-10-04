@@ -216,24 +216,73 @@ def trusted_reactor_modules(repo: Path, base: str) -> "list[str]":
     return sorted(found)
 
 
-def required_classes_for_module(repo: Path, module: str, base: str) -> "list[str]":
-    """Baseline required test classes, read from trusted Git data only.
+def _surefire_includes_from_pom(source: str) -> "list[str]":
+    try:
+        root = ET.fromstring(source)
+    except ET.ParseError as exc:
+        raise ExecutionError("trusted POM is malformed: {}".format(exc))
 
-    The include patterns are Surefire's defaults, matched with real glob
-    semantics.  Understating this set would let a candidate delete required
-    tests and still satisfy the trusted denominator, so the patterns are applied
-    exactly rather than approximated with ``endswith``.
+    def local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1]
+
+    found = []
+    for plugin in root.iter():
+        if local(plugin.tag) != "plugin":
+            continue
+        artifact = None
+        configuration = None
+        for child in list(plugin):
+            if local(child.tag) == "artifactId":
+                artifact = (child.text or "").strip()
+            elif local(child.tag) == "configuration":
+                configuration = child
+        if artifact != "maven-surefire-plugin" or configuration is None:
+            continue
+        for node in list(configuration):
+            if local(node.tag) != "includes":
+                continue
+            for include in list(node):
+                if local(include.tag) == "include" and (include.text or "").strip():
+                    found.append((include.text or "").strip().replace("\\", "/"))
+    return found
+
+
+def surefire_include_patterns(repo: Path, module: str, base: str) -> "list[str]":
+    """Trusted effective include policy for the current Forge POM structure.
+
+    Root pluginManagement provides the default Surefire configuration. A module
+    that explicitly declares Surefire <includes> owns the test discovery policy
+    for that module; otherwise Maven's default filename patterns apply.
     """
+    module_pom = git(repo, "show", "{}:{}/pom.xml".format(base, module))
+    explicit = _surefire_includes_from_pom(module_pom)
+    if explicit:
+        return explicit
+    root_pom = git(repo, "show", "{}:pom.xml".format(base))
+    inherited = _surefire_includes_from_pom(root_pom)
+    return inherited or list(TEST_INCLUDE_PATTERNS)
+
+
+def required_classes_for_module(repo: Path, module: str, base: str) -> "list[str]":
+    """Baseline required test classes, read from trusted Git/POM data only."""
     listing = git(repo, "ls-tree", "-r", "--name-only", base, "--",
                   "{}/src/test/java".format(module))
+    patterns = surefire_include_patterns(repo, module, base)
+    prefix = module + "/src/test/java/"
     classes = []
     for path in sorted(listing.splitlines()):
-        if not path.endswith(".java"):
+        if not path.startswith(prefix) or not path.endswith(".java"):
             continue
-        name = path.rsplit("/", 1)[-1]
-        if not any(fnmatch.fnmatch(name, pattern) for pattern in TEST_INCLUDE_PATTERNS):
+        rel = path[len(prefix):]
+        name = rel.rsplit("/", 1)[-1]
+        matches = any(
+            fnmatch.fnmatch(rel, pattern) if "/" in pattern
+            else fnmatch.fnmatch(name, pattern)
+            for pattern in patterns
+        )
+        if not matches:
             continue
-        classes.append(path[len(module) + len("/src/test/java/"):-len(".java")].replace("/", "."))
+        classes.append(rel[:-len(".java")].replace("/", "."))
     return classes
 
 
