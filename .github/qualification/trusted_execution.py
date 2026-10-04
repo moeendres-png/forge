@@ -1272,6 +1272,14 @@ def _write_parent_receipt_ledger(
     )
 
 
+def _decode_child_completion(code: int, allowed_skip_classes) -> "tuple[bool, int | None]":
+    if code == 0:
+        return True, 0
+    if 31 <= code <= 69 and len(allowed_skip_classes) == 1:
+        return True, code - 30
+    return False, None
+
+
 def execute_module(run_root: Path, module: str, required_counts: dict,
                    launch_dir: Path, bundle: Path, testng_jars, receipt_run_id: str,
                    java: str, argline, xvfbrun, candidate_code_entries,
@@ -1316,11 +1324,8 @@ def execute_module(run_root: Path, module: str, required_counts: dict,
     except sandbox.SandboxError as exc:
         code, stdout, stderr = 125, "", "sandbox failure: {}".format(exc)
 
-    declared_skip_count = None
-    completed = code == 0
-    if 31 <= code <= 69:
-        declared_skip_count = code - 30
-        completed = declared_skip_count > 0 and len(allowed_skip_classes) == 1
+    completed, declared_skip_count = _decode_child_completion(
+        code, allowed_skip_classes)
 
     containment_state = None
     if code == 78:
