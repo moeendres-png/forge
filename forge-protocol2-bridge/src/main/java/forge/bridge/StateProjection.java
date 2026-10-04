@@ -206,7 +206,9 @@ public final class StateProjection {
      * together (a name multiset, no order) leave only as an HMAC under the launch
      * key; no other card name of any zone leaves. The token layout is the one
      * the Lab computes from the record: schema, zone label, seat, then
-     * {@code name<TAB>count} per distinct name in {@link String} order.</p>
+     * {@code name<TAB>count} per distinct name in {@link String} order. Each
+     * seat's {@code library_shuffles} counts the engine's own shuffles of that
+     * library so far (its GameEventShuffle).</p>
      */
     public static JsonObject constructedState(BridgeSession session) {
         final Game game = session.getGame();
@@ -254,6 +256,7 @@ public final class StateProjection {
                     require("zone.Graveyard", () -> player.getCardsIn(ZoneType.Graveyard).size()));
             entry.addProperty("exile_size",
                     require("zone.Exile", () -> player.getCardsIn(ZoneType.Exile).size()));
+            entry.addProperty("library_shuffles", session.libraryShuffles(player));
             entry.addProperty("battlefield_size",
                     require("zone.Battlefield", () -> player.getCardsIn(ZoneType.Battlefield).size()));
             final JsonArray commanders = new JsonArray();

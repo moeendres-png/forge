@@ -2,7 +2,10 @@ package forge.bridge;
 
 import forge.game.Game;
 import forge.game.Match;
+import com.google.common.eventbus.Subscribe;
+import forge.game.event.GameEventShuffle;
 import forge.game.player.Player;
+import forge.game.player.PlayerView;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -13,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -176,6 +180,26 @@ public final class BridgeSession {
     }
 
     /** WS202: explicit seed binding for native RNG (null when uncontrolled). */
+    // Commander-Lab #441 decision (c): the engine's own library shuffles per
+    // player (GameEventShuffle, fired by Player.shuffle after the Rules RNG
+    // shuffled), read by the orchestration channel's constructed state.
+    private final Map<Integer, Integer> libraryShuffles = new ConcurrentHashMap<>();
+
+    /** Subscribed to the game's event bus before the game thread starts. */
+    public final class ShuffleCounter {
+        @Subscribe
+        public void onShuffle(GameEventShuffle event) {
+            if (event.player() != null) {
+                libraryShuffles.merge(event.player().getId(), 1, Integer::sum);
+            }
+        }
+    }
+
+    /** The engine's library shuffles of {@code player} so far. */
+    public int libraryShuffles(Player player) {
+        return libraryShuffles.getOrDefault(PlayerView.get(player).getId(), 0);
+    }
+
     public Long getSeedBinding() {
         return seedBinding;
     }
@@ -364,6 +388,9 @@ public final class BridgeSession {
             // Clearing makes that classification true rather than merely
             // recorded. Seeded execution stays single-flight by contract.
             forge.util.MyRandom.clearBinding();
+        }
+        if (capturedGame != null) {
+            capturedGame.subscribeToEvents(new ShuffleCounter());
         }
         if (capturedPlan == null) {
             launchStarter(() -> capturedMatch.startGame(capturedGame));

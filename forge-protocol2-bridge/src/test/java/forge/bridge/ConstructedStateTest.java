@@ -139,6 +139,8 @@ public class ConstructedStateTest {
             Assert.assertEquals(player.get("battlefield_size").getAsInt(), 0);
             Assert.assertEquals(player.get("graveyard_size").getAsInt(), 0);
             Assert.assertEquals(player.get("exile_size").getAsInt(), 0);
+            Assert.assertTrue(player.get("library_shuffles").getAsInt() >= 1,
+                    "the engine shuffled this library before the opening draw (CR 103.3)");
             Assert.assertEquals(player.getAsJsonArray("commanders").size(), 1);
             final JsonObject commander = player.getAsJsonArray("commanders").get(0).getAsJsonObject();
             Assert.assertEquals(commander.get("card_identity").getAsString(), ROGRAKH);
