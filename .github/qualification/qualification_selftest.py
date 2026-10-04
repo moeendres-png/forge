@@ -1631,6 +1631,41 @@ class TrustedOrchestratorControls(unittest.TestCase):
             trusted_execution.assemble_classpath("/w", []), "/w"
         )
 
+    def test_execute_uses_full_trusted_reactor_inventory_for_candidate_outputs(self) -> None:
+        import inspect
+        source = inspect.getsource(trusted_execution.cmd_execute)
+        self.assertIn(
+            "reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)",
+            source,
+        )
+        self.assertIn("candidate_root, reactor_modules)", source)
+        self.assertIn('"trusted_reactor_modules": reactor_modules', source)
+
+    def test_trusted_reactor_module_inventory_is_recursive(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-reactor-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        (repo / "a" / "nested").mkdir(parents=True)
+        (repo / "b").mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.email", "a@b.invalid"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), check=True)
+        (repo / "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modules>'
+            '<module>a</module><module>b</module></modules></project>\n')
+        (repo / "a" / "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modules>'
+            '<module>nested</module></modules></project>\n')
+        (repo / "a" / "nested" / "pom.xml").write_text("<project/>\n")
+        (repo / "b" / "pom.xml").write_text("<project/>\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "reactor"], cwd=str(repo), check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo), text=True).strip()
+        self.assertEqual(
+            trusted_execution.trusted_reactor_modules(repo, base),
+            ["a", "a/nested", "b"],
+        )
+
     def test_candidate_maven_build_runs_offline_against_trusted_repository(self) -> None:
         import inspect
         source = inspect.getsource(trusted_execution.cmd_execute)
