@@ -1318,8 +1318,8 @@ def execute_module(run_root: Path, module: str, required_counts: dict,
 
     declared_skip_count = None
     completed = code == 0
-    if 20 <= code <= 220:
-        declared_skip_count = code - 20
+    if 31 <= code <= 69:
+        declared_skip_count = code - 30
         completed = declared_skip_count > 0 and len(allowed_skip_classes) == 1
 
     containment_state = None
@@ -1327,7 +1327,7 @@ def execute_module(run_root: Path, module: str, required_counts: dict,
         containment_state = "UNAVAILABLE"
     elif code == 13:
         containment_state = "SECURITY_MANAGER_VIOLATED"
-    elif code in (0, 10, 11, 12) or 20 <= code <= 220:
+    elif code in (0, 10, 11, 12) or 31 <= code <= 69:
         containment_state = CONTAINMENT_ENFORCED
 
     entry = {
