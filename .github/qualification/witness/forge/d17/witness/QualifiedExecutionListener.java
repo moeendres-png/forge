@@ -62,11 +62,12 @@ import org.testng.internal.RuntimeBehavior;
  * executed for credit. Candidate production code shares this process only
  * behind the mandatory Containment boundary; a denied authority operation
  * makes the run non-PASS even when the candidate catches the exception. Before launch, the orchestrator admits the classpath only if
- * no candidate-authored class references TestNG beyond test annotations and
- * assertions (so no @Listeners, hook, object factory, Reporter or test-result
- * access) or the witness package, and every dependency jar equals the trusted
- * repository's copy. Deliberate reflection with computed names remains a stated
- * residual, not a prevented threat.
+ * candidate production bytecode cannot resolve TestNG authority APIs or
+ * the witness package, and every dependency jar equals the trusted repository's
+ * copy. Computed-name reflection, system-loader access, suppress-access-check
+ * reflection, native/JMX process introspection and direct protected-ledger
+ * mutation are denied by the mandatory containment guard and recorded as sticky
+ * violations.
  */
 public final class QualifiedExecutionListener implements ITestListener, IInvokedMethodListener {
 
