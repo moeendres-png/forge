@@ -1367,7 +1367,13 @@ class ParentReceiptAuthority(unittest.TestCase):
                 self.assertNotIn(forbidden, driver)
         source = __import__("inspect").getsource(trusted_execution.execute_module)
         self.assertNotIn("stdin_bytes", source)
+        self.assertNotIn('"--nonce"', source)
+        self.assertNotIn('"--ledger"', source)
         self.assertIn('"receipt_authority": "TRUSTED_PARENT_OS_PROCESS"', source)
+        self.assertIn(
+            'trusted_copy = evidence_witness / (module + ".witness.jsonl")',
+            source,
+        )
 
     def test_compile_harness_excludes_legacy_signing_listener(self) -> None:
         source = __import__("inspect").getsource(trusted_execution.compile_witness)
