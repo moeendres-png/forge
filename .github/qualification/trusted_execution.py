@@ -934,9 +934,12 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
     earlier launch, so nothing is read from them again. ``cache`` shares copies
     of the same source between modules.
     """
-    result = {"scanned_classes": 0, "findings": [], "tampered_jars": [], "unverified_jars": [],
-              "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None,
-              "launch_entries": [], "candidate_code_entries": [], "trusted_dependency_entries": []}
+    result = {
+        "scanned_classes": 0, "findings": [], "tampered_jars": [], "unverified_jars": [],
+        "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None,
+        "launch_entries": [], "candidate_code_entries": [], "trusted_dependency_entries": [],
+        "candidate_compile_entries": [], "trusted_dependency_compile_entries": [],
+    }
     _scan_class_tree(
         "trusted-compiled tests", tests_dir, result,
         allow_testng_test_api=True)
@@ -955,6 +958,12 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             frozen = str(launch_root / rel)
             result["launch_entries"].append(frozen)
             result[kind].append(frozen)
+            compile_kind = (
+                "candidate_compile_entries"
+                if kind == "candidate_code_entries"
+                else "trusted_dependency_compile_entries"
+            )
+            result[compile_kind].append(str(staging / rel))
 
     for entry in entries:
         real = Path(os.path.realpath(entry))
@@ -967,6 +976,12 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
                 frozen = str(launch_root / hit["rel"])
                 result["launch_entries"].append(frozen)
                 result[hit["kind"]].append(frozen)
+                compile_kind = (
+                    "candidate_compile_entries"
+                    if hit["kind"] == "candidate_code_entries"
+                    else "trusted_dependency_compile_entries"
+                )
+                result[compile_kind].append(str(staging / hit["rel"]))
             continue
         before = {"findings": list(result["findings"]), "scanned": result["scanned_classes"]}
         if real.is_dir():
@@ -1330,21 +1345,36 @@ def cmd_execute(args) -> int:
         run_export = work / "candidate-runtime-export"
         sandbox.export_commit(trusted_repo, args.candidate_sha, run_export)
         records, scans, frozen, dropped = {}, {}, {}, {}
+        empty_tests = staging / "admission-empty-tests"
+        empty_tests.mkdir(parents=True, exist_ok=True)
         for module in modules:
             entries, dropped[module] = sanitize_classpath(
                 candidate_classpath(candidate_root, module, args.cp_rel),
                 candidate_root, reactor_modules)
-            out = staging / "tests" / module
-            records[module] = trusted_compile_tests(export, module, [str(j) for j in testng_jars] + entries,
-                                                    out, args.java)
-            records[module]["compiled_required"] = sorted(
-                set(surface["modules"][module]["classes"]) & compiled_class_names(out))
-            # Before any candidate test code runs next to the witness: admit the
-            # classpath and freeze the admitted bytes into the trusted bundle.
+
+            # Admit and freeze every candidate/dependency byte before trusted
+            # javac parses it. The build UID cannot mutate RUNNER_TEMP staging.
             scans[module] = scan_launch_classpath(
-                out, entries, candidate_root, home / ".m2" / "repository",
+                empty_tests, entries, candidate_root, home / ".m2" / "repository",
                 trusted_maven_repo,
                 freeze=(staging / "classpath", bundle / "classpath", frozen))
+
+            out = staging / "tests" / module
+            compile_cp = (
+                [str(j) for j in testng_jars]
+                + scans[module]["trusted_dependency_compile_entries"]
+                + scans[module]["candidate_compile_entries"]
+            )
+            records[module] = trusted_compile_tests(
+                export, module, compile_cp, out, args.java)
+            records[module]["compiled_required"] = sorted(
+                set(surface["modules"][module]["classes"]) & compiled_class_names(out))
+
+            # Trusted comparison-base test bytecode may use only the narrow
+            # TestNG test API; authority channels remain rejected.
+            _scan_class_tree(
+                "trusted-compiled tests", out, scans[module],
+                allow_testng_test_api=True)
         manifest["trusted_test_compilation"] = records
         manifest["launch_classpath_admission"] = scans
         sandbox.stage_readonly(staging, bundle)
