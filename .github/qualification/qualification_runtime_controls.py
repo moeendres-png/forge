@@ -185,7 +185,7 @@ public class DeclaredSkipTest {
         proc = self.launch(
             tests, {"probe.DeclaredSkipTest": 1},
             allowed_skips=["probe.DeclaredSkipTest"])
-        self.assertEqual(proc.returncode, 21, proc.stderr)
+        self.assertEqual(proc.returncode, 31, proc.stderr)
 
     def test_undeclared_skip_is_red(self) -> None:
         tests = self.compile_sources({
