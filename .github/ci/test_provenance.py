@@ -202,23 +202,24 @@ def read_exit(path):
 
 def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=None):
     repo = repo.resolve()
-    errors = []
+    provenance_errors = []
+    baseline_errors = []
     try:
         identity = source_identity(repo, expected_sha)
-        errors += identity.pop("errors")
+        provenance_errors += identity.pop("errors")
     except RuntimeError as exc:
         identity = {"sha": None, "tree": None}
-        errors.append(str(exc))
+        provenance_errors.append(str(exc))
     try:
         modules = default_modules(repo)
     except ValueError as exc:
         modules = []
-        errors.append(str(exc))
+        provenance_errors.append(str(exc))
     try:
         maven_exit = read_exit(exit_path)
     except ValueError as exc:
         maven_exit = None
-        errors.append(str(exc))
+        provenance_errors.append(str(exc))
     try:
         known = load_known(known_path)
     except ValueError as exc:
@@ -226,7 +227,7 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
             "source_test_classes_not_observed": [],
             "framework_blockers": [],
         }
-        errors.append(str(exc))
+        baseline_errors.append(str(exc))
 
     all_sources, annotated = inventories(repo, modules)
     reports, cases, observed = [], [], set()
@@ -234,16 +235,16 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         try:
             report, parsed, classes = parse_report(repo, path)
         except ValueError as exc:
-            errors.append(str(exc))
+            provenance_errors.append(str(exc))
             continue
         reports.append(report)
         cases += parsed
         observed |= classes
 
     if not reports:
-        errors.append("no Surefire TEST-*.xml reports were found")
+        provenance_errors.append("no Surefire TEST-*.xml reports were found")
     elif not cases:
-        errors.append("Surefire reports contained zero testcase records")
+        provenance_errors.append("Surefire reports contained zero testcase records")
 
     missing = sorted(set(annotated) - observed)
     expected = set(known.get("source_test_classes_not_observed", []))
@@ -252,17 +253,17 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
     blockers = list(known.get("framework_blockers", []))
     missing_blockers = sorted(x for x in blockers if x not in all_sources)
 
-    baseline_ok = not unexpected and not stale
+    baseline_ok = not unexpected and not stale and not missing_blockers and not baseline_errors
     if unexpected:
-        errors.append("new source test classes became NOT_RUN: " + ", ".join(unexpected))
+        baseline_errors.append("new source test classes became NOT_RUN: " + ", ".join(unexpected))
     if stale:
-        errors.append(
+        baseline_errors.append(
             "known NOT_RUN baseline is stale; observed/removed: " + ", ".join(stale)
         )
     if missing_blockers:
-        errors.append("framework blocker source disappeared: " + ", ".join(missing_blockers))
+        baseline_errors.append("framework blocker source disappeared: " + ", ".join(missing_blockers))
 
-    provenance = PASS if not errors else FAIL
+    provenance = PASS if not provenance_errors else FAIL
     baseline = PASS if baseline_ok else FAIL
     if not baseline_ok:
         coverage = FAIL
@@ -316,7 +317,9 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
             "framework_blockers": blockers,
             "framework_blocker_sources_missing": missing_blockers,
         },
-        "validation_errors": errors,
+        "provenance_errors": provenance_errors,
+        "baseline_errors": baseline_errors,
+        "validation_errors": provenance_errors + baseline_errors,
         "not_claimed": {
             "rules_qualification": True,
             "production_provider_selected": False,
@@ -455,6 +458,8 @@ class Controls(unittest.TestCase):
         r, ok = self.run_collect(self.known())
         self.assertFalse(ok)
         self.assertIn("example.LostTest", r["coverage"]["unexpected_not_run"])
+        self.assertEqual(PASS, r["provenance_integrity"])
+        self.assertEqual(FAIL, r["known_not_run_baseline_integrity"])
 
     def test_stale_baseline_is_red(self):
         self.java("example.RecoveredTest")
@@ -462,6 +467,8 @@ class Controls(unittest.TestCase):
         r, ok = self.run_collect(self.known(["example.RecoveredTest"]))
         self.assertFalse(ok)
         self.assertIn("example.RecoveredTest", r["coverage"]["stale_known_not_run"])
+        self.assertEqual(PASS, r["provenance_integrity"])
+        self.assertEqual(FAIL, r["known_not_run_baseline_integrity"])
 
     def test_malformed_report_is_red(self):
         self.java("example.BadReportTest")
@@ -498,7 +505,9 @@ class Controls(unittest.TestCase):
         self.report("example.RealTest")
         r, ok = self.run_collect(self.known(blockers=["example.GoneHarness"]))
         self.assertFalse(ok)
-        self.assertTrue(any("framework blocker" in e for e in r["validation_errors"]))
+        self.assertTrue(any("framework blocker" in e for e in r["baseline_errors"]))
+        self.assertEqual(PASS, r["provenance_integrity"])
+        self.assertEqual(FAIL, r["known_not_run_baseline_integrity"])
 
     def test_nested_class_credits_top_level(self):
         self.java("example.OwnerTest")
