@@ -369,6 +369,12 @@ def dryrun_module(repo: Path, module: str, classes, java: str, argline, xvfbrun,
     if totals is None:
         raise ExecutionError("could not read TestNG dry-run totals for {}".format(module))
     class_counts, method_counts = _dryrun_counts(out_dir)
+    if sum(class_counts.values()) != totals["total"] or sum(method_counts.values()) != totals["total"]:
+        raise ExecutionError(
+            "dry-run XML/console denominator mismatch for {}: total={} class_sum={} method_sum={}".format(
+                module, totals["total"], sum(class_counts.values()), sum(method_counts.values())
+            )
+        )
     executable = sorted(class_counts)
     return {
         "module": module,
