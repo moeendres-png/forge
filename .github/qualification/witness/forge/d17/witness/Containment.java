@@ -467,7 +467,22 @@ public final class Containment {
     }
 
     private static boolean allowedTestNg(String name) {
-        return name.startsWith("org.testng.annotations.")
+        return name.equals("org.testng.annotations.Test")
+                || name.equals("org.testng.annotations.BeforeClass")
+                || name.equals("org.testng.annotations.AfterClass")
+                || name.equals("org.testng.annotations.BeforeMethod")
+                || name.equals("org.testng.annotations.AfterMethod")
+                || name.equals("org.testng.annotations.BeforeTest")
+                || name.equals("org.testng.annotations.AfterTest")
+                || name.equals("org.testng.annotations.BeforeSuite")
+                || name.equals("org.testng.annotations.AfterSuite")
+                || name.equals("org.testng.annotations.BeforeGroups")
+                || name.equals("org.testng.annotations.AfterGroups")
+                || name.equals("org.testng.annotations.DataProvider")
+                || name.equals("org.testng.annotations.Parameters")
+                || name.equals("org.testng.annotations.Optional")
+                || name.equals("org.testng.annotations.NoInjection")
+                || name.equals("org.testng.annotations.Ignore")
                 || name.equals("org.testng.Assert")
                 || name.equals("org.testng.AssertJUnit")
                 || name.equals("org.testng.SkipException")
