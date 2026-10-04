@@ -294,6 +294,22 @@ def derive_verdict(
             manifest.get("trusted_test_source_sha"), manifest.get("test_bytecode_origin"),
             manifest.get("candidate_test_sources_used_for_credit")),
     )
+    build_divergence = manifest.get("candidate_build_definition_divergence")
+    maven_authority = manifest.get("maven_repository_authority")
+    build_definition_ok = (
+        isinstance(build_divergence, list)
+        and not build_divergence
+        and isinstance(maven_authority, dict)
+        and maven_authority.get("mode") == "trusted_read_only_offline"
+        and isinstance(maven_authority.get("path"), str)
+        and bool(maven_authority.get("path"))
+    )
+    signal(
+        "candidate_build_definition_trusted",
+        build_definition_ok,
+        "divergence={} maven_repository_authority={}".format(
+            build_divergence, maven_authority),
+    )
 
     # --- 3. The required surface is genuinely non-empty --------------------- #
     modules = surface.get("modules", {})
@@ -559,6 +575,12 @@ def derive_verdict(
         )
     elif not by_name["candidate_identity_bound"]["satisfied"]:
         verdict, reason = FAIL, "candidate identity is not bound to the locked exact SHA/TREE"
+    elif isinstance(build_divergence, list) and build_divergence:
+        verdict, reason = UNKNOWN, (
+            "candidate changes Maven build/plugin authority relative to the trusted comparison "
+            "base; D17 refuses candidate-controlled build definitions: {}".format(
+                build_divergence[:20])
+        )
     elif (isinstance(manifest.get("error"), str) and not compilation
           and (manifest.get("candidate_build") or {}).get("exit_code") in (None, 0)):
         # Trusted infrastructure stopped before it compiled anything (TestNG pin
@@ -584,6 +606,10 @@ def derive_verdict(
     elif not by_name["trusted_test_source_bound_to_comparison_base"]["satisfied"]:
         verdict, reason = FAIL, (
             "qualification test bodies are not bound to the trusted comparison-base source"
+        )
+    elif not by_name["candidate_build_definition_trusted"]["satisfied"]:
+        verdict, reason = UNKNOWN, (
+            "trusted Maven build/plugin authority was not established for the candidate"
         )
     elif not by_name["trusted_launches_completed"]["satisfied"]:
         verdict, reason = FAIL, (
@@ -656,6 +682,11 @@ def derive_verdict(
             "d24_framework_not_run_classes": framework_not_run,
             "explicitly_disabled_source_classes": explicit_disabled,
             "d22_disabled_rules_tests": d22_disabled,
+        },
+        "build_authority": {
+            "candidate_build_definition_divergence": build_divergence,
+            "maven_repository_authority": maven_authority,
+            "trusted": build_definition_ok,
         },
         "containment": {
             "required": True,
