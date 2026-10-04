@@ -278,8 +278,8 @@ def _dryrun_class_counts(out_dir: Path) -> "dict[str, int]":
     return counts
 
 
-def dryrun_module(repo: Path, module: str, base: str, java: str, argline, xvfbrun, cp_rel):
-    """Run TestNG ``-dryrun`` over the trusted comparison base for one module.
+def dryrun_module(repo: Path, module: str, classes, java: str, argline, xvfbrun, cp_rel):
+    """Run TestNG ``-dryrun`` over a byte-verified comparison-base export.
 
     TestNG's dry run executes no test bodies but resolves the full suite, so its
     totals are exactly the number of invocations the trusted lineage's own tests
@@ -287,7 +287,6 @@ def dryrun_module(repo: Path, module: str, base: str, java: str, argline, xvfbru
     comparison base, so a candidate cannot shrink it.
     """
     module_dir = repo / module
-    classes = required_classes_for_module(repo, module, base)
     if not classes:
         return {"module": module, "classes": [], "required_total": 0,
                 "required_passed": 0, "required_skipped": 0, "required_failed": 0}
@@ -364,26 +363,41 @@ def _d22_disabled_method_present(repo: Path, base: str, modules) -> bool:
 
 
 def build_required_surface(trusted_repo: Path, base: str, modules, java, argline, xvfbrun, cp_rel) -> dict:
-    log("comparison base: compile and resolve classpaths")
-    compile_and_resolve(trusted_repo, modules, cp_rel, "comparison base")
-    surface = {
-        "schema": REQUIRED_SURFACE_SCHEMA,
-        "comparison_base_sha": base,
-        "comparison_base_tree": git(trusted_repo, "rev-parse", "{}^{{tree}}".format(base)),
-        "trusted_argline": list(argline),
-        "denominator_source": "TestNG -dryrun over the trusted comparison base",
-        "modules": {},
-    }
-    for module in modules:
-        log("required surface: dry-run {}".format(module))
-        surface["modules"][module] = dryrun_module(
-            trusted_repo, module, base, java, argline, xvfbrun, cp_rel
-        )
-        log("  required_total={} required_skipped={} required_classes={}".format(
-            surface["modules"][module]["required_total"],
-            surface["modules"][module]["required_skipped"],
-            len(surface["modules"][module]["classes"]),
-        ))
+    import sandbox
+
+    # The class inventory and the bytecode TestNG dry-runs must have one source
+    # authority.  Building in the workflow-authority checkout while enumerating
+    # class names from an older merge base would silently mix two policies.
+    # ExportIntegrity proves this temporary tree equals the locked comparison
+    # base's Git blobs before its trusted Maven/plugins run.
+    export_parent = Path(tempfile.mkdtemp(prefix="d17-comparison-base-"))
+    comparison_root = export_parent / "repo"
+    try:
+        sandbox.export_commit(trusted_repo, base, comparison_root)
+        log("comparison base: compile and resolve classpaths from verified export")
+        compile_and_resolve(comparison_root, modules, cp_rel, "comparison base")
+        surface = {
+            "schema": REQUIRED_SURFACE_SCHEMA,
+            "comparison_base_sha": base,
+            "comparison_base_tree": git(trusted_repo, "rev-parse", "{}^{{tree}}".format(base)),
+            "trusted_argline": list(argline),
+            "denominator_source": "TestNG -dryrun over a byte-verified trusted comparison-base export",
+            "denominator_build_origin": "verified_git_export_of_comparison_base",
+            "modules": {},
+        }
+        for module in modules:
+            log("required surface: dry-run {}".format(module))
+            classes = required_classes_for_module(trusted_repo, module, base)
+            surface["modules"][module] = dryrun_module(
+                comparison_root, module, classes, java, argline, xvfbrun, cp_rel
+            )
+            log("  required_total={} required_skipped={} required_classes={}".format(
+                surface["modules"][module]["required_total"],
+                surface["modules"][module]["required_skipped"],
+                len(surface["modules"][module]["classes"]),
+            ))
+    finally:
+        shutil.rmtree(export_parent, ignore_errors=True)
 
     executable = {
         name for entry in surface["modules"].values() for name in entry.get("classes", [])
