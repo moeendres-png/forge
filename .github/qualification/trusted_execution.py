@@ -263,6 +263,30 @@ def surefire_include_patterns(repo: Path, module: str, base: str) -> "list[str]"
     return inherited or list(TEST_INCLUDE_PATTERNS)
 
 
+def trusted_reactor_artifacts(repo: Path, base: str) -> dict:
+    """Map trusted reactor artifactId -> module path for sibling replacement."""
+    artifacts = {}
+    for module in trusted_reactor_modules(repo, base):
+        source = git(repo, "show", "{}:{}/pom.xml".format(base, module))
+        try:
+            root = ET.fromstring(source)
+        except ET.ParseError as exc:
+            raise ExecutionError("cannot parse trusted module POM {}: {}".format(module, exc))
+        artifact_id = None
+        for child in list(root):
+            if child.tag.rsplit("}", 1)[-1] == "artifactId":
+                artifact_id = (child.text or "").strip()
+                break
+        if not artifact_id:
+            raise ExecutionError("trusted reactor module has no artifactId: {}".format(module))
+        if artifact_id in artifacts and artifacts[artifact_id] != module:
+            raise ExecutionError(
+                "duplicate trusted reactor artifactId {}: {}, {}".format(
+                    artifact_id, artifacts[artifact_id], module))
+        artifacts[artifact_id] = module
+    return artifacts
+
+
 def required_classes_for_module(repo: Path, module: str, base: str) -> "list[str]":
     """Baseline required test classes, read from trusted Git/POM data only."""
     listing = git(repo, "ls-tree", "-r", "--name-only", base, "--",
@@ -1165,24 +1189,42 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
     return result
 
 
-def sanitize_classpath(entries, candidate_root: Path, modules) -> "tuple[list[str], list[str]]":
-    """Drop installed Forge sibling jars and the candidate's own test output.
+def sanitize_classpath(entries, candidate_root: Path, reactor_artifacts: dict) -> "tuple[list[str], list[str]]":
+    """Replace installed Forge siblings with exact candidate reactor outputs in place.
 
-    The module's tests run from trusted-compiled bytecode, so every
-    ``target/test-classes`` directory the candidate build produced is dropped.
+    Candidate test output is always dropped. A Forge sibling jar may be replaced
+    only when the trusted comparison-base reactor maps its artifactId to a
+    concrete module whose candidate target/classes exists. Unknown or missing
+    siblings fail closed instead of falling back to stale installed jars.
     """
     kept, dropped = [], []
+    marker = "/.m2/repository/forge/"
     for entry in entries:
         normalized = entry.replace("\\", "/")
-        if any(marker in normalized for marker in STALE_SIBLING_MARKERS) or normalized.rstrip("/").endswith(
-            "/target/test-classes"
-        ):
+        if normalized.rstrip("/").endswith("/target/test-classes"):
             dropped.append(entry)
-        else:
+            continue
+        if marker in normalized:
+            dropped.append(entry)
+            tail = normalized.split(marker, 1)[1]
+            artifact_id = tail.split("/", 1)[0] if "/" in tail else ""
+            module = reactor_artifacts.get(artifact_id)
+            if not module:
+                raise ExecutionError(
+                    "installed Forge sibling has no trusted reactor mapping: {}".format(entry))
+            replacement = candidate_root / module / "target" / "classes"
+            if not replacement.is_dir():
+                raise ExecutionError(
+                    "candidate reactor output missing for Forge sibling {} -> {}".format(
+                        artifact_id, module))
+            value = str(replacement)
+            if value not in kept:
+                kept.append(value)
+            continue
+        if entry not in kept:
             kept.append(entry)
-    reactor = [str(candidate_root / m / "target" / "classes") for m in modules
-               if (candidate_root / m / "target" / "classes").is_dir()]
-    return reactor + [e for e in kept if e not in reactor], dropped
+    return kept, dropped
+
 
 
 def candidate_classpath(candidate_root: Path, module: str, cp_rel: str) -> "list[str]":
@@ -1429,6 +1471,7 @@ def cmd_execute(args) -> int:
     work = Path(args.work_dir).resolve()
     modules = args.modules.split()
     reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)
+    reactor_artifacts = trusted_reactor_artifacts(trusted_repo, args.comparison_base)
     argline = list(DEFAULT_TRUSTED_ARGLINE)
     xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
     receipt_run_id = secrets.token_hex(16)
@@ -1458,6 +1501,7 @@ def cmd_execute(args) -> int:
         ),
         "candidate_artifacts_used_as_evidence": False,
         "trusted_reactor_modules": reactor_modules,
+        "trusted_reactor_artifacts": reactor_artifacts,
         "candidate_build_definition_divergence": [],
         "maven_repository_authority": None,
         "modules": {},
@@ -1543,7 +1587,7 @@ def cmd_execute(args) -> int:
         for module in modules:
             entries, dropped[module] = sanitize_classpath(
                 candidate_classpath(candidate_root, module, args.cp_rel),
-                candidate_root, reactor_modules)
+                candidate_root, reactor_artifacts)
 
             # Admit and freeze every candidate/dependency byte before trusted
             # javac parses it. The build UID cannot mutate RUNNER_TEMP staging.
