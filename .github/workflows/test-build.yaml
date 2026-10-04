@@ -41,17 +41,19 @@ jobs:
         run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
 
       - name: Run tests in virtual framebuffer
+        env:
+          D20_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -uo pipefail
-          printf '255\n' > "$RUNNER_TEMP/d20-maven-exit.txt"
+          python3 -I .github/ci/test_provenance.py execution-start --repo . --maven-exit-file "$RUNNER_TEMP/d20-maven-exit.txt" --java-version "${{ matrix.java }}" --event-name "$GITHUB_EVENT_NAME" --event-sha "$GITHUB_SHA" --pr-head-sha "$D20_PR_HEAD_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
           export DISPLAY=":1"
           Xvfb :1 -screen 0 800x600x8 &
           set +e
           mvn -U -B clean test
           rc=$?
           set -e
-          printf '%s\n' "$rc" > "$RUNNER_TEMP/d20-maven-exit.txt"
+          python3 -I .github/ci/test_provenance.py execution-finish --repo . --maven-exit-file "$RUNNER_TEMP/d20-maven-exit.txt" --java-version "${{ matrix.java }}" --event-name "$GITHUB_EVENT_NAME" --event-sha "$GITHUB_SHA" --pr-head-sha "$D20_PR_HEAD_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --exit-code "$rc"
           exit "$rc"
 
       - name: Collect D20 source-bound test provenance
@@ -66,10 +68,12 @@ jobs:
             --maven-exit-file "$RUNNER_TEMP/d20-maven-exit.txt" \
             --java-version "${{ matrix.java }}" \
             --expected-source-sha "$GITHUB_SHA" \
+            --expected-source-tree "$(git rev-parse "$GITHUB_SHA^{tree}")" \
             --event-name "$GITHUB_EVENT_NAME" \
             --event-sha "$GITHUB_SHA" \
             --pr-head-sha "$D20_PR_HEAD_SHA" \
             --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --output "$RUNNER_TEMP/d20-evidence/FORGE_TEST_PROVENANCE.json" \
             --summary "$GITHUB_STEP_SUMMARY"
 
@@ -80,6 +84,7 @@ jobs:
           name: forge-test-provenance-java-${{ matrix.java }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/d20-evidence/FORGE_TEST_PROVENANCE.json
+            ${{ runner.temp }}/d20-maven-exit.txt
             **/target/surefire-reports/TEST-*.xml
           if-no-files-found: error
           retention-days: 30

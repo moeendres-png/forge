@@ -10,11 +10,14 @@ import re
 import subprocess
 import tempfile
 import unittest
+import time
+import os
+import sys
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-SCHEMA = "forge.test-provenance/2"
+SCHEMA = "forge.test-provenance/3"
 KNOWN_SCHEMA = "forge.known-not-run/2"
 PASS, FAIL, PARTIAL, UNKNOWN = "PASS", "FAIL", "PARTIAL", "UNKNOWN"
 TEST_ANNOTATION = re.compile(r"@(?:org\.testng\.annotations\.)?Test\b")
@@ -66,6 +69,10 @@ def source_identity(repo, expected_sha=None):
                 sha, expected_sha
             )
         )
+    changed = git(repo, 'diff', '--name-only', 'HEAD', '--')
+    untracked_tests = git(repo, 'ls-files', '--others', '--exclude-standard', '--', '**/src/test/java/**')
+    if changed or untracked_tests:
+        errors.append('execution source differs from declared Git TREE: '+changed+' '+untracked_tests)
     return {"sha": sha, "tree": tree, "errors": errors}
 
 
@@ -213,23 +220,60 @@ def load_known(path):
     return data
 
 
-def read_exit(path):
+def read_exit(path, identity, run, java_version):
     try:
-        value = int(path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError) as exc:
-        raise ValueError("Maven exit receipt missing/invalid: {}".format(exc))
-    if not 0 <= value <= 255:
-        raise ValueError("Maven exit code outside 0..255")
-    return value
+        if (not isinstance(run,dict) or set(run)!={'event_name','event_sha','pr_head_sha','run_id','run_attempt'}
+                or not all(isinstance(v,str) for v in run.values())
+                or not run['run_id'].isdigit() or not run['run_attempt'].isdigit() or int(run['run_attempt'])<1
+                or run['event_sha']!=identity.get('sha')
+                or run['event_name'] not in ('push','pull_request','workflow_dispatch','schedule')
+                or (run['pr_head_sha'] and not re.fullmatch(r'[0-9a-f]{40}',run['pr_head_sha']))):
+            raise ValueError('Independent execution run context invalid')
+        if path.is_symlink():
+            raise ValueError('non-regular execution receipt')
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        if (doc.get('schema') != 'forge.maven-execution/1' or doc.get('status') != 'FINISHED'
+                or doc.get('source') != identity or doc.get('run') != run
+                or doc.get('java_version') != str(java_version)):
+            raise ValueError('execution receipt source/TREE/run/attempt/Java mismatch or incomplete')
+        value = doc.get('maven_exit_code')
+        before, after = doc.get('started_ns'), doc.get('finished_ns')
+        if (type(value) is not int or not 0 <= value <= 255 or type(before) is not int
+                or type(after) is not int or not 0 < before <= after <= time.time_ns()):
+            raise ValueError('invalid execution receipt exit/timing')
+        return value, doc
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        raise ValueError('Maven execution receipt missing/invalid: '+str(exc)) from exc
+
+def execution_record(path, repo, run, java_version, finish=None):
+    identity = source_identity(repo)
+    if identity.pop('errors'):
+        raise ValueError('execution source unavailable')
+    if finish is None:
+        doc = {'schema':'forge.maven-execution/1', 'status':'RUNNING', 'source':identity,
+               'run':run, 'java_version':str(java_version), 'started_ns':time.time_ns(),
+               'finished_ns':None, 'maven_exit_code':None}
+    else:
+        doc = json.loads(path.read_text())
+        if (doc.get('status')!='RUNNING' or doc.get('source')!=identity
+                or doc.get('run')!=run or doc.get('java_version')!=str(java_version)):
+            raise ValueError('execution source/run changed before Maven completion')
+        doc.update(status='FINISHED',finished_ns=time.time_ns(),maven_exit_code=finish)
+    if path.is_symlink():
+        raise ValueError('non-regular receipt destination')
+    path.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n')
 
 
-def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=None):
+
+def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=None, expected_tree=None):
     repo = repo.resolve()
     provenance_errors = []
     baseline_errors = []
     try:
         identity = source_identity(repo, expected_sha)
         provenance_errors += identity.pop("errors")
+        if not expected_sha or not expected_tree or identity['tree'] != expected_tree:
+            provenance_errors.append('expected source SHA/TREE absent or mismatched')
     except RuntimeError as exc:
         identity = {"sha": None, "tree": None}
         provenance_errors.append(str(exc))
@@ -239,9 +283,9 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         modules = []
         provenance_errors.append(str(exc))
     try:
-        maven_exit = read_exit(exit_path)
+        maven_exit, execution = read_exit(exit_path, identity, run or {}, java_version)
     except ValueError as exc:
-        maven_exit = None
+        maven_exit, execution = None, None
         provenance_errors.append(str(exc))
     try:
         known = load_known(known_path)
@@ -260,6 +304,9 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         except ValueError as exc:
             provenance_errors.append(str(exc))
             continue
+        if execution and not execution['started_ns'] <= path.stat().st_mtime_ns <= execution['finished_ns']:
+            provenance_errors.append('report outside this Maven execution interval: '+path.relative_to(repo).as_posix())
+        report['mtime_ns'] = path.stat().st_mtime_ns
         reports.append(report)
         cases += parsed
         observed |= classes
@@ -334,6 +381,7 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         "default_reactor_modules": modules,
         "build_outcome": build,
         "maven_exit_code": maven_exit,
+        "maven_execution": execution,
         "provenance_integrity": provenance,
         "known_not_run_baseline_integrity": baseline,
         "coverage_completeness": coverage,
@@ -420,7 +468,11 @@ class Controls(unittest.TestCase):
             encoding="utf-8",
         )
         self.exit = self.root / "exit.txt"
-        self.exit.write_text("0\n", encoding="utf-8")
+        self.run_identity = {'event_name':'pull_request','event_sha':'a'*40,'pr_head_sha':'a'*40,'run_id':'42','run_attempt':'1'}
+        self.execution = {'schema':'forge.maven-execution/1','status':'FINISHED',
+                          'source':{'sha':'a'*40,'tree':'b'*40},'run':self.run_identity,'java_version':'21',
+                          'started_ns':time.time_ns(),'finished_ns':None,'maven_exit_code':0}
+        self.exit.write_text(json.dumps(self.execution))
         self.orig = globals()["source_identity"]
         globals()["source_identity"] = lambda repo, expected_sha=None: {
             "sha": "a" * 40,
@@ -458,6 +510,8 @@ class Controls(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+        stamp=time.time_ns()
+        os.utime(path,ns=(stamp,stamp))
         return path
 
     def known(self, missing=(), blockers=()):
@@ -476,7 +530,12 @@ class Controls(unittest.TestCase):
         return path
 
     def run_collect(self, known):
-        return collect(self.root, known, self.exit, "21", "a" * 40)
+        if self.exit.exists():
+            try:
+                doc=json.loads(self.exit.read_text());doc['finished_ns']=time.time_ns();self.exit.write_text(json.dumps(doc))
+            except ValueError:
+                pass
+        return collect(self.root, known, self.exit, "21", "a" * 40, self.run_identity, "b" * 40)
 
     def test_positive(self):
         self.java("example.RealTest")
@@ -536,7 +595,7 @@ class Controls(unittest.TestCase):
     def test_maven_failure_never_becomes_pass(self):
         self.java("example.RealTest")
         self.report("example.RealTest")
-        self.exit.write_text("1\n", encoding="utf-8")
+        doc=json.loads(self.exit.read_text());doc['maven_exit_code']=1;self.exit.write_text(json.dumps(doc))
         r, ok = self.run_collect(self.known())
         self.assertTrue(ok)
         self.assertEqual(FAIL, r["build_outcome"])
@@ -641,6 +700,57 @@ class Controls(unittest.TestCase):
         self.assertEqual(UNKNOWN,r['coverage_completeness']);self.assertEqual('UNKNOWN_NOT_ATTESTED',r['method_denominator'])
 
 
+    def test_tree_and_execution_identity_mismatch_are_red(self):
+        self.java('example.RealTest');self.report('example.RealTest');known=self.known()
+        doc=json.loads(self.exit.read_text());doc['finished_ns']=time.time_ns();self.exit.write_text(json.dumps(doc))
+        r,ok=collect(self.root,known,self.exit,'21','a'*40,self.run_identity,'c'*40)
+        self.assertFalse(ok);self.assertEqual(FAIL,r['provenance_integrity'])
+        for field in ('source','run','java_version','status'):
+            changed=dict(doc);changed[field]='other';self.exit.write_text(json.dumps(changed))
+            r,ok=self.run_collect(known);self.assertFalse(ok);self.assertEqual(UNKNOWN,r['build_outcome'])
+
+    def test_stale_raw_report_cannot_be_reused_in_new_run(self):
+        self.java('example.RealTest');path=self.report('example.RealTest');os.utime(path,ns=(1,1))
+        r,ok=self.run_collect(self.known());self.assertFalse(ok)
+        self.assertTrue(any('outside this Maven execution interval' in x for x in r['provenance_errors']))
+
+    def test_run_attempt_and_matrix_leg_receipt_replay_are_red(self):
+        self.java('example.RealTest');self.report('example.RealTest');known=self.known();positive,ok=self.run_collect(known);self.assertTrue(ok);original=json.loads(self.exit.read_text())
+        for key,value in (('run_id','43'),('run_attempt','2'),('event_sha','c'*40),('pr_head_sha','d'*40)):
+            doc=json.loads(json.dumps(original));doc['run'][key]=value;self.exit.write_text(json.dumps(doc))
+            r,ok=self.run_collect(known);self.assertFalse(ok)
+        self.exit.write_text(json.dumps(original));r,ok=collect(self.root,known,self.exit,'17','a'*40,self.run_identity,'b'*40);self.assertFalse(ok)
+
+    def test_missing_tree_binding_cannot_claim_provenance(self):
+        self.java('example.RealTest');self.report('example.RealTest')
+        known=self.known();positive,ok=self.run_collect(known);self.assertTrue(ok)
+        r,ok=collect(self.root,known,self.exit,'21','a'*40,self.run_identity)
+        self.assertFalse(ok);self.assertEqual(0,r['maven_exit_code'])
+
+
+    def test_full_cli_execution_receipt_and_stale_replay(self):
+        self.java('example.RealTest'); known=self.known()
+        (self.root/'.gitignore').write_text('exit.txt\nknown.json\nmodule/target/\nresult.json\n')
+        subprocess.run(['git','init','-q',str(self.root)],check=True)
+        subprocess.run(['git','-C',str(self.root),'add','pom.xml','.gitignore','module/src'],check=True)
+        subprocess.run(['git','-C',str(self.root),'-c','user.name=Control','-c','user.email=control@example.invalid','commit','-qm','execution control'],check=True)
+        sha=git(self.root,'rev-parse','HEAD');tree=git(self.root,'rev-parse','HEAD^{tree}')
+        common=['--repo',str(self.root),'--maven-exit-file',str(self.exit),'--java-version','21',
+                '--event-name','push','--event-sha',sha,'--pr-head-sha','','--run-id','42','--run-attempt','1']
+        script=str(Path(__file__).resolve())
+        def cli(mode,args):
+            return subprocess.run([sys.executable,'-I',script,mode,*args],capture_output=True,text=True)
+        self.assertEqual(cli('execution-start',common).returncode,0)
+        report=self.report('example.RealTest')
+        self.assertEqual(cli('execution-finish',common+['--exit-code','0']).returncode,0)
+        out=self.root/'result.json'
+        collect_args=common+['--known-not-run',str(known),'--expected-source-sha',sha,'--expected-source-tree',tree,'--output',str(out)]
+        positive=cli('collect',collect_args);self.assertEqual(positive.returncode,0,positive.stderr)
+        doc=json.loads(out.read_text());self.assertEqual(PASS,doc['provenance_integrity']);self.assertEqual(0,doc['maven_exit_code'])
+        os.utime(report,ns=(1,1));negative=cli('collect',collect_args);self.assertNotEqual(negative.returncode,0)
+        self.assertTrue(any('outside this Maven execution interval' in x for x in json.loads(out.read_text())['provenance_errors']))
+
+
 def selftest(verbose=False):
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(Controls)
     result = unittest.TextTestRunner(verbosity=2 if verbose else 1).run(suite)
@@ -657,17 +767,36 @@ def main(argv=None):
     collect_p.add_argument("--known-not-run", required=True)
     collect_p.add_argument("--maven-exit-file", required=True)
     collect_p.add_argument("--java-version", required=True)
-    collect_p.add_argument("--expected-source-sha")
+    collect_p.add_argument("--expected-source-sha", required=True)
+    collect_p.add_argument("--expected-source-tree", required=True)
     collect_p.add_argument("--output", required=True)
     collect_p.add_argument("--summary")
     collect_p.add_argument("--event-name", default="")
     collect_p.add_argument("--event-sha", default="")
     collect_p.add_argument("--pr-head-sha", default="")
-    collect_p.add_argument("--run-id", default="")
+    collect_p.add_argument("--run-id", required=True)
+    collect_p.add_argument("--run-attempt", required=True)
+    for name in ('execution-start','execution-finish'):
+        command=sub.add_parser(name)
+        command.add_argument('--repo',default='.')
+        command.add_argument('--maven-exit-file',required=True)
+        command.add_argument('--java-version',required=True)
+        command.add_argument('--event-name',required=True)
+        command.add_argument('--event-sha',required=True)
+        command.add_argument('--pr-head-sha',default='')
+        command.add_argument('--run-id',required=True)
+        command.add_argument('--run-attempt',required=True)
+        if name=='execution-finish':command.add_argument('--exit-code',type=int,required=True)
     args = parser.parse_args(argv)
 
     if args.command == "selftest":
         return selftest(args.verbose)
+
+    if args.command in ('execution-start','execution-finish'):
+        run={key:getattr(args,key) for key in ('event_name','event_sha','pr_head_sha','run_id','run_attempt')}
+        execution_record(Path(args.maven_exit_file),Path(args.repo),run,args.java_version,
+                         finish=args.exit_code if args.command=='execution-finish' else None)
+        return 0
 
     receipt, ok = collect(
         Path(args.repo),
@@ -680,7 +809,9 @@ def main(argv=None):
             "event_sha": args.event_sha,
             "pr_head_sha": args.pr_head_sha,
             "run_id": args.run_id,
+            "run_attempt": args.run_attempt,
         },
+        args.expected_source_tree,
     )
     write_receipt(receipt, Path(args.output))
     if args.summary:
