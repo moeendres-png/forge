@@ -102,7 +102,13 @@ public class D24ExecutionGuardTest {
         String ignoreToken = "@" + "PowerMockIgnore";
 
         Path basedir = Path.of(System.getProperty("basedir", ".")).toAbsolutePath().normalize();
-        Path testRoot = basedir.resolve("src/test/java");
+        Path moduleRoot = basedir;
+        if (!Files.isDirectory(moduleRoot.resolve("src/test/java"))
+                && Files.isDirectory(basedir.resolve("forge-gui-desktop/src/test/java"))) {
+            moduleRoot = basedir.resolve("forge-gui-desktop");
+        }
+        Path testRoot = moduleRoot.resolve("src/test/java");
+        Assert.assertTrue(Files.isDirectory(testRoot), "D24 test source root not found: " + testRoot);
         try (Stream<Path> paths = Files.walk(testRoot)) {
             paths.filter(path -> path.toString().endsWith(".java")).forEach(path -> {
                 try {
@@ -119,7 +125,7 @@ public class D24ExecutionGuardTest {
             });
         }
 
-        String pom = Files.readString(basedir.resolve("pom.xml"));
+        String pom = Files.readString(moduleRoot.resolve("pom.xml"));
         Assert.assertFalse(pom.contains("<groupId>org." + "powermock</groupId>"),
                 "PowerMock dependency returned to forge-gui-desktop");
     }
@@ -163,7 +169,8 @@ public class D24ExecutionGuardTest {
 
         ISuite suite = context.getSuite();
         Map<String, Integer> discovered = zeroCounts();
-        Map<String, Integer> invoked = zeroCounts();
+        Map<String, Integer> passed = zeroCounts();
+        Map<String, Integer> failed = zeroCounts();
         Map<String, Integer> skipped = zeroCounts();
 
         for (ITestNGMethod method : suite.getAllMethods()) {
@@ -175,16 +182,33 @@ public class D24ExecutionGuardTest {
 
         for (ISuiteResult suiteResult : suite.getResults().values()) {
             ITestContext testContext = suiteResult.getTestContext();
-            addResults(invoked, testContext.getPassedTests().getAllResults());
-            addResults(invoked, testContext.getFailedTests().getAllResults());
-            addSkipped(skipped, testContext.getSkippedTests().getAllResults());
+            addResults(passed, testContext.getPassedTests().getAllResults());
+            addResults(failed, testContext.getFailedTests().getAllResults());
+            addResults(skipped, testContext.getSkippedTests().getAllResults());
         }
 
+        Map<String, Integer> invoked = zeroCounts();
+        for (String className : invoked.keySet()) {
+            invoked.put(className, passed.get(className) + failed.get(className));
+        }
         validateExecution(discovered, invoked, skipped);
 
-        int totalInvoked = invoked.values().stream().mapToInt(Integer::intValue).sum();
-        System.out.println("D24_EXECUTION_GUARD=PASS enabled_runtime_methods=" + totalInvoked
-                + " disabled_not_run=" + EXPECTED_DISABLED.size());
+        for (Map.Entry<String, Integer> expected : ENABLED_RUNTIME_METHODS.entrySet()) {
+            String className = expected.getKey();
+            System.out.println("D24_CLASS_EXECUTION class=" + className
+                    + " expected_enabled=" + expected.getValue()
+                    + " discovered=" + discovered.get(className)
+                    + " pass=" + passed.get(className)
+                    + " fail=" + failed.get(className)
+                    + " skip=" + skipped.get(className));
+        }
+
+        int totalPassed = passed.values().stream().mapToInt(Integer::intValue).sum();
+        int totalFailed = failed.values().stream().mapToInt(Integer::intValue).sum();
+        int totalSkipped = skipped.values().stream().mapToInt(Integer::intValue).sum();
+        System.out.println("D24_EXECUTION_GUARD=PASS enabled_runtime_methods="
+                + (totalPassed + totalFailed) + " pass=" + totalPassed + " fail=" + totalFailed
+                + " skip=" + totalSkipped + " disabled_not_run=" + EXPECTED_DISABLED.size());
     }
 
     private static void addResults(Map<String, Integer> counts, Set<ITestResult> results) {
@@ -196,14 +220,6 @@ public class D24ExecutionGuardTest {
         }
     }
 
-    private static void addSkipped(Map<String, Integer> skipped, Set<ITestResult> results) {
-        for (ITestResult result : results) {
-            String className = result.getInstance().getClass().getName();
-            if (skipped.containsKey(className)) {
-                skipped.merge(className, 1, Integer::sum);
-            }
-        }
-    }
 
     private static Map<String, Integer> zeroCounts() {
         Map<String, Integer> result = new HashMap<>();
