@@ -44,7 +44,7 @@ provenance.** That revision was rejected at review and replaced.
 | Candidate identity is exact | Full lowercase 40-hex only; the fetched ref must resolve to exactly that commit; the TREE is re-proven inside the candidate workspace before any candidate code runs. |
 | No synthetic-merge fallback | `refs/pull/<n>/merge` is not an acceptable fetch ref. No merge is computed and no mergeability field is read anywhere. |
 | Execution is witnessed, not reported | A trusted listener, compiled here and placed first on the classpath, records every dispatch. Candidate reports are never consulted. |
-| Candidate code never runs as the validator | Candidate Maven/plugins and every candidate-production JVM run as the separate account `d17cand` (`sandbox.py`). Qualification test bodies come only from the trusted comparison base; candidate-owned test bodies are never executed for credit. The environment is allowlisted, and every candidate process is reaped after each run. |
+| Candidate code never runs as the validator | Candidate Maven/plugin execution runs as `d17build`; hostile candidate production bytecode in the qualification JVM runs as the distinct `d17exec` account. Neither is a trusted identity. Qualification test bodies come only from the trusted comparison base; candidate-owned test bodies are never executed for credit. Both identities are reaped and included in final integrity checks. |
 | Trusted bytecode and toolchains are out of reach | Before any candidate code runs, the driver and listener are compiled against the digest-pinned TestNG 7.10.2 closure. They are staged root-owned and read-only under `/var/lib/d17-trusted` (`/opt` is world-writable on hosted runners), together with the JDK and Maven that later trusted steps use. |
 | The executed test bytecode is trusted policy | Test sources are exported from the **trusted comparison-base commit**, never from the candidate role, and compiled by trusted code with `-proc:none` against the frozen candidate production classpath. Candidate `target/test-classes` is never executed for credit. The manifest binds `trusted_test_source_sha` to the comparison-base source lock. |
 | Hostile bytecode is contained before ledger authentication matters | The system classpath contains only the trusted driver/listener and digest-pinned TestNG. Trusted comparison-base tests and candidate production bytecode use separate child loaders. A mandatory Java-21 SecurityManager guard denies candidate production code system-loader access, witness-package access, access-check suppression, SecurityManager replacement, process/native-code execution, protected witness-path mutation and TestNG global-property mutation. A denied operation is sticky and makes the run FAIL even if caught. The HMAC ledger remains defense in depth. If containment is unavailable, the verdict is UNKNOWN; there is no uncontained fallback. |
@@ -60,44 +60,38 @@ provenance.** That revision was rejected at review and replaced.
 - **Nothing world-writable remains on the root filesystem.** `--harden-world-writable` strips o+w from files as well as non-sticky directories (`find -xdev`, so other mounts are not walked). A re-check that finds an entry left, or that did not complete, fails `prepare`. Trusted Python in `prepare`, `execute` and `verify` runs as `/usr/bin/python3 -I -S -B`, so `site` is not imported and no `.pth` file runs (workflow contract control).
 - **PATH.** A PATH directory is probed for shadowing (a new entry written into it, or the directory replaced through a writable ancestor), not recursively: hosted runners ship many world-writable tool-cache files no trusted step runs. Every tool a trusted step runs (`TRUSTED_TOOLS`) is probed at its real path. `prepare` resolves Maven first, then switches to `PATH=$D17_TRUSTED_PATH`, which is the PATH it probes.
 
-### Launch-classpath admission (review 2026-10-04)
+### Build and launch admission (review 2026-10-04)
 
-Before any candidate test code runs next to the witness, `trusted_execution.py`
-admits each module's launch classpath and records `launch_classpath_admission`:
+Before any hostile production bytecode runs, `trusted_execution.py` freezes and
+classifies the launch inputs in `launch_classpath_admission`:
 
-- **Candidate-authored bytecode** (the trusted-compiled test classes, and every
-  directory or jar the candidate build produced) may reference only TestNG's test
-  and configuration annotations (`Test`, `Before*`/`After*`, `DataProvider`,
-  `Parameters`, `Optional`, `NoInjection`, `Ignore`), `Assert`, `AssertJUnit`,
-  `asserts.*`, `collections.*` and `SkipException`. Every other `org.testng`
-  reference, as a class, descriptor or string literal, is a finding:
-  `@Listeners`, `IHookable`, `IConfigurable`, any `*Listener`, `Reporter`,
-  `ITestResult`, `ITestContext`, `ISuite`, `TestNG`, `org.testng.internal`,
-  `@Factory` and `@ObjectFactory`. A class in, or referencing, the
-  `forge.d17.witness` package is also a finding, and so are an unparseable class,
-  a symlinked directory and a FIFO. Forge's own tests use only the admitted API.
-- **Dependency jars** come from the sandbox account's Maven repository, which
-  that account can rewrite. A jar is admitted only if it is byte-identical to the
-  same path in the runner's own repository (`--trusted-maven-repo`). That
-  repository was resolved by trusted steps and probed unwritable by the sandbox
-  account. A rewritten jar is `tampered`; a jar absent from the trusted
-  repository is `unverified`.
-- `qualify.py`:
-  - **FAIL** on any finding or tampered jar, checked before any test outcome,
-    because such code can rewrite every outcome.
-  - **FAIL** when trusted javac failed, or did not produce every required class
-    (`required_tests_trusted_compiled`). The trusted test directory precedes
-    candidate classes on the classpath, so a missing class would otherwise load
-    from candidate bytecode.
-  - **UNKNOWN** on an unverified jar or a missing admission record.
+- **Trusted comparison-base tests** are exported from the locked comparison-base
+  Git commit and compiled by trusted `javac -proc:none`. Candidate test source,
+  candidate `target/test-classes`, TestNG service resources and candidate test
+  reports carry no credit.
+- **Candidate production bytecode** comes only from a build whose Maven authority
+  matches the trusted comparison base. Any candidate change to `pom.xml`,
+  nested POMs, `.mvn/**` or the Maven wrapper makes the qualification
+  `UNKNOWN`. Maven runs offline against the pre-resolved, read-only trusted
+  repository and candidate annotation processing is disabled.
+- **Dependencies/plugins** are read from the trusted Maven repository. Candidate
+  output cannot shadow a trusted dependency in the execution classloader; the
+  dependency domain is parent-first and byte-frozen before execution.
+- **The JVM system classpath contains no candidate bytecode.** It contains only
+  the trusted driver/listener and digest-pinned TestNG closure. Trusted tests and
+  candidate production code are loaded through distinct child-loader domains.
+- `qualify.py` fails or returns `UNKNOWN` on rejected/unverified launch input,
+  failed trusted test compilation, missing admission records, build-definition
+  divergence or absent trusted Maven authority.
 
 ### Bounded influence of candidate-controlled inputs
 
-The candidate's POMs, main sources and dependency resolution stay
-candidate-controlled because the code under qualification must be built. They
-run only as the sandbox account. They decide which main and dependency classes
-load. They do not decide which test bytecode runs, whether an invocation counts,
-or the verdict rule.
+The candidate controls the production source/content being qualified. It does
+**not** control the Maven/plugin definition used for a qualifying run, the
+dependency/plugin repository, the qualification test bodies, TestNG authority,
+the witness, evidence store or verdict rule. A candidate that changes Maven build
+authority is deliberately non-qualifiable by D17 until that trusted definition is
+reviewed on the default branch.
 
 ## Separately reported evidence classes
 
@@ -112,16 +106,15 @@ or the verdict rule.
 
 Signals are evaluated strongest-negative-first:
 
-1. `candidate_identity_bound` — the execution manifest's SHA **and** TREE equal the locked candidate.
-2. `required_surface_bound_to_comparison_base` — the denominator came from the locked comparison base.
-3. `trusted_launches_succeeded` — every trusted launch exited 0.
-4. `no_failed_cases` — the witness observed no failures.
-5. `required_surface_non_empty` — a denominator was actually enumerated.
-6. `witness_ledgers_present` — a ledger exists for every required module. Absent ⇒ `NOT_RUN`.
-7. `witness_ledgers_parsed` — every present ledger is authentic. Present but malformed ⇒ `UNKNOWN`.
-8. `required_classes_executed` — every baseline required class was observed executing.
-9. `required_invocations_met` — observed volume meets the trusted denominator.
-10. `no_undeclared_skips` — no skipped case outside the declared out-of-band surface.
+The emitted signal set binds, at minimum: exact candidate SHA/TREE; comparison-base
+denominator and test-source authority; trusted Maven/build definition; non-empty
+required surface; trusted launch completion; witness presence/parsing/HMAC digest;
+per-class/invocation floors; failures and skip attribution; distinct untrusted
+build/execution OS identities; trusted-state integrity; mandatory hostile-bytecode
+containment; trusted test compilation; launch-classpath admission; and explicit
+whole-reactor coverage debt. Verdict precedence is fail-closed: infrastructure
+ambiguity is `UNKNOWN`, missing execution is `NOT_RUN`, known incomplete
+coverage is `PARTIAL`, and only a complete trusted surface can be `PASS`.
 
 ## Whole-reactor coverage
 
@@ -162,13 +155,16 @@ D17_REQUIRE_TOOLCHAIN=1 python3 -m unittest qualification_runtime_controls   # f
 `forge-candidate-qualification-selftest.yml` runs all three on every pull
 request that changes the gate.
 
-`qualification_runtime_controls.py` runs the real trusted driver and TestNG:
-
-* a candidate test that appends a forged PASS line to its ledger mid-run gets
-  the whole ledger rejected;
-* a candidate service listener that flips a failure to success is never loaded;
-* the key is not a system property;
-* run as the sandbox account, candidate test code cannot write trusted files.
+`qualification_runtime_controls.py` runs the real trusted driver and pinned
+TestNG. In addition to legacy ledger-defense controls, it executes hostile
+**candidate production bytecode** in fresh JVMs for each authority route:
+system/context-loader access, properties-object/property replacement, classloader
+creation, process exit/creation, native loading, ledger writes, heap dump/JMX,
+`/proc/self/mem`, witness reflection, runtime `defineClass`, and a racing
+property-mutator thread. Every route must trip the sticky containment state;
+merely making the test fail is insufficient. Separate controls prove an honest
+candidate call works, a candidate cannot shadow a trusted dependency, and neither
+the build nor execution UID can overwrite validator/denominator/evidence paths.
 
 `RedTrustDomain` and `TrustedLedgerAuthentication` cover the verdict side. They
 reject an unauthenticated or rewritten ledger, candidate code run as `root` or
@@ -190,7 +186,9 @@ adversarial set:
 * **E** observed real failure with forged green reports ⇒ `FAIL`;
 * **F** candidate-fabricated run report, manifest or verdict document ⇒ no credit;
 * **G** required class suppressed, or volume cut below the trusted denominator ⇒ never `PASS`;
-* **H** an honest exact candidate reaches `PASS`.
+* **H** an honest **fully covered synthetic fixture** reaches `PASS`; current
+  Forge is expected to remain `PARTIAL` while D24/D22/disabled-source debt is
+  present.
 
 `qualification_mutation_check.py` mutates the product code once per safety
 property in a scratch copy and requires the control suite to go red. A surviving
@@ -220,11 +218,11 @@ used deliberately rather than adding a dependency.
   into PASS by the executable dry-run denominator.
 * **Dependency changes are UNKNOWN.** A candidate-added/upgraded dependency that
   is absent from the trusted Maven repository is not admitted.
-* **Frozen classpath and immutable runtime data.** Candidate build output and
-  verified dependency jars are frozen into the root-owned bundle before any
-  candidate-production test execution. Launch working-directory data comes from
-  a separately verified exact-candidate Git export, not from the writable build
-  tree.
+* **Frozen classpath and immutable runtime data.** Candidate production output
+  and trusted dependency jars are frozen into the root-owned bundle before the
+  hostile-bytecode JVM starts. Launch working-directory data comes from a
+  separately verified exact-candidate Git export, not from the writable build
+  tree. Build/plugin code and runtime candidate bytecode use different OS UIDs.
 * **HMAC is defense in depth, not the containment boundary.** The ledger key is
   supplied only to the trusted driver. Qualification credit additionally
   requires the independent hostile-bytecode containment signal and filesystem
