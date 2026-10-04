@@ -210,17 +210,20 @@ def required_surface(modules=None, totals=None, classes=None, base=None, class_c
     }
 
 
-#: The separate account candidate code runs as; never the trusted identity.
-SANDBOX_USER = "d17cand"
+#: Candidate Maven/build code and hostile bytecode use different accounts.
+BUILD_USER = "d17build"
+SANDBOX_USER = "d17exec"
 #: Ledger path -> digest of the bytes the trusted listener wrote and the trusted
 #: orchestrator authenticated. Bytes written later by any other route (a test
 #: simulating candidate tampering) do not match, exactly as in production.
 _AUTHENTICATED_LEDGERS: "dict[str, str]" = {}
 
 
-def integrity_ok(user=SANDBOX_USER) -> dict:
+def integrity_ok(user=SANDBOX_USER, build_user=BUILD_USER) -> dict:
     """INTEGRITY.json as sandbox.py verify writes it for an untampered run."""
-    return {"schema": qualify.INTEGRITY_SCHEMA, "status": "OK", "user": user, "violations": []}
+    users = [user] + ([] if build_user == user else [build_user])
+    return {"schema": qualify.INTEGRITY_SCHEMA, "status": "OK", "user": user,
+            "users": users, "violations": []}
 
 
 def authenticate(manifest: dict, witness_dir: Path) -> dict:
@@ -251,7 +254,12 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
         "witness_class": WITNESS_CLASS,
         "witness_source": "witness/forge/d17/witness/QualifiedExecutionListener.java",
         "candidate_artifacts_used_as_evidence": False,
+        "candidate_build_identity": BUILD_USER,
         "candidate_execution_identity": SANDBOX_USER,
+        "build_execution_identity_separated": True,
+        "candidate_build": {"exit_code": 0, "user": BUILD_USER,
+                            "maven_repository": "/trusted/m2/repository",
+                            "offline": True},
         "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
         "trusted_test_source_sha": base or "b" * 40,
         "candidate_test_sources_used_for_credit": False,
@@ -1700,7 +1708,7 @@ class RedLaunchClasspathAdmission(EvidenceCase):
 
     def test_candidate_build_failure_is_still_fail(self) -> None:
         manifest = dict(self.manifest, modules={}, error="candidate build failed (exit 1)",
-                        candidate_build={"exit_code": 1, "user": SANDBOX_USER})
+                        candidate_build={"exit_code": 1, "user": BUILD_USER})
         manifest.pop("trusted_test_compilation")
         manifest.pop("launch_classpath_admission")
         self.assertNotPass(self.verdict(manifest=manifest, authenticated=False), qualify.FAIL)
@@ -1790,8 +1798,10 @@ class IntegrityRecordShape(EvidenceCase):
 
     def test_verify_record_names_the_account_and_is_accepted(self) -> None:
         import sandbox
-        doc = sandbox.integrity(self.root / "no-repo", "0" * 40, ".github", [], SANDBOX_USER, [])
+        doc = sandbox.integrity(self.root / "no-repo", "0" * 40, ".github", [],
+                                SANDBOX_USER, [], [BUILD_USER])
         self.assertEqual(doc.get("user"), SANDBOX_USER)
+        self.assertEqual(doc.get("users"), [SANDBOX_USER, BUILD_USER])
         # Same record, as it reads once every check held.
         doc.update({"status": "OK", "violations": []})
         self.honest()
@@ -2043,22 +2053,26 @@ class WorkflowContractControls(unittest.TestCase):
         self.assertIn("witness", self.text)
 
 
-    def test_candidate_code_runs_only_as_the_sandbox_account(self) -> None:
-        """Coordinator finding at 17d42d7e: no candidate execution as the runner."""
+    def test_candidate_build_and_execution_use_distinct_sandbox_accounts(self) -> None:
+        """Build/plugin code cannot share the hostile-bytecode execution UID."""
         prepare = self._step_run_block(self.text, "Prepare candidate sandbox (separate OS identity)")
-        for required in ('sandbox.py prepare', '--user "$D17_SANDBOX_USER"', "--harden-world-writable",
+        for required in ('sandbox.py prepare', '--user "$D17_BUILD_USER"', "--harden-world-writable",
                          "--stage-jdk", "--stage-maven", '--probe "$GITHUB_WORKSPACE"', '--probe "$RUNNER_TEMP"',
                          'sandbox.py seal'):
             with self.subTest(prepare=required):
                 self.assertIn(required, prepare)
         execute = self._step_run_block(self.text, "Run trusted witnessed execution as the sandbox account")
-        for required in ("trusted_execution.py execute", '--sandbox-user "$D17_SANDBOX_USER"',
+        for required in ("trusted_execution.py execute", '--sandbox-user "$D17_BUILD_USER"',
+                         '--execution-user "$D17_EXEC_USER"',
+                         '--execution-sandbox-dir "$D17_EXEC_SANDBOX_DIR"',
                          '--mvn "$D17_TRUSTED_MAVEN/bin/mvn"', '--java "$D17_TRUSTED_JDK/bin/java"',
                          "--trusted-testng", 'export PATH="$D17_TRUSTED_PATH"', "sandbox.py seal"):
             with self.subTest(execute=required):
                 self.assertIn(required, execute)
         verify = self._step_run_block(self.text, "Verify trusted state integrity")
         self.assertIn("sandbox.py verify", verify)
+        self.assertIn('--user "$D17_EXEC_USER"', verify)
+        self.assertIn('--additional-user "$D17_BUILD_USER"', verify)
         self.assertIn("INTEGRITY.json", verify)
         verdict = self._step_run_block(self.text, "Derive the exact-SHA qualification verdict")
         self.assertIn("--integrity", verdict)
