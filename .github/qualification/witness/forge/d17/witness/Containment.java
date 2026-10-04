@@ -86,20 +86,34 @@ public final class Containment {
      */
     static final class CandidateCodeLoader extends URLClassLoader {
         private final ClassLoader trusted;
+        private volatile Guard guard;
 
         CandidateCodeLoader(URL[] urls, ClassLoader parent, ClassLoader trusted) {
             super(urls, parent);
             this.trusted = trusted;
         }
 
+        void bindGuard(Guard value) {
+            this.guard = value;
+        }
+
+        private void denyAuthority(String detail) {
+            Guard current = guard;
+            if (current != null) {
+                current.deny(detail);
+            }
+        }
+
         @Override
         protected synchronized Class<?> loadClass(String name, boolean resolve)
                 throws ClassNotFoundException {
             if (name.startsWith("forge.d17.witness.")) {
+                denyAuthority("candidate attempted to load witness class " + name);
                 throw new ClassNotFoundException("D17 witness package is not candidate-visible");
             }
             if (name.startsWith("org.testng.")) {
                 if (!allowedTestNg(name)) {
+                    denyAuthority("candidate attempted to load TestNG authority class " + name);
                     throw new ClassNotFoundException("D17 TestNG authority is not candidate-visible: " + name);
                 }
                 return trusted.loadClass(name);
@@ -421,6 +435,7 @@ public final class Containment {
         CandidateCodeLoader candidate = new CandidateCodeLoader(candidateCode, deps, system);
         TrustedTestLoader tests = new TrustedTestLoader(trustedTests, candidate, system);
         Guard guard = new Guard(candidate, protectedRoot);
+        candidate.bindGuard(guard);
         GuardedProperties guarded = new GuardedProperties(System.getProperties(), guard);
         System.setProperties(guarded);
         System.setSecurityManager(guard);
