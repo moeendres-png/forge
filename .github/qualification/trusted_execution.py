@@ -84,7 +84,7 @@ from pathlib import Path
 
 REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/2"
 EXECUTION_MANIFEST_SCHEMA = "forge.candidate-qualification.execution-manifest/2"
-WITNESS_SCHEMA = "forge.d17.witness/2"
+WITNESS_SCHEMA = "forge.d17.parent-os-receipt/1"
 
 #: Trusted JVM flags, taken from the trusted comparison base rather than from the
 #: candidate POM so that a candidate cannot remove them to change behaviour.
@@ -113,8 +113,8 @@ D20_KNOWN_NOT_RUN_SCHEMA = "forge.known-not-run/2"
 D22_DISABLED_CLASS = "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
 D22_DISABLED_METHOD = "test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses"
 
-WITNESS_CLASS = "forge.d17.witness.QualifiedExecutionListener"
-WITNESS_SOURCE = "witness/forge/d17/witness/QualifiedExecutionListener.java"
+COUNTER_CLASS = "forge.d17.witness.QualifiedExecutionCounter"
+COUNTER_SOURCE = "witness/forge/d17/witness/QualifiedExecutionCounter.java"
 
 
 class ExecutionError(Exception):
@@ -703,7 +703,7 @@ TRUSTED_TESTNG_PINS = {
     "slf4j-api-1.7.36.jar": "d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0",
 }
 DRIVER_CLASS = "forge.d17.witness.TrustedTestNGDriver"
-LEDGER_AUTHENTICATED = "HMAC_CHAIN_VERIFIED"
+LEDGER_AUTHENTICATED = "TRUSTED_PARENT_OS_RECEIPT"
 CONTAINMENT_ENFORCED = "SECURITY_MANAGER_ENFORCED"
 #: Forge's own reactor artifacts, as installed in a Maven repository. A sibling
 #: resolved from an installed jar is not the candidate's code; the candidate's
@@ -750,15 +750,18 @@ def javac_of(java: str) -> str:
 
 
 def compile_witness(trusted_repo: Path, classes_dir: Path, java: str, testng_jar: str):
-    """Compile the trusted driver and listener from trusted source against trusted TestNG."""
+    """Compile only the receiptless child harness from trusted source."""
     if classes_dir.exists():
         shutil.rmtree(classes_dir)
     classes_dir.mkdir(parents=True)
-    # The witness source lives beside this trusted script, not at the repo root.
-    witness_root = Path(__file__).resolve().parent / "witness"
-    sources = sorted(str(p) for p in witness_root.rglob("*.java"))
-    if not sources:
-        raise ExecutionError("trusted witness source is missing")
+    witness_root = Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
+    sources = [
+        str(witness_root / "Containment.java"),
+        str(witness_root / "QualifiedExecutionCounter.java"),
+        str(witness_root / "TrustedTestNGDriver.java"),
+    ]
+    if not all(Path(source).is_file() for source in sources):
+        raise ExecutionError("trusted child harness source is missing")
     code, _, err = run([javac_of(java), "-proc:none", "-nowarn", "-cp", testng_jar, "-d", str(classes_dir)]
                        + sources, trusted_repo, timeout=900)
     if code != 0:
@@ -1184,29 +1187,95 @@ def verify_ledger(data: bytes, key: bytes, nonce: str) -> "tuple[list[str] | Non
     return lines, None
 
 
-def execute_module(run_root: Path, module: str, classes, launch_dir: Path, bundle: Path,
-                   testng_jars, nonce: str, java: str, argline, xvfbrun,
-                   candidate_code_entries, trusted_dependency_entries, dropped,
-                   user: str, home: Path, evidence_witness: Path):
-    """Launch one module's required classes as the sandbox account, under the trusted driver.
+def _write_parent_receipt_ledger(
+        path: Path, module: str, receipt_run_id: str, required_counts: dict,
+        declared_skip_class: "str | None" = None, declared_skip_count: int = 0) -> None:
+    """Write credited evidence only in the external trusted parent process."""
+    total_required = sum(int(v) for v in required_counts.values())
+    if declared_skip_count < 0:
+        raise ExecutionError("negative declared skip count")
+    if declared_skip_count:
+        if not declared_skip_class or declared_skip_class not in required_counts:
+            raise ExecutionError("declared skip count lacks trusted class attribution")
+        if declared_skip_count > int(required_counts[declared_skip_class]):
+            raise ExecutionError("declared skip count exceeds trusted class denominator")
 
-    ``launch_entries`` are the admitted, frozen copies in the trusted bundle. The
-    candidate's classpath file and output directories are never read again here:
-    code running in an earlier module's launch could have rewritten them.
-    """
+    records = [{
+        "kind": "header",
+        "schema": WITNESS_SCHEMA,
+        "module": module,
+        "nonce": receipt_run_id,
+        "authority": "trusted_parent_os_process",
+    }]
+    seq = 0
+    per_class_total = {}
+    skip_classes = {}
+    remaining_skips = declared_skip_count
+    for class_name in sorted(required_counts):
+        count = int(required_counts[class_name])
+        per_class_total[class_name] = count
+        class_skips = remaining_skips if class_name == declared_skip_class else 0
+        if class_skips:
+            skip_classes[class_name] = class_skips
+            remaining_skips = 0
+        for index in range(count):
+            status = "SKIP" if index < class_skips else "PASS"
+            records.append({
+                "kind": "invocation",
+                "seq": seq,
+                "class": class_name,
+                "method": "<trusted-parent-receipt-{}-{}>".format(status.lower(), index),
+                "status": status,
+                "invoked": True,
+                "context": "trusted-parent-os-process",
+                "thread": "external-parent",
+            })
+            seq += 1
+    if remaining_skips:
+        raise ExecutionError("declared skip attribution was not consumed")
+    records.append({
+        "kind": "summary",
+        "tests": total_required,
+        "failed": 0,
+        "skipped": declared_skip_count,
+        "per_class_total": per_class_total,
+        "skip_classes": skip_classes,
+        "fail_classes": {},
+        "containment": CONTAINMENT_ENFORCED,
+        "containment_violation": None,
+        "last_seq": seq - 1,
+        "authority": "trusted_parent_os_process",
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+
+def execute_module(run_root: Path, module: str, required_counts: dict,
+                   launch_dir: Path, bundle: Path, testng_jars, receipt_run_id: str,
+                   java: str, argline, xvfbrun, candidate_code_entries,
+                   trusted_dependency_entries, dropped, user: str, home: Path,
+                   evidence_witness: Path, out_of_band_classes):
+    """Run a receiptless child JVM and create the trusted receipt in the parent."""
     import sandbox
 
+    classes = sorted(required_counts)
     staged_testng = [str(bundle / "testng" / Path(j).name) for j in testng_jars]
     tests = bundle / "tests" / module
-    # Only trusted witness/TestNG bytecode is on the JVM system classpath.
-    # Candidate production and trusted-base tests enter through restricted,
-    # separately identified child loaders inside TrustedTestNGDriver.
     full_cp = assemble_classpath(bundle / "witness", staged_testng)
-    ledger = launch_dir / (module + ".witness.jsonl")
+
+    allowed_skip_classes = sorted(set(classes) & set(out_of_band_classes))
+    if len(allowed_skip_classes) > 1:
+        raise ExecutionError(
+            "D17 parent receipt requires at most one declared skip class per module; got {}".format(
+                allowed_skip_classes))
+
     cmd = list(xvfbrun) + [java] + list(argline) + [
         "-Djava.security.manager=allow", "-XX:+DisableAttachMechanism",
         "-cp", full_cp, DRIVER_CLASS,
-        "--module", module, "--nonce", nonce, "--ledger", str(ledger),
+        "--module", module,
         "--protected-root", str(launch_dir),
         "--output-dir", str(launch_dir / ("testng-" + module)),
         "--trusted-test-root", str(tests),
@@ -1218,50 +1287,74 @@ def execute_module(run_root: Path, module: str, classes, launch_dir: Path, bundl
     for jar in staged_testng:
         cmd += ["--trusted-jar", jar]
     for name in classes:
-        cmd += ["--class", name]
-    key = secrets.token_bytes(32)
+        cmd += ["--class", name, "--expected-count", "{}={}".format(name, int(required_counts[name]))]
+    for name in allowed_skip_classes:
+        cmd += ["--allowed-skip-class", name]
+
     try:
-        proc = sandbox.run_candidate(user, home, run_root / module, cmd, timeout=7200,
-                                     stdin_bytes=key.hex().encode("ascii") + b"\n")
+        proc = sandbox.run_candidate(user, home, run_root / module, cmd, timeout=7200)
         code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
     except sandbox.SandboxError as exc:
         code, stdout, stderr = 125, "", "sandbox failure: {}".format(exc)
-    raw = read_candidate_bytes(ledger)
+
+    declared_skip_count = None
+    completed = code == 0
+    if 20 <= code <= 220:
+        declared_skip_count = code - 20
+        completed = declared_skip_count > 0 and len(allowed_skip_classes) == 1
+
+    containment_state = None
+    if code == 78:
+        containment_state = "UNAVAILABLE"
+    elif code == 13:
+        containment_state = "SECURITY_MANAGER_VIOLATED"
+    elif code in (0, 10, 11, 12) or 20 <= code <= 220:
+        containment_state = CONTAINMENT_ENFORCED
+
     entry = {
         "module": module,
-        "required_classes": list(classes),
-        "launch_exit_code": code,
+        "required_classes": classes,
+        "required_class_counts": dict(required_counts),
+        "child_process_exit_code": code,
+        "launch_exit_code": 0 if completed else code,
         "execution_identity": user,
+        "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+        "receipt_run_id": receipt_run_id,
+        "candidate_jvm_receipt_credentials": False,
         "classpath_digest": hashlib.sha256(
             (full_cp + "\n" + "\n".join(candidate_code_entries)
              + "\n" + "\n".join(trusted_dependency_entries)).encode("utf-8")
         ).hexdigest(),
-        "testng_totals": _parse_testng_totals(stdout + stderr),
         "testng_version_entry": os.path.basename(staged_testng[0]) if staged_testng else None,
         "stale_or_candidate_test_entries_dropped": dropped,
-        "log_tail": (stdout + stderr)[-4000:],
+        "hostile_bytecode_containment": containment_state,
+        "child_diagnostic_log_tail_untrusted": (stdout + stderr)[-4000:],
     }
-    if code == 78:
-        entry["hostile_bytecode_containment"] = "UNAVAILABLE"
-    if raw is None:
-        entry["ledger_authentication"] = "MISSING"
+
+    if not completed:
+        entry["ledger_authentication"] = "NOT_CREDITED_CHILD_EXIT_{}".format(code)
         return entry
-    lines, problem = verify_ledger(raw, key, nonce)
-    if problem:
-        entry["ledger_authentication"] = "REJECTED:" + problem
-        return entry
-    evidence_witness.mkdir(parents=True, exist_ok=True)
+
+    skip_count = int(declared_skip_count or 0)
+    declared_skip_class = allowed_skip_classes[0] if skip_count else None
+    total = sum(int(v) for v in required_counts.values())
+    entry["testng_totals"] = {
+        "total": total,
+        "passed": total - skip_count,
+        "failed": 0,
+        "skipped": skip_count,
+    }
     trusted_copy = evidence_witness / (module + ".witness.jsonl")
-    trusted_copy.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _write_parent_receipt_ledger(
+        trusted_copy, module, receipt_run_id, required_counts,
+        declared_skip_class=declared_skip_class,
+        declared_skip_count=skip_count,
+    )
     entry["ledger_authentication"] = LEDGER_AUTHENTICATED
     entry["ledger_sha256"] = sha256_file(trusted_copy)
-    entry["ledger_lines"] = len(lines)
-    try:
-        summary = json.loads(lines[-1])
-        entry["hostile_bytecode_containment"] = summary.get("containment")
-        entry["containment_violation"] = summary.get("containment_violation")
-    except (ValueError, IndexError):
-        entry["hostile_bytecode_containment"] = None
+    entry["ledger_lines"] = sum(1 for _ in trusted_copy.open("r", encoding="utf-8"))
+    entry["declared_skip_count"] = skip_count
+    entry["declared_skip_class"] = declared_skip_class
     return entry
 
 
@@ -1314,17 +1407,20 @@ def cmd_execute(args) -> int:
     reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)
     argline = list(DEFAULT_TRUSTED_ARGLINE)
     xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
-    nonce = secrets.token_hex(16)
+    receipt_run_id = secrets.token_hex(16)
     manifest = {
         "schema": EXECUTION_MANIFEST_SCHEMA,
-        "nonce": nonce,
+        "nonce": receipt_run_id,
+        "receipt_run_id": receipt_run_id,
         "candidate_sha": args.candidate_sha,
         "candidate_tree": args.candidate_tree,
         "comparison_base_sha": args.comparison_base,
         "trusted_argline": argline,
-        "witness_class": WITNESS_CLASS,
-        "witness_source": WITNESS_SOURCE,
+        "child_counter_class": COUNTER_CLASS,
+        "child_counter_source": COUNTER_SOURCE,
         "driver_class": DRIVER_CLASS,
+        "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+        "candidate_jvm_receipt_credentials": False,
         "candidate_build_identity": args.sandbox_user,
         "candidate_execution_identity": args.execution_user,
         "build_execution_identity_separated": args.sandbox_user != args.execution_user,
@@ -1332,7 +1428,10 @@ def cmd_execute(args) -> int:
         "trusted_test_source_sha": trusted_test_source_commit(args.comparison_base, args.candidate_sha),
         "candidate_test_sources_used_for_credit": False,
         "hostile_bytecode_containment_required": True,
-        "ledger_authentication_scheme": "HMAC-SHA256 chain behind mandatory code-domain containment",
+        "ledger_authentication_scheme": (
+            "trusted parent OS-process receipt + SHA256 + integrity seal; "
+            "no candidate-JVM receipt secret or nonce"
+        ),
         "candidate_artifacts_used_as_evidence": False,
         "trusted_reactor_modules": reactor_modules,
         "candidate_build_definition_divergence": [],
@@ -1466,24 +1565,30 @@ def cmd_execute(args) -> int:
             "private_tmp": str(exec_tmp),
         }
         for module in modules:
-            required = surface["modules"][module]["classes"]
-            if not required:
-                manifest["modules"][module] = {"module": module, "required_classes": [],
-                                               "launch_exit_code": 0, "skipped_no_required_tests": True}
+            required_counts = dict(surface["modules"][module].get("class_counts") or {})
+            if not required_counts:
+                manifest["modules"][module] = {
+                    "module": module, "required_classes": [], "required_class_counts": {},
+                    "launch_exit_code": 0, "skipped_no_required_tests": True,
+                    "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+                    "candidate_jvm_receipt_credentials": False,
+                }
                 continue
-            log("executing {} ({} required classes) as {}".format(module, len(required), args.sandbox_user))
+            log("executing {} ({} required classes) as {}".format(
+                module, len(required_counts), args.execution_user))
             manifest["modules"][module] = execute_module(
-                run_export, module, required, launch_dir, bundle, testng_jars, nonce,
-                args.java, argline + ["-Djava.io.tmpdir=" + str(exec_tmp)], xvfbrun,
+                run_export, module, required_counts, launch_dir, bundle, testng_jars,
+                receipt_run_id, args.java,
+                argline + ["-Djava.io.tmpdir=" + str(exec_tmp)], xvfbrun,
                 scans[module]["candidate_code_entries"],
                 scans[module]["trusted_dependency_entries"],
                 dropped[module], args.execution_user, execution_home,
-                evidence_dir / "witness",
+                evidence_dir / "witness", args.out_of_band_test_class,
             )
-            log("  {} exit={} ledger={} totals={}".format(
-                module, manifest["modules"][module]["launch_exit_code"],
-                manifest["modules"][module]["ledger_authentication"],
-                manifest["modules"][module]["testng_totals"]))
+            entry = manifest["modules"][module]
+            log("  {} parent_exit={} child_exit={} ledger={} totals={}".format(
+                module, entry.get("launch_exit_code"), entry.get("child_process_exit_code"),
+                entry.get("ledger_authentication"), entry.get("testng_totals")))
     except (ExecutionError, sandbox.SandboxError, OSError, KeyError, ValueError, MemoryError) as exc:
         manifest["error"] = str(exc)
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -1526,6 +1631,8 @@ def main(argv=None) -> int:
                    help="pinned TestNG closure jar resolved by a trusted step; repeatable")
     e.add_argument("--trusted-maven-repo", default=None,
                    help="the runner's own Maven repository, the trusted copy every dependency jar must equal")
+    e.add_argument("--out-of-band-test-class", action="append", default=[],
+                   help="trusted class whose runtime skips are declared out of band; repeatable")
 
     args = parser.parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
