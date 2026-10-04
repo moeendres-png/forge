@@ -291,6 +291,14 @@ MUTATIONS = [
         "configuration failures outside test-method callbacks could receive credit",
     ),
     Mutation(
+        "drop-trusted-method-denominator-from-child",
+        "trusted_execution.py",
+        '    for key, count in sorted(required_method_counts.items()):\n'
+        '        cmd += ["--expected-method-count", "{}={}".format(key, int(count))]\n',
+        '',
+        "one test invocation could replace another within the same class without detection",
+    ),
+    Mutation(
         "decode-error-exits-as-declared-skips",
         "trusted_execution.py",
         "    if 31 <= code <= 69 and len(allowed_skip_classes) == 1:\n",
