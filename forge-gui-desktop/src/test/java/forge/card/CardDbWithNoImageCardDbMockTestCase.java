@@ -3,14 +3,9 @@ package forge.card;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 
-import javax.imageio.ImageIO;
-
-import org.mockito.Mockito;
-import org.powermock.api.mockito.PowerMockito;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import forge.ImageCache;
 import forge.ImageKeys;
 import forge.item.PaperCard;
 
@@ -30,11 +25,8 @@ public class CardDbWithNoImageCardDbMockTestCase extends CardDbCardMockTestCase 
     }
 
     @Override
-    protected void initCardImageMocks() {
-        PowerMockito.mockStatic(ImageIO.class);
-        PowerMockito.mockStatic(ImageCache.class);
-        PowerMockito.mockStatic(ImageKeys.class);
-        PowerMockito.when(ImageKeys.hasImage(Mockito.any(PaperCard.class), Mockito.anyBoolean())).thenReturn(false);
+    protected boolean mockedCardHasImage() {
+        return false;
     }
 
     @Test
