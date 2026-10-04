@@ -1279,51 +1279,62 @@ class RedTrustDomain(EvidenceCase):
         self.assertNotPass(self.verdict(integrity=integrity_ok("someone-else")), qualify.FAIL)
 
 
-def _mac_ledger(bodies, key: bytes, nonce: str) -> bytes:
-    """Write a ledger exactly as QualifiedExecutionListener chains it."""
-    import hmac as _hmac
+class ParentReceiptAuthority(unittest.TestCase):
+    """The candidate JVM owns no receipt credential or evidence authority."""
 
-    chain, out = nonce, []
-    for body in bodies:
-        chain = _hmac.new(key, (chain + "\n" + body).encode("utf-8"), hashlib.sha256).hexdigest()
-        out.append(body[:-1] + ',"mac":"' + chain + '"}')
-    return ("\n".join(out) + "\n").encode("utf-8")
+    def test_parent_receipt_is_run_bound_and_contains_no_mac(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-parent-receipt-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = tmp / "forge-game.witness.jsonl"
+        trusted_execution._write_parent_receipt_ledger(
+            path, "forge-game", "parent-run-1",
+            {"pkg.C0": 2, "pkg.C1": 1},
+        )
+        raw = path.read_text()
+        self.assertNotIn('"mac"', raw)
+        parsed = qualify.read_witness(path, "forge-game", "parent-run-1")
+        self.assertEqual(parsed["tests"], 3)
+        self.assertEqual(parsed["failed"], 0)
+        self.assertEqual(parsed["skipped"], 0)
 
+    def test_replayed_parent_receipt_from_another_run_is_rejected(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-parent-replay-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = tmp / "forge-game.witness.jsonl"
+        trusted_execution._write_parent_receipt_ledger(
+            path, "forge-game", "old-run", {"pkg.C0": 1})
+        with self.assertRaisesRegex(qualify.QualificationError, "run"):
+            qualify.read_witness(path, "forge-game", "new-run")
 
-class TrustedLedgerAuthentication(unittest.TestCase):
-    """The orchestrator accepts only an unbroken HMAC chain under this run's key."""
+    def test_declared_skip_receipt_has_exact_parent_attribution(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-parent-skip-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = tmp / "forge-game.witness.jsonl"
+        trusted_execution._write_parent_receipt_ledger(
+            path, "forge-game", "parent-run-2",
+            {"pkg.Stress": 3, "pkg.C0": 1},
+            declared_skip_class="pkg.Stress", declared_skip_count=2,
+        )
+        parsed = qualify.read_witness(path, "forge-game", "parent-run-2")
+        self.assertEqual(parsed["skipped"], 2)
+        self.assertEqual(parsed["per_class_skip"], {"pkg.Stress": 2})
 
-    KEY = bytes(range(32))
-    BODIES = [
-        '{"kind":"header","schema":"forge.d17.witness/1","module":"forge-game","nonce":"n1"}',
-        '{"kind":"invocation","seq":0,"class":"pkg.C0","method":"a","status":"PASS"}',
-        '{"kind":"summary","tests":1,"failed":0,"skipped":0}',
-    ]
+    def test_child_driver_has_no_receipt_nonce_key_or_ledger_handle(self) -> None:
+        driver = (
+            Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
+            / "TrustedTestNGDriver.java"
+        ).read_text()
+        for forbidden in ("--nonce", "--ledger", "HmacSHA256", "SecretKeySpec", "readKey("):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, driver)
+        source = __import__("inspect").getsource(trusted_execution.execute_module)
+        self.assertNotIn("stdin_bytes", source)
+        self.assertIn('"receipt_authority": "TRUSTED_PARENT_OS_PROCESS"', source)
 
-    def test_an_unbroken_chain_verifies(self) -> None:
-        lines, problem = trusted_execution.verify_ledger(_mac_ledger(self.BODIES, self.KEY, "n1"), self.KEY, "n1")
-        self.assertIsNone(problem)
-        self.assertEqual(len(lines), 3)
-
-    def test_every_forgery_is_rejected(self) -> None:
-        good = _mac_ledger(self.BODIES, self.KEY, "n1")
-        lines = good.decode().splitlines()
-        forged_tail = '{"kind":"invocation","seq":1,"class":"pkg.C1","method":"b","status":"PASS"}'
-        cases = {
-            "appended_unauthenticated_line": good + (forged_tail + "\n").encode(),
-            "line_altered": good.replace(b'"status":"PASS"', b'"status":"SKIP"'),
-            "lines_reordered": ("\n".join([lines[0], lines[2], lines[1]]) + "\n").encode(),
-            "other_key": _mac_ledger(self.BODIES, bytes(32), "n1"),
-            "replayed_from_another_run": _mac_ledger(self.BODIES, self.KEY, "n0"),
-            "middle_line_dropped": ("\n".join([lines[0], lines[2]]) + "\n").encode(),
-            "empty": b"",
-            "not_utf8": b"\xff\xfe",
-        }
-        for name, data in cases.items():
-            with self.subTest(case=name):
-                accepted, problem = trusted_execution.verify_ledger(data, self.KEY, "n1")
-                self.assertIsNone(accepted, name)
-                self.assertTrue(problem, name)
+    def test_compile_harness_excludes_legacy_signing_listener(self) -> None:
+        source = __import__("inspect").getsource(trusted_execution.compile_witness)
+        self.assertIn("QualifiedExecutionCounter.java", source)
+        self.assertNotIn("QualifiedExecutionListener.java", source)
 
     def test_the_trusted_testng_closure_is_pinned(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="forge-d17-pins-"))
