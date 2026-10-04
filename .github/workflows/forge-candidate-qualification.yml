@@ -63,9 +63,11 @@ env:
   # excluded here.
   QUALIFY_OUT_OF_BAND_CLASSES: "forge.net.NetworkPlayIntegrationTest"
   QUALIFY_JAVA: "21"
-  # Trust domain. Candidate Maven and candidate test JVMs run only as this
-  # separate account, in this sandbox; trusted bytecode and toolchains are
-  # staged root-owned and read-only under /var/lib (on hosted runners /opt is
+  # Trust domain. Candidate Maven/plugin code and hostile candidate production
+  # bytecode never execute as the trusted runner and never share an untrusted
+  # UID with each other. Qualification test bodies are compiled from the trusted
+  # comparison base, not from candidate test source. Trusted bytecode/toolchains
+  # are staged root-owned and read-only under /var/lib (on hosted runners /opt is
   # world-writable and not sticky, so nothing trusted may live there).
   # Build/plugin code and hostile production bytecode never share a UID.
   # A delayed build-user process therefore cannot inspect or mutate the
