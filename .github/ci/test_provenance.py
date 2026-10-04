@@ -287,6 +287,16 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
     total_time = sum((dec(c["time_seconds"]) for c in cases), Decimal("0"))
     receipt = {
         "schema": SCHEMA,
+        "evidence_authority": {
+            "producer": "candidate-controlled test-build workflow",
+            "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED",
+            "qualification_credit": "none",
+            "note": (
+                "D20 proves the provenance carried by this test-build receipt; "
+                "D17 owns trusted exact-SHA candidate qualification and must not "
+                "derive credit merely from this candidate-controlled document"
+            ),
+        },
         "source": identity,
         "run": run or {},
         "java_version": str(java_version),
@@ -441,6 +451,11 @@ class Controls(unittest.TestCase):
         self.assertEqual(PASS, r["overall_classification"])
         self.assertEqual("0.25", r["normalized_results"]["duration_seconds"])
         self.assertEqual(["module"], r["default_reactor_modules"])
+        self.assertEqual("none", r["evidence_authority"]["qualification_credit"])
+        self.assertEqual(
+            "NOT_CLAIMED",
+            r["evidence_authority"]["trusted_exact_sha_candidate_qualification"],
+        )
 
     def test_known_not_run_is_partial_not_pass(self):
         self.java("example.RealTest")
