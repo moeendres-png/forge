@@ -773,8 +773,12 @@ def _testng_reference_allowed(reference: str) -> bool:
     return any(ALLOWED_TESTNG_REFERENCE.match("/".join(parts[:end])) for end in range(len(parts), 2, -1))
 
 
-def bytecode_findings(class_name: str, data: bytes) -> "list[str]":
-    """Why one candidate-authored class may not run next to the trusted witness."""
+def bytecode_findings(class_name: str, data: bytes, allow_testng_test_api: bool = True) -> "list[str]":
+    """Why one class may not run next to the trusted witness.
+
+    Trusted comparison-base tests may reference the narrow test-only API.
+    Candidate production bytecode may reference no TestNG API at all.
+    """
     try:
         strings = class_constant_strings(data)
     except (ValueError, IndexError) as exc:
@@ -786,7 +790,7 @@ def bytecode_findings(class_name: str, data: bytes) -> "list[str]":
         if _WITNESS_REFERENCE.search(text):
             found.add("references the trusted witness")
         for reference in _TESTNG_REFERENCE.findall(text):
-            if not _testng_reference_allowed(reference):
+            if not allow_testng_test_api or not _testng_reference_allowed(reference):
                 found.add("references " + reference.replace(".", "/"))
     return sorted(found)
 
@@ -812,7 +816,8 @@ def _regular_file_bytes(path: Path):
         return handle.read(MAX_ADMITTED_FILE + 1)
 
 
-def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | None" = None) -> None:
+def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | None" = None,
+                     allow_testng_test_api: bool = True) -> None:
     """Scan every class under ``root``; with ``freeze_to``, copy the regular files read.
 
     The copy is made from the same bytes the scan judged, so what later runs is
@@ -840,7 +845,9 @@ def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | No
                     result["findings"].append({"entry": label, "class": rel, "problems": ["not a regular class file"]})
                     continue
                 result["scanned_classes"] += 1
-                problems = bytecode_findings(rel[: -len(".class")], data)
+                problems = bytecode_findings(
+                    rel[: -len(".class")], data,
+                    allow_testng_test_api=allow_testng_test_api)
                 if problems:
                     result["findings"].append({"entry": label, "class": rel, "problems": problems})
             if freeze_to is not None and data is not None:
@@ -849,7 +856,8 @@ def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | No
                 target.write_bytes(data)
 
 
-def _scan_jar_bytes(label: str, data: bytes, result: dict) -> None:
+def _scan_jar_bytes(label: str, data: bytes, result: dict,
+                    allow_testng_test_api: bool = True) -> None:
     import io
     import zipfile
     try:
@@ -857,7 +865,9 @@ def _scan_jar_bytes(label: str, data: bytes, result: dict) -> None:
             for name in jar.namelist():
                 if name.endswith(".class"):
                     result["scanned_classes"] += 1
-                    problems = bytecode_findings(name[: -len(".class")], jar.read(name))
+                    problems = bytecode_findings(
+                        name[: -len(".class")], jar.read(name),
+                        allow_testng_test_api=allow_testng_test_api)
                     if problems:
                         result["findings"].append({"entry": label, "class": name, "problems": problems})
     except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
@@ -885,7 +895,9 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
     result = {"scanned_classes": 0, "findings": [], "tampered_jars": [], "unverified_jars": [],
               "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None,
               "launch_entries": [], "candidate_code_entries": [], "trusted_dependency_entries": []}
-    _scan_class_tree("trusted-compiled tests", tests_dir, result)
+    _scan_class_tree(
+        "trusted-compiled tests", tests_dir, result,
+        allow_testng_test_api=True)
     candidate_root = Path(os.path.realpath(candidate_root))
     candidate_m2 = Path(os.path.realpath(candidate_m2))
     staging, launch_root, cache = freeze if freeze else (None, None, {})
@@ -922,7 +934,10 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
                 result["unverified_jars"].append(key)
                 continue
             rel = "cp/{}".format(len(cache))
-            _scan_class_tree(entry, real, result, freeze_to=(staging / rel) if staging else None)
+            _scan_class_tree(
+                entry, real, result,
+                freeze_to=(staging / rel) if staging else None,
+                allow_testng_test_api=False)
             if staging is not None:
                 (staging / rel).mkdir(parents=True, exist_ok=True)
             remember(key, rel, before, "candidate_code_entries")
@@ -962,7 +977,7 @@ def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candid
             if not isinstance(data, bytes):
                 result["findings"].append({"entry": entry, "class": None, "problems": ["not a regular jar of admissible size"]})
                 continue
-            _scan_jar_bytes(entry, data, result)
+            _scan_jar_bytes(entry, data, result, allow_testng_test_api=False)
             rel = "cp/{}.jar".format(len(cache))
             if staging is not None:
                 (staging / rel).parent.mkdir(parents=True, exist_ok=True)
