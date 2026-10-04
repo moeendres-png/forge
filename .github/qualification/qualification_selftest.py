@@ -254,6 +254,11 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
         "trusted_test_source_sha": base or "b" * 40,
         "candidate_test_sources_used_for_credit": False,
         "hostile_bytecode_containment_required": True,
+        "candidate_build_definition_divergence": [],
+        "maven_repository_authority": {
+            "path": "/trusted/m2/repository",
+            "mode": "trusted_read_only_offline",
+        },
         "modules": {
             module: {
                 "module": module,
@@ -526,6 +531,56 @@ class PositiveExactShaPath(EvidenceCase):
             qualification_of(evidence)["coverage"]["d24_framework_not_run_classes"], [])
         self.assertEqual(
             qualification_of(evidence)["skips"]["undeclared_skipped_classes"], [])
+
+    def test_candidate_maven_build_definition_divergence_is_unknown(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["candidate_build_definition_divergence"] = ["pom.xml"]
+        manifest["error"] = "candidate changes Maven build authority: pom.xml"
+        manifest["modules"] = {}
+        manifest.pop("trusted_test_compilation", None)
+        manifest.pop("launch_classpath_admission", None)
+        evidence = self.verdict(manifest=manifest, authenticated=False)
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertIn("Maven build/plugin authority", evidence["reason"])
+
+    def test_missing_trusted_maven_repository_authority_is_unknown(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["maven_repository_authority"] = None
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertIn("trusted Maven", evidence["reason"])
+
+    def test_build_definition_diff_detects_poms_and_maven_core_config(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-builddef-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        (repo / ".mvn").mkdir(parents=True)
+        (repo / "module").mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.email", "a@b.invalid"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), check=True)
+        (repo / "pom.xml").write_text("<project/>\n")
+        (repo / "module" / "pom.xml").write_text("<project/>\n")
+        (repo / ".mvn" / "extensions.xml").write_text("<extensions/>\n")
+        (repo / "mvnw").write_text("#!/bin/sh\n")
+        (repo / "ordinary.txt").write_text("base\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo), text=True).strip()
+        (repo / "module" / "pom.xml").write_text("<project><build/></project>\n")
+        (repo / ".mvn" / "extensions.xml").write_text("<extensions><extension/></extensions>\n")
+        (repo / "ordinary.txt").write_text("candidate\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "candidate"], cwd=str(repo), check=True)
+        candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo), text=True).strip()
+        self.assertEqual(
+            trusted_execution.build_definition_divergence(repo, base, candidate),
+            [".mvn/extensions.xml", "module/pom.xml"],
+        )
 
     def test_containment_violation_is_fail_even_when_tests_are_green(self) -> None:
         import copy
