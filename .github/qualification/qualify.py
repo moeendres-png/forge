@@ -282,6 +282,18 @@ def derive_verdict(
             surface.get("comparison_base_sha"), lock["comparison_base"]["sha"]
         ),
     )
+    test_source_ok = (
+        manifest.get("trusted_test_source_sha") == lock["comparison_base"]["sha"]
+        and manifest.get("candidate_test_sources_used_for_credit") is False
+        and manifest.get("test_bytecode_origin") == "trusted_compile_of_comparison_base_git_export"
+    )
+    signal(
+        "trusted_test_source_bound_to_comparison_base",
+        test_source_ok,
+        "test_source_sha={} origin={} candidate_tests_used={}".format(
+            manifest.get("trusted_test_source_sha"), manifest.get("test_bytecode_origin"),
+            manifest.get("candidate_test_sources_used_for_credit")),
+    )
 
     # --- 3. The required surface is genuinely non-empty --------------------- #
     modules = surface.get("modules", {})
@@ -569,6 +581,10 @@ def derive_verdict(
         )
     elif not by_name["required_surface_bound_to_comparison_base"]["satisfied"]:
         verdict, reason = FAIL, "the required surface is not bound to the locked comparison base"
+    elif not by_name["trusted_test_source_bound_to_comparison_base"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "qualification test bodies are not bound to the trusted comparison-base source"
+        )
     elif not by_name["trusted_launches_completed"]["satisfied"]:
         verdict, reason = FAIL, (
             "a trusted test launch did not complete cleanly; see trusted_launches_completed"
