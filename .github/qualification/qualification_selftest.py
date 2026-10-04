@@ -2317,7 +2317,8 @@ class WorkflowContractControls(unittest.TestCase):
                          '--execution-user "$D17_EXEC_USER"',
                          '--execution-sandbox-dir "$D17_EXEC_SANDBOX_DIR"',
                          '--mvn "$D17_TRUSTED_MAVEN/bin/mvn"', '--java "$D17_TRUSTED_JDK/bin/java"',
-                         "--trusted-testng", 'export PATH="$D17_TRUSTED_PATH"', "sandbox.py seal"):
+                         "--trusted-testng", "--out-of-band-test-class",
+                         'export PATH="$D17_TRUSTED_PATH"', "sandbox.py seal"):
             with self.subTest(execute=required):
                 self.assertIn(required, execute)
         verify = self._step_run_block(self.text, "Verify trusted state integrity")
