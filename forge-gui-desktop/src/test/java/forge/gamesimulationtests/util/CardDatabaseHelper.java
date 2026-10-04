@@ -36,6 +36,14 @@ public final class CardDatabaseHelper {
         return getStaticData(fixtureOwner, lazyLoad);
     }
 
+    public static synchronized StaticData createFreshStaticDataForTestMethod(boolean lazyLoad) {
+        clearCrossFixtureCardDbState();
+        activeFixture = null;
+        StaticData data = initialize(lazyLoad);
+        activate(data);
+        return data;
+    }
+
     private static StaticData getStaticData(Class<?> fixtureOwner, boolean lazyLoad) {
         FixtureKey key = new FixtureKey(fixtureOwner.getName(), lazyLoad);
         if (!key.equals(activeFixture)) {
