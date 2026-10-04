@@ -41,13 +41,11 @@ permissions: {}
 
 env:
   PYTHONHASHSEED: "0"
-  # Bounded qualification surface.
-  #
-  # These are the only modules with test sources in the default reactor.  The
-  # trusted denominator for each comes from a TestNG dry run over the trusted
-  # comparison base, so a candidate cannot shrink it.  Measured on Forge master
-  # b95c07b3436bf582274ea458520ca30aa379d6e7 with Java 21: 666 tests --
-  # forge-game 3, forge-gui-desktop 450, forge-protocol2-bridge 213.
+  # Bounded execution surface. These are the only modules with test sources in
+  # the default reactor. TestNG dry-run supplies only the executable denominator;
+  # D24 framework-NOT_RUN and explicit disabled source obligations are inventoried
+  # separately by trusted_execution.py, so the historical 666 can never be
+  # promoted to "full Forge test coverage".
   QUALIFY_EXPECTED_MODULES: "forge-game forge-gui-desktop forge-protocol2-bridge"
   # Test classes the trusted contract declares outside the qualified surface.
   # Only skips in these classes are excluded from the completeness requirement;
@@ -313,11 +311,11 @@ jobs:
             "$EVIDENCE_DIR/SANDBOX_PREPARE.json" \
             "$RUNNER_TEMP"/d17-testng/*.jar
 
-      # The orchestrator compiles the trusted driver and listener against the
-      # pinned TestNG, builds the candidate as the sandbox account, compiles the
-      # candidate's test sources itself from the locked Git export, launches
-      # each module's required classes as the sandbox account with the ledger
-      # key on stdin, and copies only HMAC-verified ledgers into evidence.
+      # The orchestrator compiles the trusted driver/listener, builds candidate
+      # production code as the sandbox account, then compiles TEST BODIES ONLY
+      # FROM THE TRUSTED COMPARISON BASE against that candidate production
+      # classpath. Candidate production bytecode runs behind the mandatory
+      # containment loader/SecurityManager boundary.
       - name: Run trusted witnessed execution as the sandbox account
         id: execute
         shell: /usr/bin/bash --noprofile --norc {0}
