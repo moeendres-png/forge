@@ -48,15 +48,24 @@ public class D24ExecutionGuardTest {
             "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
                     + "#test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses");
 
+    private static Map<String, Integer> runtimeDiscovered = zeroCounts();
     private static Map<String, Integer> runtimePassed = zeroCounts();
     private static Map<String, Integer> runtimeFailed = zeroCounts();
     private static Map<String, Integer> runtimeSkipped = zeroCounts();
 
     @BeforeSuite(alwaysRun = true)
     public void resetRuntimeCounters() {
+        runtimeDiscovered = zeroCounts();
         runtimePassed = zeroCounts();
         runtimeFailed = zeroCounts();
         runtimeSkipped = zeroCounts();
+    }
+
+    public static synchronized void recordAffectedDiscovery(Class<?> type) {
+        String className = type.getName();
+        if (runtimeDiscovered.containsKey(className)) {
+            runtimeDiscovered.merge(className, 1, Integer::sum);
+        }
     }
 
     public static synchronized void recordAffectedResult(ITestResult result) {
@@ -197,20 +206,15 @@ public class D24ExecutionGuardTest {
             return;
         }
 
+        Map<String, Integer> discovered = new HashMap<>(runtimeDiscovered);
         Map<String, Integer> passed = new HashMap<>(runtimePassed);
         Map<String, Integer> failed = new HashMap<>(runtimeFailed);
         Map<String, Integer> skipped = new HashMap<>(runtimeSkipped);
 
-        Map<String, Integer> discovered = zeroCounts();
         Map<String, Integer> invoked = zeroCounts();
         for (String className : invoked.keySet()) {
-            int passCount = passed.get(className);
-            int failCount = failed.get(className);
-            int skipCount = skipped.get(className);
-            discovered.put(className, passCount + failCount + skipCount);
-            invoked.put(className, passCount + failCount);
+            invoked.put(className, passed.get(className) + failed.get(className));
         }
-        validateExecution(discovered, invoked, skipped);
 
         for (Map.Entry<String, Integer> expected : ENABLED_RUNTIME_METHODS.entrySet()) {
             String className = expected.getKey();
@@ -225,9 +229,12 @@ public class D24ExecutionGuardTest {
         int totalPassed = passed.values().stream().mapToInt(Integer::intValue).sum();
         int totalFailed = failed.values().stream().mapToInt(Integer::intValue).sum();
         int totalSkipped = skipped.values().stream().mapToInt(Integer::intValue).sum();
-        System.out.println("D24_EXECUTION_GUARD=PASS enabled_runtime_methods="
+        System.out.println("D24_EXECUTION_TOTAL enabled_runtime_methods="
                 + (totalPassed + totalFailed) + " pass=" + totalPassed + " fail=" + totalFailed
                 + " skip=" + totalSkipped + " disabled_not_run=" + EXPECTED_DISABLED.size());
+
+        validateExecution(discovered, invoked, skipped);
+        System.out.println("D24_EXECUTION_GUARD=PASS");
     }
 
     private static Map<String, Integer> zeroCounts() {
