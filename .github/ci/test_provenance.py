@@ -14,8 +14,8 @@ import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-SCHEMA = "forge.test-provenance/1"
-KNOWN_SCHEMA = "forge.known-not-run/1"
+SCHEMA = "forge.test-provenance/2"
+KNOWN_SCHEMA = "forge.known-not-run/2"
 PASS, FAIL, PARTIAL, UNKNOWN = "PASS", "FAIL", "PARTIAL", "UNKNOWN"
 TEST_ANNOTATION = re.compile(r"@(?:org\.testng\.annotations\.)?Test\b")
 DISABLED_TEST = re.compile(
@@ -114,9 +114,12 @@ def inventories(repo, modules):
 
 def dec(raw):
     if raw in (None, ""):
-        return Decimal("0")
+        raise ValueError("missing testcase duration")
     try:
-        return Decimal(raw)
+        value = Decimal(raw)
+        if not value.is_finite() or value < 0:
+            raise ValueError("non-finite/negative duration")
+        return value
     except InvalidOperation as exc:
         raise ValueError("invalid duration {!r}".format(raw)) from exc
 
@@ -132,7 +135,24 @@ def report_paths(repo, modules):
 
 def parse_report(repo, path):
     try:
-        root = ET.parse(str(path)).getroot()
+        raw = path.read_bytes()
+        if path.is_symlink() or b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+            raise ValueError('non-regular/unsupported XML report')
+        root = ET.fromstring(raw)
+        if lname(root.tag) != 'testsuite':
+            raise ValueError('single testsuite required')
+        counters = {}
+        for key in ('tests','failures','errors','skipped'):
+            value = root.get(key)
+            if value is None or not re.fullmatch(r'[0-9]+', value):
+                raise ValueError('missing/nonnegative integer suite counter: '+key)
+            counters[key] = int(value)
+        nodes = [n for n in root.iter() if lname(n.tag)=='testcase']
+        actual = {'tests':len(nodes), 'failures':sum(any(lname(c.tag)=='failure' for c in list(n)) for n in nodes),
+                  'errors':sum(any(lname(c.tag)=='error' for c in list(n)) for n in nodes),
+                  'skipped':sum(any(lname(c.tag)=='skipped' for c in list(n)) for n in nodes)}
+        if counters != actual or sum(counters[k] for k in ('failures','errors','skipped')) > counters['tests']:
+            raise ValueError('suite counters disagree with raw testcases')
     except (ET.ParseError, OSError) as exc:
         raise ValueError("{}: malformed/unreadable XML: {}".format(path, exc))
     cases, observed = [], set()
@@ -187,6 +207,9 @@ def load_known(path):
             raise ValueError("{} must be a list of non-empty strings".format(key))
         if value != sorted(set(value)):
             raise ValueError("{} must be sorted and unique".format(key))
+    disabled = data.get('intentionally_disabled_source_classes')
+    if not isinstance(disabled, dict) or any(not isinstance(k,str) or not re.fullmatch(r'[0-9a-f]{64}',str(v)) for k,v in disabled.items()):
+        raise ValueError('disabled source identities missing/invalid')
     return data
 
 
@@ -247,7 +270,14 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         provenance_errors.append("Surefire reports contained zero testcase records")
 
     missing = sorted(set(annotated) - observed)
-    expected = set(known.get("source_test_classes_not_observed", []))
+    disabled = known.get('intentionally_disabled_source_classes', {})
+    disabled_errors = []
+    for name, source_hash in disabled.items():
+        source = all_sources.get(name)
+        if source is None or sha256(repo/source['path']) != source_hash or name not in missing:
+            disabled_errors.append('explicit disabled-source baseline drift/observed: '+name)
+    baseline_errors += disabled_errors
+    expected = set(known.get("source_test_classes_not_observed", [])) | set(disabled)
     unexpected = sorted(set(missing) - expected)
     stale = sorted(expected - set(missing))
     blockers = list(known.get("framework_blockers", []))
@@ -270,7 +300,8 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
     elif missing:
         coverage = PARTIAL
     elif annotated:
-        coverage = PASS
+        # Observing each class does not prove that each required method ran.
+        coverage = UNKNOWN
     else:
         coverage = UNKNOWN
     build = UNKNOWN if maven_exit is None else (PASS if maven_exit == 0 else FAIL)
@@ -306,6 +337,8 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         "provenance_integrity": provenance,
         "known_not_run_baseline_integrity": baseline,
         "coverage_completeness": coverage,
+        "class_presence_observation": PARTIAL if missing else PASS if annotated else UNKNOWN,
+        "method_denominator": "UNKNOWN_NOT_ATTESTED",
         "overall_classification": overall,
         "reports": reports,
         "normalized_results": {
@@ -325,6 +358,7 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
             "unexpected_not_run": unexpected,
             "stale_known_not_run": stale,
             "framework_blockers": blockers,
+            "intentionally_disabled_source_classes": sorted(disabled),
             "framework_blocker_sources_missing": missing_blockers,
         },
         "provenance_errors": provenance_errors,
@@ -419,7 +453,7 @@ class Controls(unittest.TestCase):
         else:
             classname = fqn + "$Inner" if nested else fqn
             path.write_text(
-                '<testsuite><testcase classname="{}" name="x" time="0.25"/></testsuite>\n'.format(
+                '<testsuite tests="1" failures="0" errors="0" skipped="0"><testcase classname="{}" name="x" time="0.25"/></testsuite>\n'.format(
                     classname
                 ),
                 encoding="utf-8",
@@ -434,6 +468,7 @@ class Controls(unittest.TestCase):
                     "schema": KNOWN_SCHEMA,
                     "source_test_classes_not_observed": sorted(missing),
                     "framework_blockers": sorted(blockers),
+                    "intentionally_disabled_source_classes": {},
                 }
             ),
             encoding="utf-8",
@@ -448,7 +483,7 @@ class Controls(unittest.TestCase):
         self.report("example.RealTest")
         r, ok = self.run_collect(self.known())
         self.assertTrue(ok)
-        self.assertEqual(PASS, r["overall_classification"])
+        self.assertEqual(UNKNOWN, r["overall_classification"])
         self.assertEqual("0.25", r["normalized_results"]["duration_seconds"])
         self.assertEqual(["module"], r["default_reactor_modules"])
         self.assertEqual("none", r["evidence_authority"]["qualification_credit"])
@@ -568,6 +603,42 @@ class Controls(unittest.TestCase):
         r, ok = self.run_collect(self.known())
         self.assertFalse(ok)
         self.assertEqual(UNKNOWN, r["build_outcome"])
+
+
+    def test_impossible_counters_and_missing_durations_are_red(self):
+        self.java('example.RealTest'); path=self.report('example.RealTest'); original=path.read_text()
+        variants=[original.replace('tests="1"','tests="0"'), original.replace('failures="0"','failures="-1"'),
+                  original.replace('errors="0"','errors="1"'), original.replace('skipped="0"','skipped="2"')]
+        variants += [original.replace('time="0.25"','time="'+value+'"') for value in ('NaN','Infinity','-1','')]
+        variants.append(original.replace(' time="0.25"',''))
+        variants.append('<!DOCTYPE testsuite [<!ENTITY forged "x">]>'+original)
+        for xml in variants:
+            with self.subTest(xml=xml):
+                path.write_text(xml);r,ok=self.run_collect(self.known())
+                self.assertFalse(ok);self.assertEqual(FAIL,r['provenance_integrity'])
+
+    def test_source_disabled_debt_is_partial_hash_bound_and_not_exempt(self):
+        self.java('example.RealTest');self.report('example.RealTest');self.java('example.DisabledTest')
+        source=self.root/'module/src/test/java/example/DisabledTest.java'
+        source.write_text(source.read_text().replace('@org.testng.annotations.Test','@org.testng.annotations.Test(enabled=false)'))
+        known=self.known();doc=json.loads(known.read_text());doc['intentionally_disabled_source_classes']={'example.DisabledTest':sha256(source)};known.write_text(json.dumps(doc))
+        r,ok=self.run_collect(known);self.assertTrue(ok);self.assertEqual(PARTIAL,r['coverage_completeness'])
+        source.write_text(source.read_text().replace('enabled=false','enabled=true'))
+        r,ok=self.run_collect(known);self.assertFalse(ok)
+        source.write_text(source.read_text().replace('enabled=true','enabled=false'));self.report('example.DisabledTest')
+        r,ok=self.run_collect(known);self.assertFalse(ok)
+
+    def test_symlinked_reports_are_red(self):
+        self.java('example.RealTest');path=self.report('example.RealTest');raw=path.read_text();real=self.root/'raw.xml';real.write_text(raw);path.unlink();path.symlink_to(real)
+        r,ok=self.run_collect(self.known());self.assertFalse(ok)
+
+
+    def test_one_reported_method_cannot_claim_complete_method_coverage(self):
+        self.java('example.RealTest');self.report('example.RealTest')
+        source=self.root/'module/src/test/java/example/RealTest.java'
+        source.write_text(source.read_text().replace('public void x() {}','public void x() {} @org.testng.annotations.Test public void omitted() {}'))
+        r,ok=self.run_collect(self.known());self.assertTrue(ok)
+        self.assertEqual(UNKNOWN,r['coverage_completeness']);self.assertEqual('UNKNOWN_NOT_ATTESTED',r['method_denominator'])
 
 
 def selftest(verbose=False):

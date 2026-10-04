@@ -3,9 +3,23 @@
     "forge.card.CardMockTestCase",
     "forge.gamesimulationtests.BaseGameSimulationTest"
   ],
-  "note": "D20 visibility baseline only. D24 owns PowerMock migration/remediation. Any new missing source test class or any baseline entry that starts running must make the D20 validator red until this list is explicitly reviewed.",
+  "intentionally_disabled_source_classes": {
+    "forge.BoosterDraft1Test": "0f72bfbdb62cb9f573b52a292aa28aab921c8c113ef1c7dfd37fcbea880b0d98",
+    "forge.BoosterDraftTest": "184ed5e984c3b987397dd6d297e6376884444afa9a738e0a6468ccbc42cadc50",
+    "forge.GuiDownloadPicturesLQTest": "3d8a5ce4a738360b17906bee965ba3f2a3c469896fbfe4c3a83a3b424ed0d4f8",
+    "forge.GuiDownloadSetPicturesLQTest": "8368ebc07e5aad3564214640c14d2c4cb631f21003605457ebd27c7e26f8a056",
+    "forge.PanelTest": "ee8bf8fdf6b205d3e1714e8f2843938f32c4461a64b0565ea01b0d7bf0d7c317",
+    "forge.RunTest": "29b851e997fe82453a3445faa38a611983bbd2704ded6fecdfb8b467d0646c55",
+    "forge.deck.generate.Generate2ColorDeckTest": "505bff6cb1363275eb876681947f25e67c710cb1b816b33ac4150d9221ca15dc",
+    "forge.deck.generate.Generate3ColorDeckTest": "cd5f8409638125e00f7a676166fd146e6f0ef46751eefc93a32738e8cf82d1bf",
+    "forge.deck.generate.Generate5ColorDeckTest": "b44f5e1c54b08939a6d79a14e764c6f635fdb78a7d5355370be54820a29264d4",
+    "forge.gui.ListChooserTest": "20bf70ea9031dc4c9ae021882258b37407b021e29e93c9cbbbacc4edbd67a1e8",
+    "forge.gui.game.CardDetailPanelTest": "856a70af025c86752d5ea96aceee3999b1ad66ed06b69429c288ba48f845cb49",
+    "forge.model.FModelTest": "020e924cbeb55b4b261e0ec6c201cc3c51049dac9cf6408761116b68569a2a4c"
+  },
+  "note": "D20 visibility baseline only. D24 owns PowerMock migration/remediation. Any new missing source test class or any baseline entry that starts running must make the D20 validator red until this list is explicitly reviewed. Explicit2026-10-04 adjudication:12 additional pre-existing TestNG-disabled classes are separate hash-bound NOT_RUN debt. Any source drift, removal or observed execution requires review. This never grants coverage PASS.",
   "owner_issue": "moeendres-png/commander-playtest-lab#528",
-  "schema": "forge.known-not-run/1",
+  "schema": "forge.known-not-run/2",
   "source_test_classes_not_observed": [
     "forge.card.CardDbCardMockTestCase",
     "forge.card.CardDbLazyCardLoadingCardMockTestCase",
