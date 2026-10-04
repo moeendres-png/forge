@@ -6,53 +6,56 @@ import forge.item.PaperCard;
 import forge.localinstance.properties.ForgeConstants;
 
 public class CardDatabaseHelper {
-    private static StaticData staticData;
+    private static StaticData eagerStaticData;
+    private static StaticData lazyStaticData;
 
     public static PaperCard getCard(String name) {
-        initializeIfNeeded(false);
+        StaticData data = getStaticData(false);
 
-        PaperCard result = staticData.getCommonCards().getCard(name);
+        PaperCard result = data.getCommonCards().getCard(name);
         if (result == null) {
             throw new IllegalArgumentException("Failed to get card with name " + name);
         }
         return result;
     }
 
-    private static void initializeIfNeeded(boolean lazyLoad) {
-        if (hasBeenInitialized()) {
-            return;
+    private static StaticData getStaticData(boolean lazyLoad) {
+        StaticData existing = lazyLoad ? lazyStaticData : eagerStaticData;
+        if (existing != null) {
+            return existing;
         }
-        initialize(lazyLoad);
+
+        StaticData initialized = initialize(lazyLoad);
+        if (lazyLoad) {
+            lazyStaticData = initialized;
+        } else {
+            eagerStaticData = initialized;
+        }
+        return initialized;
     }
 
-    private static void initialize(boolean loadCardsLazily) {
+    private static StaticData initialize(boolean loadCardsLazily) {
         final CardStorageReader reader = new CardStorageReader(ForgeConstants.CARD_DATA_DIR,
                 null, loadCardsLazily);
         CardStorageReader customReader;
         try {
-            customReader  = new CardStorageReader(ForgeConstants.USER_CUSTOM_CARDS_DIR,
+            customReader = new CardStorageReader(ForgeConstants.USER_CUSTOM_CARDS_DIR,
                     null, loadCardsLazily);
         } catch (Exception e) {
             customReader = null;
         }
-        staticData = new StaticData(reader, customReader, ForgeConstants.EDITIONS_DIR,
-                ForgeConstants.USER_CUSTOM_EDITIONS_DIR ,ForgeConstants.BLOCK_DATA_DIR,
+        return new StaticData(reader, customReader, ForgeConstants.EDITIONS_DIR,
+                ForgeConstants.USER_CUSTOM_EDITIONS_DIR, ForgeConstants.BLOCK_DATA_DIR,
                 "Latest Art All Editions",
                 true,
                 false);
     }
 
-    private static boolean hasBeenInitialized() {
-        return staticData != null;
-    }
-
     public static StaticData getStaticDataToPopulateOtherMocks() {
-        initializeIfNeeded(false);
-        return staticData;
+        return getStaticData(false);
     }
 
     public static StaticData getStaticDataToPopulateOtherMocks(boolean lazyLoad) {
-        initializeIfNeeded(lazyLoad);
-        return staticData;
+        return getStaticData(lazyLoad);
     }
 }
