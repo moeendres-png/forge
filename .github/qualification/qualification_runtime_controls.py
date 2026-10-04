@@ -506,6 +506,30 @@ public class TrustedAttackCallerTest {
 """ % (json.dumps(route), json.dumps(str(ledger)))
 
 
+TRUSTED_DEPENDENCY = """package shadow;
+public class Shared {
+    public static int value() { return 7; }
+}
+"""
+
+CANDIDATE_SHADOW = """package shadow;
+public class Shared {
+    public static int value() { return 99; }
+}
+"""
+
+TRUSTED_SHADOW_CALLER = """package probe;
+import static org.testng.Assert.assertEquals;
+import org.testng.annotations.Test;
+import shadow.Shared;
+public class TrustedShadowCallerTest {
+    @Test public void trustedDependencyWins() {
+        assertEquals(Shared.value(), 7);
+    }
+}
+"""
+
+
 class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
     ROUTES = (
         "system-loader",
@@ -543,6 +567,28 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
         records = [json.loads(line) for line in lines]
         summary = records[-1]
         self.assertEqual(summary.get("containment"), trusted_execution.CONTAINMENT_ENFORCED)
+        invocations = [r for r in records if r.get("kind") == "invocation"]
+        self.assertEqual([r["status"] for r in invocations], ["PASS"])
+
+    def test_candidate_cannot_shadow_a_trusted_dependency_class(self) -> None:
+        dependency = self.compile_source_set(
+            {"Shared": TRUSTED_DEPENDENCY}, "trusted-dependency")
+        candidate = self.compile_source_set(
+            {"Shared": CANDIDATE_SHADOW}, "candidate-shadow")
+        tests = self.compile_source_set(
+            {"TrustedShadowCallerTest": TRUSTED_SHADOW_CALLER},
+            "comparison-base-tests-shadow", extra_cp=[str(dependency)])
+        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+        out = self.tmp / "contained-shadow"
+        out.mkdir()
+        proc, raw = self.launch(
+            ["probe.TrustedShadowCallerTest"], [str(tests)], out, key, nonce,
+            candidate_code=[candidate], trusted_dependencies=[dependency])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
+        self.assertIsNone(problem)
+        records = [json.loads(line) for line in lines]
+        self.assertEqual(records[-1].get("containment"), trusted_execution.CONTAINMENT_ENFORCED)
         invocations = [r for r in records if r.get("kind") == "invocation"]
         self.assertEqual([r["status"] for r in invocations], ["PASS"])
 
