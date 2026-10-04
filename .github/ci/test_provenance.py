@@ -710,7 +710,7 @@ class Controls(unittest.TestCase):
         path.write_text(
             '<testsuite tests="2" failures="1" errors="0" skipped="1">'
             '<testcase classname="example.RealTest" name="ambiguous" time="0.10"><skipped/><failure/></testcase>'
-            '<testcase classname="example.RealTest" name="pass" time="0.15"/></testsuite>\\n'
+            '<testcase classname="example.RealTest" name="pass" time="0.15"/></testsuite>\n'
         )
         with self.assertRaisesRegex(ValueError, 'multiple terminal outcomes'):
             parse_report(self.root, path)
