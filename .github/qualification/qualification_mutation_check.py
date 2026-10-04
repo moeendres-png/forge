@@ -284,6 +284,13 @@ MUTATIONS = [
         "a ledger the orchestrator never authenticated would be credit",
     ),
     Mutation(
+        "decode-error-exits-as-declared-skips",
+        "trusted_execution.py",
+        "    if 31 <= code <= 69 and len(allowed_skip_classes) == 1:\n",
+        "    if 20 <= code <= 220 and len(allowed_skip_classes) == 1:\n",
+        "containment/driver/signal exits could be misread as declared-skip completion",
+    ),
+    Mutation(
         "ignore-external-parent-receipt-authority",
         "qualify.py",
         '    elif not by_name["external_parent_receipt_authority"]["satisfied"]:',
