@@ -383,6 +383,10 @@ class AdmissionRuntimeControls(RuntimeCase):
 
 
 HOSTILE_MAIN = """package probe;
+import com.sun.management.HotSpotDiagnosticMXBean;
+import java.io.InputStream;
+import java.lang.invoke.MethodHandles;
+import java.lang.management.ManagementFactory;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -393,60 +397,89 @@ import java.util.Properties;
 public class HostileMain {
     public static int add(int a, int b) { return a + b; }
 
-    private static int caught(Runnable action) {
-        try {
-            action.run();
-            return 0;
-        } catch (SecurityException expected) {
-            return 1;
+    private static byte[] payloadBytes() throws Exception {
+        try (InputStream in = HostileMain.class.getResourceAsStream("/probe/Payload.class")) {
+            if (in == null) throw new IllegalStateException("payload bytes missing");
+            return in.readAllBytes();
         }
     }
 
-    public static int attack(String ledger) {
-        int blocked = 0;
-        blocked += caught(() -> ClassLoader.getSystemClassLoader());
-        blocked += caught(() -> System.setProperties(new Properties()));
-        blocked += caught(() -> new URLClassLoader(new URL[0]));
-        blocked += caught(() -> System.exit(0));
-        blocked += caught(() -> System.loadLibrary("d17_nonexistent_native"));
-        blocked += caught(() -> {
-            try {
-                Files.writeString(Path.of(ledger), "{\\\"kind\\\":\\\"forged\\\"}\\n",
-                        StandardOpenOption.APPEND);
-            } catch (java.io.IOException io) {
-                throw new RuntimeException(io);
-            }
-        });
-        blocked += caught(() -> {
-            try {
-                ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)
-                        .dumpHeap(ledger + ".hprof", true);
-            } catch (java.io.IOException io) {
-                throw new RuntimeException(io);
-            }
-        });
-        blocked += caught(() -> {
-            try {
-                Files.readAllBytes(Path.of("/proc/self/mem"));
-            } catch (java.io.IOException io) {
-                throw new RuntimeException(io);
-            }
-        });
-
-        Thread racer = new Thread(() -> {
-            try {
-                System.getProperties().put("testng.mode.dryrun", "true");
-            } catch (SecurityException expected) {
-                // Expected.  The guard records a sticky violation.
-            }
-        });
-        racer.start();
+    public static int attack(String route, String ledger) {
         try {
-            racer.join();
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
+            switch (route) {
+                case "system-loader":
+                    ClassLoader.getSystemClassLoader();
+                    break;
+                case "context-loader": {
+                    ClassLoader loader = Thread.currentThread().getContextClassLoader();
+                    Class.forName("org.testng.Reporter", false, loader);
+                    break;
+                }
+                case "properties-object":
+                    System.getProperties();
+                    break;
+                case "set-properties":
+                    System.setProperties(new Properties());
+                    break;
+                case "new-classloader":
+                    new URLClassLoader(new URL[0]);
+                    break;
+                case "exit":
+                    System.exit(0);
+                    break;
+                case "native":
+                    System.loadLibrary("d17_nonexistent_native");
+                    break;
+                case "ledger-write":
+                    Files.writeString(Path.of(ledger), "{\\\"kind\\\":\\\"forged\\\"}\\n",
+                            StandardOpenOption.APPEND);
+                    break;
+                case "heap-dump":
+                    ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)
+                            .dumpHeap(ledger + ".hprof", true);
+                    break;
+                case "proc-mem":
+                    Files.readAllBytes(Path.of("/proc/self/mem"));
+                    break;
+                case "witness-reflection":
+                    Class.forName("forge.d17.witness.QualifiedExecutionListener")
+                            .getDeclaredFields();
+                    break;
+                case "define-class": {
+                    Class<?> payload = MethodHandles.lookup().defineClass(payloadBytes());
+                    payload.getMethod("attack").invoke(null);
+                    break;
+                }
+                case "thread-race": {
+                    Thread racer = new Thread(() ->
+                            System.setProperty("testng.mode.dryrun", "true"));
+                    racer.start();
+                    racer.join();
+                    break;
+                }
+                default:
+                    throw new IllegalArgumentException(route);
+            }
+            return 0;
+        } catch (SecurityException expected) {
+            return 1;
+        } catch (java.lang.reflect.InvocationTargetException wrapped) {
+            if (wrapped.getCause() instanceof SecurityException) return 1;
+            throw new RuntimeException(wrapped.getCause());
+        } catch (ClassNotFoundException expected) {
+            // A loader-level authority denial is also an acceptable refusal.
+            return 1;
+        } catch (Exception other) {
+            throw new RuntimeException(other);
         }
-        return blocked;
+    }
+}
+"""
+
+PAYLOAD = """package probe;
+public class Payload {
+    public static void attack() {
+        System.setProperty("testng.mode.dryrun", "true");
     }
 }
 """
@@ -461,15 +494,16 @@ public class TrustedCallerTest {
 }
 """
 
-TRUSTED_ATTACK_CALLER = """package probe;
+def trusted_attack_caller(route: str, ledger: Path) -> str:
+    return """package probe;
 import static org.testng.Assert.assertEquals;
 import org.testng.annotations.Test;
 public class TrustedAttackCallerTest {
-    @Test public void hostileAuthorityAttemptsCannotBeHidden() {
-        assertEquals(HostileMain.attack(LEDGER), 8);
+    @Test public void hostileAuthorityAttemptCannotBeHidden() {
+        assertEquals(HostileMain.attack(%s, %s), 1);
     }
 }
-"""
+""" % (json.dumps(route), json.dumps(str(ledger)))
 
 
 class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
