@@ -326,6 +326,13 @@ MUTATIONS = [
         '          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare',
         "prepare would probe and resolve tools on the inherited PATH",
     ),
+    Mutation(
+        "limit-candidate-production-to-test-bearing-modules",
+        "trusted_execution.py",
+        "    reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)\n",
+        "    reactor_modules = modules\n",
+        "candidate changes in upstream Forge reactor modules would disappear from the executed classpath",
+    ),
     # --- trusted Maven/build-definition authority ------------------------- #
     Mutation(
         "ignore-candidate-build-definition-divergence",
