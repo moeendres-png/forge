@@ -256,6 +256,17 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
             }
             for module in modules
         },
+        # Written by cmd_execute before any launch: what trusted javac produced,
+        # and the admission of the launch classpath.
+        "trusted_test_compilation": {
+            module: {"module": module, "exit_code": 0, "compiled_required": ["pkg.C0", "pkg.C1"]}
+            for module in modules
+        },
+        "launch_classpath_admission": {
+            module: {"scanned_classes": 2, "findings": [], "tampered_jars": [], "unverified_jars": [],
+                     "trusted_maven_repository": "/home/runner/.m2/repository"}
+            for module in modules
+        },
     }
 
 
@@ -1458,6 +1469,179 @@ class TrustedOrchestratorControls(unittest.TestCase):
             trusted_execution.required_classes_for_module(repo, "forge-game", "0" * 40)
 
 
+def synthetic_class(strings) -> bytes:
+    """A class file whose constant pool holds ``strings`` as CONSTANT_Utf8 entries.
+
+    The admission scan reads only the constant pool, which is where every class,
+    member and descriptor reference and every string literal lives.
+    """
+    pool = b"".join(b"\x01" + len(t.encode()).to_bytes(2, "big") + t.encode() for t in strings)
+    pool += b"\x07" + (1).to_bytes(2, "big")  # a Class entry, to exercise the tag table
+    return (b"\xca\xfe\xba\xbe" + (0).to_bytes(2, "big") + (61).to_bytes(2, "big")
+            + (len(strings) + 2).to_bytes(2, "big") + pool + b"\x00" * 8)
+
+
+class RedLaunchClasspathAdmission(EvidenceCase):
+    """Review P1/P2 at 63731d9f: what may run next to the witness, and from where.
+
+    One ``@Listeners`` class (or main code reaching ``Reporter``/``ISuite``) can
+    rewrite the outcome of every other class in the TestNG suite, and a required
+    class trusted javac did not produce would load from candidate bytecode.
+    """
+
+    def _with(self, module_key, field, value, record="launch_classpath_admission"):
+        import copy
+        manifest = copy.deepcopy(self.manifest)
+        manifest[record][module_key][field] = value
+        return manifest
+
+    def test_honest_admission_passes(self) -> None:
+        self.honest()
+        self.assertEqual(self.verdict()["verdict"], qualify.PASS)
+
+    def test_listener_registration_is_fail_even_with_all_tests_passing(self) -> None:
+        self.honest()
+        finding = [{"entry": "trusted-compiled tests", "class": "pkg/C0.class",
+                    "problems": ["references org/testng/annotations/Listeners"]}]
+        evidence = self.verdict(manifest=self._with("forge-game", "findings", finding))
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("launch_classpath_admitted", evidence["reason"])
+
+    def test_tampered_dependency_jar_is_fail(self) -> None:
+        self.honest()
+        evidence = self.verdict(manifest=self._with("forge-gui-desktop", "tampered_jars",
+                                                    ["org/powermock/x/1/x-1.jar"]))
+        self.assertNotPass(evidence, qualify.FAIL)
+
+    def test_unverified_dependency_jar_is_unknown(self) -> None:
+        self.honest()
+        evidence = self.verdict(manifest=self._with("forge-game", "unverified_jars", ["new/dep/1/dep-1.jar"]))
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+
+    def test_missing_admission_record_is_unknown(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        del manifest["launch_classpath_admission"]
+        self.assertNotPass(self.verdict(manifest=manifest), qualify.UNKNOWN)
+
+    def test_failed_trusted_compile_is_fail(self) -> None:
+        self.honest()
+        manifest = self._with("forge-game", "exit_code", 1, record="trusted_test_compilation")
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("trusted compilation", evidence["reason"])
+
+    def test_required_class_not_trusted_compiled_is_fail(self) -> None:
+        self.honest()
+        manifest = self._with("forge-game", "compiled_required", ["pkg.C0"], record="trusted_test_compilation")
+        self.assertNotPass(self.verdict(manifest=manifest), qualify.FAIL)
+
+    def test_missing_compile_record_is_fail(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        del manifest["trusted_test_compilation"]
+        self.assertNotPass(self.verdict(manifest=manifest), qualify.FAIL)
+
+
+class IntegrityRecordShape(EvidenceCase):
+    """Review P2 at 63731d9f: qualify must accept the record sandbox.py verify really writes."""
+
+    def test_verify_record_names_the_account_and_is_accepted(self) -> None:
+        import sandbox
+        doc = sandbox.integrity(self.root / "no-repo", "0" * 40, ".github", [], SANDBOX_USER, [])
+        self.assertEqual(doc.get("user"), SANDBOX_USER)
+        # Same record, as it reads once every check held.
+        doc.update({"status": "OK", "violations": []})
+        self.honest()
+        evidence = self.verdict(integrity=doc)
+        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+
+    def test_a_tail_after_the_summary_is_not_credit(self) -> None:
+        self.honest()
+        path = self.witness_dir / "forge-game.witness.jsonl"
+        path.write_text(path.read_text() + json.dumps({
+            "kind": "invocation", "seq": 99, "class": "pkg.C0", "method": "late", "status": "PASS",
+            "context": "TestNG", "thread": "TestNG-0"}, sort_keys=True) + "\n")
+        self.assertNotEqual(self.verdict()["verdict"], qualify.PASS)
+
+
+class BytecodeAdmissionScan(unittest.TestCase):
+    """The constant-pool scan that feeds launch_classpath_admission."""
+
+    def findings(self, strings, name="forge/FooTest"):
+        return trusted_execution.bytecode_findings(name, synthetic_class(strings))
+
+    def test_forge_test_vocabulary_is_admitted(self) -> None:
+        self.assertEqual(self.findings([
+            "forge/FooTest", "org/testng/annotations/Test", "Lorg/testng/annotations/BeforeClass;",
+            "org/testng/Assert", "org/testng/AssertJUnit", "org/testng/SkipException",
+            "Lorg/testng/annotations/DataProvider;", "org/testng/Assert$ThrowingRunnable",
+            "org.testng.Assert.assertEquals",
+        ]), [])
+
+    def test_listener_and_result_access_are_refused(self) -> None:
+        for reference in ("Lorg/testng/annotations/Listeners;", "org/testng/IInvokedMethodListener",
+                          "org/testng/ITestListener", "org/testng/IHookable", "org/testng/IConfigurable",
+                          "org/testng/Reporter", "org/testng/ITestResult", "org/testng/ISuite",
+                          "org/testng/ITestContext", "org/testng/TestNG", "org/testng/internal/Utils",
+                          "Lorg/testng/annotations/Factory;", "Lorg/testng/annotations/ObjectFactory;",
+                          "org.testng.Reporter", "org.testng.internal.TestResult"):
+            with self.subTest(reference=reference):
+                self.assertTrue(self.findings(["forge/FooTest", reference]), reference)
+
+    def test_witness_package_and_references_are_refused(self) -> None:
+        self.assertTrue(self.findings(["forge/d17/witness/Spy"], name="forge/d17/witness/Spy"))
+        self.assertTrue(self.findings(["forge/FooTest", "forge.d17.witness.QualifiedExecutionListener"]))
+
+    def test_unparseable_class_is_refused(self) -> None:
+        self.assertTrue(trusted_execution.bytecode_findings("forge/X", b"not a class"))
+        self.assertTrue(trusted_execution.bytecode_findings("forge/X", synthetic_class(["a"])[:12]))
+
+    def test_dependency_jar_must_equal_the_trusted_repository(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-admit-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tests, root = tmp / "tests", tmp / "candidate"
+        trusted_m2, candidate_m2 = tmp / "trusted-m2", tmp / "home" / ".m2" / "repository"
+        for base in (tests, root, trusted_m2, candidate_m2):
+            base.mkdir(parents=True)
+        (tests / "pkg").mkdir()
+        (tests / "pkg" / "C0.class").write_bytes(synthetic_class(["pkg/C0", "org/testng/annotations/Test"]))
+        rel = Path("org/dep/1/dep-1.jar")
+        for repo, body in ((trusted_m2, b"same"), (candidate_m2, b"same")):
+            (repo / rel).parent.mkdir(parents=True)
+            (repo / rel).write_bytes(body)
+        new = Path("org/new/1/new-1.jar")
+        (candidate_m2 / new).parent.mkdir(parents=True)
+        (candidate_m2 / new).write_bytes(b"new")
+        entries = [str(candidate_m2 / rel), str(candidate_m2 / new)]
+        scan = trusted_execution.scan_launch_classpath(tests, entries, root, candidate_m2, trusted_m2)
+        self.assertEqual((scan["findings"], scan["tampered_jars"]), ([], []))
+        self.assertEqual(scan["unverified_jars"], [str(new)])
+        (candidate_m2 / rel).write_bytes(b"rewritten by the candidate account")
+        scan = trusted_execution.scan_launch_classpath(tests, entries, root, candidate_m2, trusted_m2)
+        self.assertEqual(scan["tampered_jars"], [str(rel)])
+
+    def test_candidate_output_directory_is_scanned_and_fifos_refused(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-admit-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        tests, root = tmp / "tests", tmp / "candidate"
+        classes = root / "forge-game" / "target" / "classes" / "forge"
+        classes.mkdir(parents=True)
+        tests.mkdir()
+        (classes / "Evil.class").write_bytes(synthetic_class(["forge/Evil", "org/testng/Reporter"]))
+        os.mkfifo(str(classes / "Blocker.class"))
+        scan = trusted_execution.scan_launch_classpath(
+            tests, [str(root / "forge-game" / "target" / "classes")], root, tmp / "m2", None)
+        problems = {f["class"]: f["problems"] for f in scan["findings"]}
+        self.assertIn("references org/testng/Reporter", problems["forge/Evil.class"])
+        self.assertEqual(problems["forge/Blocker.class"], ["not a regular class file"])
+        outside = trusted_execution.scan_launch_classpath(tests, [str(tmp)], root, tmp / "m2", None)
+        self.assertEqual(outside["unverified_jars"], [str(Path(os.path.realpath(tmp)))])
+        self.assertEqual(outside["findings"], [])
+
+
 class ExportIntegrity(unittest.TestCase):
     """The candidate is built and its tests recompiled from bytes equal to its blobs.
 
@@ -1641,6 +1825,12 @@ class WorkflowContractControls(unittest.TestCase):
             for line in re.findall(r"/usr/bin/python3[^\n]*", step):
                 with self.subTest(python=line):
                     self.assertTrue(line.startswith("/usr/bin/python3 -I -S -B "), line)
+        # Every dependency jar is compared with the runner's own repository, and
+        # verify re-derives trusted files at the proved authority, not at HEAD.
+        self.assertIn('--trusted-maven-repo "$HOME/.m2/repository"', execute)
+        self.assertIn('--trusted-sha "$AUTHORITY_SHA"', verify)
+        self.assertNotIn("rev-parse HEAD", verify)
+        self.assertIn('--probe "$D17_TRUSTED_MAVEN"', verify)
         # prepare resolves Maven first, then switches to the trusted PATH it probes.
         self.assertLess(prepare.index("maven_home="), prepare.index('export PATH="$D17_TRUSTED_PATH"'))
         self.assertLess(prepare.index('export PATH="$D17_TRUSTED_PATH"'), prepare.index("sandbox.py prepare"))

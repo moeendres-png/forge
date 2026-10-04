@@ -95,6 +95,7 @@ jobs:
       candidate_tree: ${{ steps.identity.outputs.candidate_tree }}
       candidate_ref: ${{ steps.identity.outputs.candidate_ref }}
       comparison_base_sha: ${{ steps.identity.outputs.comparison_base_sha }}
+      workflow_authority_sha: ${{ steps.identity.outputs.workflow_authority_sha }}
     steps:
       # The trusted validator source is the default branch itself, so HEAD is a
       # branch tip and the executed definition is byte-identical to the
@@ -168,6 +169,7 @@ jobs:
           print("candidate_tree=" + lock["candidate"]["tree"])
           print("candidate_ref=" + lock["candidate"]["fetched_from"])
           print("comparison_base_sha=" + lock["comparison_base"]["sha"])
+          print("workflow_authority_sha=" + lock["workflow_authority"]["sha"])
           PY
 
       - name: Upload trusted source lock
@@ -345,6 +347,7 @@ jobs:
             --mvn "$D17_TRUSTED_MAVEN/bin/mvn" \
             --java "$D17_TRUSTED_JDK/bin/java" \
             --xvfb-run "/usr/bin/xvfb-run -a" \
+            --trusted-maven-repo "$HOME/.m2/repository" \
             "${testng[@]}"
           rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
@@ -357,11 +360,14 @@ jobs:
             --out "$RUNNER_TEMP/d17-seals/after-execution.json" "${seal_files[@]}"
           exit "$rc"
 
+      # The trusted files are re-derived at the authority the source lock proved,
+      # not at this checkout's own HEAD, so the check is never self-referential.
       - name: Verify trusted state integrity
         if: always()
         shell: /usr/bin/bash --noprofile --norc {0}
         env:
           EVIDENCE_DIR: ${{ runner.temp }}/d17-evidence
+          AUTHORITY_SHA: ${{ needs.candidate-identity.outputs.workflow_authority_sha }}
         run: |
           export PATH="$D17_TRUSTED_PATH"
           set -uo pipefail
@@ -371,7 +377,7 @@ jobs:
           /usr/bin/python3 -I -S -B .github/qualification/sandbox.py verify \
             --user "$D17_SANDBOX_USER" \
             --repo "$GITHUB_WORKSPACE" \
-            --trusted-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" \
+            --trusted-sha "$AUTHORITY_SHA" \
             "${seals[@]}" \
             --probe "$GITHUB_WORKSPACE" \
             --probe "$RUNNER_TEMP" \
@@ -380,6 +386,7 @@ jobs:
             --probe "$D17_BUNDLE_DIR" \
             --probe "$D17_RUNTIME_DIR" \
             --probe "$D17_TRUSTED_JDK" \
+            --probe "$D17_TRUSTED_MAVEN" \
             --out "$EVIDENCE_DIR/INTEGRITY.json"
           exit 0
 
@@ -486,7 +493,7 @@ jobs:
               print("- exact candidate qualification: **{}**".format(data.get("verdict")))
               print("- reason: {}".format(data.get("reason")))
               lock = data.get("source_lock", {})
-              print("- workflow authority: `{}`".format(lock.get("workflow_authority_sha")))
+              print("- workflow authority: `{}`".format((lock.get("workflow_authority") or {}).get("sha")))
               print("- candidate SHA: `{}`".format((data.get("candidate") or {}).get("sha")))
               print("- candidate TREE: `{}`".format((data.get("candidate") or {}).get("tree")))
               block = data.get("exact_candidate_qualification", {})

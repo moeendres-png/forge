@@ -150,6 +150,8 @@ def read_witness(path: Path, module: str, nonce: str) -> dict:
                 raise QualificationError("witness ledger has multiple headers")
             header = record
         elif kind == "invocation":
+            if summary is not None:
+                raise QualificationError("witness ledger records an invocation after its summary")
             invocations.append(record)
         elif kind == "summary":
             if summary is not None:
@@ -422,12 +424,78 @@ def derive_verdict(
         "unauthenticated ledgers: {}".format(json.dumps(unauthenticated, sort_keys=True) if unauthenticated else "none"),
     )
 
+    # --- 13. Required classes ran from trusted-compiled bytecode ------------ #
+    # The trusted test directory precedes the candidate's classes on the launch
+    # classpath, so a required class trusted javac did not produce would be
+    # loaded from candidate-built bytecode (main output or a dependency).
+    compilation = manifest.get("trusted_test_compilation")
+    compilation = compilation if isinstance(compilation, dict) else {}
+    not_trusted_compiled: "dict[str, str]" = {}
+    for module in expected_modules:
+        record = compilation.get(module)
+        wanted = sorted(required_classes.get(module, []))
+        code = record.get("exit_code") if isinstance(record, dict) else None
+        compiled = record.get("compiled_required") if isinstance(record, dict) else None
+        if not isinstance(record, dict):
+            not_trusted_compiled[module] = "no trusted compilation record"
+        elif isinstance(code, bool) or code != 0:
+            not_trusted_compiled[module] = "trusted javac exit {!r}".format(code)
+        elif not isinstance(compiled, list) or sorted(compiled) != wanted:
+            missing = sorted(set(wanted) - set(compiled if isinstance(compiled, list) else []))
+            not_trusted_compiled[module] = "required classes not trusted-compiled: {}".format(missing[:10])
+    signal(
+        "required_tests_trusted_compiled",
+        not not_trusted_compiled,
+        "not trusted-compiled: {}".format(
+            json.dumps(not_trusted_compiled, sort_keys=True) if not_trusted_compiled else "none"
+        ),
+    )
+
+    # --- 14. The launch classpath was admitted before candidate code ran ----- #
+    # Candidate-authored bytecode may not register a suite-wide TestNG listener,
+    # hook or object factory, reach a test result, or touch the witness package;
+    # a dependency jar must equal the trusted Maven repository's copy.
+    admission = manifest.get("launch_classpath_admission")
+    admission = admission if isinstance(admission, dict) else {}
+    rejected: "dict[str, dict]" = {}
+    unadmitted: "dict[str, object]" = {}
+    for module in expected_modules:
+        scan = admission.get(module)
+        if not isinstance(scan, dict) or not all(
+            isinstance(scan.get(key), list) for key in ("findings", "tampered_jars", "unverified_jars")
+        ):
+            unadmitted[module] = "no admission record"
+        elif scan["findings"] or scan["tampered_jars"]:
+            rejected[module] = {"findings": scan["findings"][:5], "tampered_jars": scan["tampered_jars"][:5]}
+        elif scan["unverified_jars"]:
+            unadmitted[module] = {"unverified_jars": scan["unverified_jars"][:5]}
+    signal(
+        "launch_classpath_admitted",
+        not rejected and not unadmitted,
+        "rejected={} unadmitted={}".format(
+            json.dumps(rejected, sort_keys=True) if rejected else "none",
+            json.dumps(unadmitted, sort_keys=True) if unadmitted else "none",
+        ),
+    )
+
     by_name = {item["signal"]: item for item in signals}
 
     if integrity_status == "VIOLATION":
         verdict, reason = FAIL, "trusted state integrity was violated during candidate execution"
     elif not by_name["candidate_identity_bound"]["satisfied"]:
         verdict, reason = FAIL, "candidate identity is not bound to the locked exact SHA/TREE"
+    elif rejected:
+        # Checked before any outcome: such code can rewrite every other outcome.
+        verdict, reason = FAIL, (
+            "the launch classpath holds candidate bytecode that can change other tests' "
+            "outcomes, or a dependency jar that differs from the trusted repository; "
+            "see launch_classpath_admitted"
+        )
+    elif not by_name["required_tests_trusted_compiled"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "a required test class was not produced by trusted compilation of the locked "
+            "export; see required_tests_trusted_compiled"
+        )
     elif not by_name["required_surface_bound_to_comparison_base"]["satisfied"]:
         verdict, reason = FAIL, "the required surface is not bound to the locked comparison base"
     elif not by_name["trusted_launches_completed"]["satisfied"]:
@@ -469,6 +537,11 @@ def derive_verdict(
     elif not by_name["trusted_state_integrity"]["satisfied"]:
         verdict, reason = UNKNOWN, (
             "trusted state integrity was not verified after candidate execution"
+        )
+    elif not by_name["launch_classpath_admitted"]["satisfied"]:
+        verdict, reason = UNKNOWN, (
+            "the launch classpath was not admitted (missing record or a dependency jar "
+            "absent from the trusted repository); see launch_classpath_admitted"
         )
     else:
         verdict, reason = PASS, (

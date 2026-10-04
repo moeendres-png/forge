@@ -506,6 +506,7 @@ def integrity(repo: Path, sha: str, rel_dir: str, seals: list[Path], user: str, 
     doc = {
         "schema": SCHEMA_INTEGRITY,
         "status": "UNKNOWN",
+        "user": user,
         "trusted_sha": sha,
         "trusted_tree": None,
         "seals": [],

@@ -291,6 +291,49 @@ MUTATIONS = [
         '          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare',
         "prepare would probe and resolve tools on the inherited PATH",
     ),
+    # --- launch classpath admission and verdict bindings (review 63731d9f) - #
+    Mutation(
+        "ignore-rejected-launch-classpath",
+        "qualify.py",
+        "    elif rejected:\n",
+        "    elif False:\n",
+        "a @Listeners class or a rewritten dependency jar would no longer block PASS",
+    ),
+    Mutation(
+        "admit-testng-listener-annotation",
+        "trusted_execution.py",
+        "NoInjection|Ignore)|Assert|",
+        "NoInjection|Ignore|Listeners)|Assert|",
+        "@Listeners would be admitted next to the witness",
+    ),
+    Mutation(
+        "accept-tampered-dependency-jar",
+        "trusted_execution.py",
+        "                result[\"tampered_jars\"].append(str(rel))",
+        "                pass",
+        "a dependency jar the candidate account rewrote would be admitted",
+    ),
+    Mutation(
+        "ignore-failed-trusted-compile",
+        "qualify.py",
+        "        elif isinstance(code, bool) or code != 0:",
+        "        elif False:",
+        "a required class trusted javac did not produce could load from candidate bytecode",
+    ),
+    Mutation(
+        "integrity-record-without-account",
+        "sandbox.py",
+        "        \"user\": user,\n        \"trusted_sha\": sha,",
+        "        \"trusted_sha\": sha,",
+        "every real run would be FAIL: qualify could never PASS",
+    ),
+    Mutation(
+        "verify-against-own-head",
+        "../workflows/forge-candidate-qualification.yml",
+        '--trusted-sha "$AUTHORITY_SHA"',
+        '--trusted-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"',
+        "trusted-file re-derivation would compare the checkout with itself",
+    ),
 ]
 
 

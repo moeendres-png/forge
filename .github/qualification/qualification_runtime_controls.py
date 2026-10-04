@@ -235,6 +235,57 @@ class LedgerRuntimeControls(RuntimeCase):
         self.assertEqual(statuses, ["FAIL"])
 
 
+ANNOTATED = """package probe;
+import org.testng.annotations.Listeners;
+import org.testng.annotations.Test;
+@Listeners(FlipFailures.class)
+public class AnnotatedTest {
+    @Test public void harmless() { }
+}
+"""
+
+REPORTER = """package probe;
+import org.testng.Reporter;
+public class MainCodeReach {
+    public static void flip() { Reporter.getCurrentTestResult().setStatus(1); }
+}
+"""
+
+NUMERIC = """package probe;
+import static org.testng.Assert.assertEquals;
+import org.testng.annotations.Test;
+public class NumericTest {
+    static final long BIG = 1234567890123L;
+    static final double PI = 3.141592653589793;
+    @Test public void constants() { assertEquals(BIG + (long) PI, 1234567890126L); }
+}
+"""
+
+
+class AdmissionRuntimeControls(RuntimeCase):
+    """Review P1 at 63731d9f, on real javac output: the admission scan sees what TestNG would honour."""
+
+    def scan(self, classes: Path) -> dict:
+        root = self.tmp / "candidate-root"
+        root.mkdir(exist_ok=True)
+        return trusted_execution.scan_launch_classpath(classes, [], root, self.tmp / "m2", None)
+
+    def test_declarative_and_programmatic_listener_registration_is_refused(self) -> None:
+        classes = self.compile_candidate({"FailingTest": FAILING, "FlipFailures": FLIPPER,
+                                          "AnnotatedTest": ANNOTATED, "MainCodeReach": REPORTER})
+        problems = {f["class"]: f["problems"] for f in self.scan(classes)["findings"]}
+        self.assertIn("references org/testng/annotations/Listeners", problems["probe/AnnotatedTest.class"])
+        self.assertIn("references org/testng/ITestListener", problems["probe/FlipFailures.class"])
+        self.assertIn("references org/testng/Reporter", problems["probe/MainCodeReach.class"])
+        self.assertNotIn("probe/FailingTest.class", problems)
+
+    def test_ordinary_test_bytecode_is_admitted(self) -> None:
+        classes = self.compile_candidate({"HonestTest": HONEST, "NumericTest": NUMERIC, "FailingTest": FAILING})
+        scan = self.scan(classes)
+        self.assertEqual(scan["findings"], [])
+        self.assertEqual(scan["scanned_classes"], 3)
+
+
 class SandboxRuntimeControls(RuntimeCase):
     def setUp(self) -> None:
         super().setUp()

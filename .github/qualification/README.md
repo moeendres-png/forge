@@ -60,6 +60,37 @@ provenance.** That revision was rejected at review and replaced.
 - **Nothing world-writable remains on the root filesystem.** `--harden-world-writable` strips o+w from files as well as non-sticky directories (`find -xdev`, so other mounts are not walked). A re-check that finds an entry left, or that did not complete, fails `prepare`. Trusted Python in `prepare`, `execute` and `verify` runs as `/usr/bin/python3 -I -S -B`, so `site` is not imported and no `.pth` file runs (workflow contract control).
 - **PATH.** A PATH directory is probed for shadowing (a new entry written into it, or the directory replaced through a writable ancestor), not recursively: hosted runners ship many world-writable tool-cache files no trusted step runs. Every tool a trusted step runs (`TRUSTED_TOOLS`) is probed at its real path. `prepare` resolves Maven first, then switches to `PATH=$D17_TRUSTED_PATH`, which is the PATH it probes.
 
+### Launch-classpath admission (review 2026-10-04)
+
+Before any candidate test code runs next to the witness, `trusted_execution.py`
+admits each module's launch classpath and records `launch_classpath_admission`:
+
+- **Candidate-authored bytecode** (the trusted-compiled test classes, and every
+  directory or jar the candidate build produced) may reference only TestNG's test
+  and configuration annotations (`Test`, `Before*`/`After*`, `DataProvider`,
+  `Parameters`, `Optional`, `NoInjection`, `Ignore`), `Assert`, `AssertJUnit`,
+  `asserts.*`, `collections.*` and `SkipException`. Every other `org.testng`
+  reference, as a class, descriptor or string literal, is a finding:
+  `@Listeners`, `IHookable`, `IConfigurable`, any `*Listener`, `Reporter`,
+  `ITestResult`, `ITestContext`, `ISuite`, `TestNG`, `org.testng.internal`,
+  `@Factory` and `@ObjectFactory`. A class in, or referencing, the
+  `forge.d17.witness` package is also a finding, and so are an unparseable class,
+  a symlinked directory and a FIFO. Forge's own tests use only the admitted API.
+- **Dependency jars** come from the sandbox account's Maven repository, which
+  that account can rewrite. A jar is admitted only if it is byte-identical to the
+  same path in the runner's own repository (`--trusted-maven-repo`). That
+  repository was resolved by trusted steps and probed unwritable by the sandbox
+  account. A rewritten jar is `tampered`; a jar absent from the trusted
+  repository is `unverified`.
+- `qualify.py`:
+  - **FAIL** on any finding or tampered jar, checked before any test outcome,
+    because such code can rewrite every outcome.
+  - **FAIL** when trusted javac failed, or did not produce every required class
+    (`required_tests_trusted_compiled`). The trusted test directory precedes
+    candidate classes on the classpath, so a missing class would otherwise load
+    from candidate bytecode.
+  - **UNKNOWN** on an unverified jar or a missing admission record.
+
 ### Bounded influence of candidate-controlled inputs
 
 The candidate's POMs, main sources and dependency resolution stay
@@ -172,14 +203,25 @@ used deliberately rather than adding a dependency.
 
 Stated as part of the evidence, not hidden.
 
-* **The same JVM is shared.** Candidate test code runs in the trusted driver's
-  JVM, as the sandbox account. Deliberate in-process tampering, such as
-  reflecting on the driver's memory to read the key while the run is live, is
-  not ruled out. It would have to come from the candidate's own reviewable test
-  source. What the design guarantees: candidate code cannot write trusted state,
-  cannot change which test bytecode runs, cannot register a listener
-  declaratively, cannot forge a ledger line from outside the process, and cannot
-  make a forged ledger pass the orchestrator's verification.
+* **The same JVM is shared.** Candidate test code, candidate main code and
+  dependency code run in the trusted driver's JVM, as the sandbox account.
+  TestNG honours `@Listeners`, `IHookable`, `IConfigurable` and object factories
+  declared in test classes, and its public API lets any in-process code reach the
+  running suite (`Reporter.getCurrentTestResult().getTestContext().getSuite()`).
+  One such registration rewrites the outcome of every other class. The launch
+  classpath is therefore admitted before candidate code runs (see
+  *Launch-classpath admission*). Deliberate reflection with computed names (for
+  example reading the listener's key or reaching TestNG internals through
+  strings assembled at runtime) is not ruled out by a static scan and remains a
+  residual. What the design guarantees: candidate code cannot write trusted
+  state, cannot change which test bytecode runs, cannot load a class that
+  references TestNG beyond test annotations and assertions or the witness
+  package, cannot swap a dependency jar, cannot forge a ledger line from outside
+  the process, and cannot make a forged ledger pass the orchestrator's
+  verification.
+* **Scheduled jobs.** `reap` and `verify` check that no candidate process is
+  alive. A `cron`/`at` job the sandbox account schedules could start later; it
+  reaches only state the account can already write.
 * **It cannot prove a candidate-owned test method is semantically strong.** That
   is review, not CI.
 * **It is not a required status check.** It is informational until a separate

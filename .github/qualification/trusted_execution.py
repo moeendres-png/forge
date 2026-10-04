@@ -76,6 +76,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -458,6 +459,171 @@ def compiled_class_names(root: Path) -> set:
             if "$" not in p.name} if root.is_dir() else set()
 
 
+#: The TestNG API that candidate-authored bytecode may reference: test and
+#: configuration annotations, assertions and SkipException. Everything else in
+#: org.testng can register a suite-wide listener, hook or object factory, or
+#: reach a test result (@Listeners, IHookable, IConfigurable, I*Listener,
+#: Reporter, ITestResult, ITestContext, ISuite, TestNG, org.testng.internal,
+#: @Factory, @ObjectFactory). One such registration in one class would let it
+#: rewrite the outcome of every other class in the suite.
+ALLOWED_TESTNG_REFERENCE = re.compile(
+    r"^org/testng/(?:annotations/(?:Test|BeforeClass|AfterClass|BeforeMethod|AfterMethod|BeforeTest|"
+    r"AfterTest|BeforeSuite|AfterSuite|BeforeGroups|AfterGroups|DataProvider|Parameters|Optional|"
+    r"NoInjection|Ignore)|Assert|AssertJUnit|SkipException|asserts/[A-Za-z0-9_]+|"
+    r"collections/[A-Za-z0-9_]+)(?:\$[\w$]*)?$"
+)
+_TESTNG_REFERENCE = re.compile(r"org[/.]testng[/.][A-Za-z0-9_$/.]*[A-Za-z0-9_$]")
+_WITNESS_REFERENCE = re.compile(r"forge[/.]d17[/.]witness")
+WITNESS_PACKAGE = "forge/d17/witness/"
+
+
+def class_constant_strings(data: bytes) -> "list[str]":
+    """Every CONSTANT_Utf8 of a class file: class, member and descriptor names and string literals."""
+    if data[:4] != b"\xca\xfe\xba\xbe" or len(data) < 10:
+        raise ValueError("not a class file")
+    count = int.from_bytes(data[8:10], "big")
+    offset, index, out = 10, 1, []
+    while index < count:
+        tag = data[offset]
+        offset += 1
+        if tag == 1:
+            length = int.from_bytes(data[offset:offset + 2], "big")
+            offset += 2
+            out.append(data[offset:offset + length].decode("utf-8", "replace"))
+            offset += length
+        elif tag in (3, 4, 9, 10, 11, 12, 17, 18):
+            offset += 4
+        elif tag in (5, 6):
+            offset += 8
+            index += 1
+        elif tag in (7, 8, 16, 19, 20):
+            offset += 2
+        elif tag == 15:
+            offset += 3
+        else:
+            raise ValueError("unknown constant pool tag {}".format(tag))
+        if offset > len(data):
+            raise ValueError("truncated constant pool")
+        index += 1
+    return out
+
+
+def _testng_reference_allowed(reference: str) -> bool:
+    parts = reference.replace(".", "/").split("/")
+    # A dotted literal may name a member after the class ("org.testng.Assert.fail").
+    return any(ALLOWED_TESTNG_REFERENCE.match("/".join(parts[:end])) for end in range(len(parts), 2, -1))
+
+
+def bytecode_findings(class_name: str, data: bytes) -> "list[str]":
+    """Why one candidate-authored class may not run next to the trusted witness."""
+    try:
+        strings = class_constant_strings(data)
+    except (ValueError, IndexError) as exc:
+        return ["unparseable class file: {}".format(exc)]
+    found = set()
+    if class_name.startswith(WITNESS_PACKAGE):
+        found.add("declares a class in the trusted witness package")
+    for text in strings:
+        if _WITNESS_REFERENCE.search(text):
+            found.add("references the trusted witness")
+        for reference in _TESTNG_REFERENCE.findall(text):
+            if not _testng_reference_allowed(reference):
+                found.add("references " + reference.replace(".", "/"))
+    return sorted(found)
+
+
+def _regular_file_bytes(path: Path):
+    """The bytes of a regular file, never following a final symlink or opening a FIFO or device."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
+        return handle.read()
+
+
+def _scan_class_tree(label: str, root: Path, result: dict) -> None:
+    for directory, dirnames, filenames in os.walk(str(root), followlinks=False):
+        for name in dirnames:
+            if os.path.islink(os.path.join(directory, name)):
+                result["findings"].append({"entry": label, "class": os.path.relpath(os.path.join(directory, name), root),
+                                           "problems": ["symlinked directory on the launch classpath"]})
+        for name in filenames:
+            if not name.endswith(".class"):
+                continue
+            path = Path(directory) / name
+            rel = path.relative_to(root).as_posix()
+            data = _regular_file_bytes(path)
+            if data is None:
+                result["findings"].append({"entry": label, "class": rel, "problems": ["not a regular class file"]})
+                continue
+            result["scanned_classes"] += 1
+            problems = bytecode_findings(rel[: -len(".class")], data)
+            if problems:
+                result["findings"].append({"entry": label, "class": rel, "problems": problems})
+
+
+def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candidate_m2: Path,
+                          trusted_m2: "Path | None") -> dict:
+    """Admit the launch classpath before any candidate test code runs next to the witness.
+
+    Candidate-authored bytecode (the trusted-compiled test classes and every
+    directory or jar the candidate build produced) may reference only the
+    allowed TestNG API and nothing in the witness package. A dependency jar is
+    admitted only byte-identical to the trusted runner's Maven repository: the
+    candidate account owns its own copy and can rewrite any jar in it.
+    """
+    result = {"scanned_classes": 0, "findings": [], "tampered_jars": [], "unverified_jars": [],
+              "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None}
+    _scan_class_tree("trusted-compiled tests", tests_dir, result)
+    candidate_root = Path(os.path.realpath(candidate_root))
+    candidate_m2 = Path(os.path.realpath(candidate_m2))
+    for entry in entries:
+        real = Path(os.path.realpath(entry))
+        if real.is_dir():
+            if real.is_relative_to(candidate_root):
+                _scan_class_tree(entry, real, result)
+            else:
+                # The candidate wrote the classpath file: a directory outside its
+                # own tree is neither its build output nor admitted.
+                result["unverified_jars"].append(str(real))
+            continue
+        if not real.exists():
+            continue  # nothing loads from a missing entry
+        if real.is_relative_to(candidate_m2):
+            rel = real.relative_to(candidate_m2)
+            trusted = (trusted_m2 / rel) if trusted_m2 else None
+            mine = _regular_file_bytes(real)
+            theirs = _regular_file_bytes(trusted) if trusted else None
+            if mine is None or theirs is None:
+                result["unverified_jars"].append(str(rel))
+            elif hashlib.sha256(mine).digest() != hashlib.sha256(theirs).digest():
+                result["tampered_jars"].append(str(rel))
+            continue
+        if real.is_relative_to(candidate_root) and real.suffix == ".jar":
+            data = _regular_file_bytes(real)
+            if data is None:
+                result["findings"].append({"entry": entry, "class": None, "problems": ["not a regular jar"]})
+                continue
+            import io
+            import zipfile
+            try:
+                with zipfile.ZipFile(io.BytesIO(data)) as jar:
+                    for name in jar.namelist():
+                        if name.endswith(".class"):
+                            result["scanned_classes"] += 1
+                            problems = bytecode_findings(name[: -len(".class")], jar.read(name))
+                            if problems:
+                                result["findings"].append({"entry": entry, "class": name, "problems": problems})
+            except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
+                result["findings"].append({"entry": entry, "class": None, "problems": ["unreadable jar: {}".format(exc)]})
+            continue
+        result["unverified_jars"].append(str(real))
+    return result
+
+
 def sanitize_classpath(entries, candidate_root: Path, modules) -> "tuple[list[str], list[str]]":
     """Drop installed Forge sibling jars and the candidate's own test output.
 
@@ -489,10 +655,13 @@ def candidate_classpath(candidate_root: Path, module: str, cp_rel: str) -> "list
 def read_candidate_bytes(path: Path):
     """Read a file the candidate account could have written, refusing symlinks."""
     try:
-        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
     with os.fdopen(fd, "rb") as handle:
+        # A FIFO or device planted by the candidate would block or never end.
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
         return handle.read(64 * 1024 * 1024)
 
 
@@ -666,7 +835,7 @@ def cmd_execute(args) -> int:
         # 3. Trusted compilation of the exact-SHA test sources.
         export = work / "export"
         sandbox.export_commit(trusted_repo, args.candidate_sha, export)
-        records = {}
+        records, scans = {}, {}
         for module in modules:
             entries, _ = sanitize_classpath(candidate_classpath(candidate_root, module, args.cp_rel),
                                             candidate_root, modules)
@@ -675,7 +844,12 @@ def cmd_execute(args) -> int:
                                                     out, args.java)
             records[module]["compiled_required"] = sorted(
                 set(surface["modules"][module]["classes"]) & compiled_class_names(out))
+            # Before any candidate test code runs next to the witness.
+            scans[module] = scan_launch_classpath(
+                out, entries, candidate_root, home / ".m2" / "repository",
+                Path(args.trusted_maven_repo) if args.trusted_maven_repo else None)
         manifest["trusted_test_compilation"] = records
+        manifest["launch_classpath_admission"] = scans
         sandbox.stage_readonly(staging, bundle)
 
         # 4. One trusted-driver launch per module, as the sandbox account.
@@ -736,6 +910,8 @@ def main(argv=None) -> int:
     e.add_argument("--mvn", required=True, help="staged trusted Maven launcher (absolute path)")
     e.add_argument("--trusted-testng", action="append", required=True,
                    help="pinned TestNG closure jar resolved by a trusted step; repeatable")
+    e.add_argument("--trusted-maven-repo", default=None,
+                   help="the runner's own Maven repository, the trusted copy every dependency jar must equal")
 
     args = parser.parse_args(argv)
     sys.path.insert(0, str(Path(__file__).resolve().parent))

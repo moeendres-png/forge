@@ -54,11 +54,13 @@ import org.testng.ITestResult;
  *
  * <p>Scope. The witness proves that required tests were dispatched and how they
  * finished. It cannot prove that an individual candidate-owned test method is
- * semantically strong; that is review, not CI. Because candidate test code runs
- * in this same JVM, a candidate could in principle append records directly. That
- * is a strictly harder threat than forging build artifacts, is surfaced by the
- * baseline test-source-change signal, and is stated as a bounded residual rather
- * than claimed as prevented.
+ * semantically strong; that is review, not CI. Candidate test and main code runs
+ * in this same JVM. Before launch, the orchestrator admits the classpath only if
+ * no candidate-authored class references TestNG beyond test annotations and
+ * assertions (so no @Listeners, hook, object factory, Reporter or test-result
+ * access) or the witness package, and every dependency jar equals the trusted
+ * repository's copy. Deliberate reflection with computed names remains a stated
+ * residual, not a prevented threat.
  */
 public final class QualifiedExecutionListener implements ITestListener, IInvokedMethodListener {
 
