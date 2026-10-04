@@ -71,7 +71,10 @@ jobs:
         working-directory: .github/qualification
         env:
           D17_REQUIRE_TOOLCHAIN: "1"
-          D17_SANDBOX_USER: d17cand
+          D17_BUILD_USER: d17build
+          D17_EXEC_USER: d17exec
+          D17_BUILD_SANDBOX_DIR: /srv/d17-selftest-build
+          D17_EXEC_SANDBOX_DIR: /srv/d17-selftest-exec
         run: |
           set -euo pipefail
           export D17_TRUSTED_TESTNG_DIR="$RUNNER_TEMP/d17-testng"
