@@ -1166,6 +1166,7 @@ def cmd_execute(args) -> int:
             args.sandbox_user, home, candidate_root,
             [args.mvn, "-o", "-B", "-q",
              "-Dmaven.repo.local=" + str(trusted_maven_repo),
+             "-Dmaven.compiler.proc=none",
              "-DskipTests", "test-compile", "dependency:build-classpath",
              "-Dmdep.outputFile=" + args.cp_rel, "-DincludeScope=test",
              "-pl", ",".join(modules), "-am"],
