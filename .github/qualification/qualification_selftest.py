@@ -506,7 +506,28 @@ class PositiveExactShaPath(EvidenceCase):
         boundary = self.verdict()["trust_boundary"]
         self.assertIs(boundary["candidate_build_artifacts_used_as_evidence"], False)
         self.assertIs(boundary["candidate_reports_read_for_credit"], False)
-        self.assertEqual(boundary["execution_observed_by"], WITNESS_CLASS)
+        self.assertEqual(boundary["execution_observed_by"], "TRUSTED_PARENT_OS_PROCESS")
+        self.assertIs(boundary["candidate_jvm_receipt_credentials"], False)
+        self.assertEqual(boundary["child_counter_class"], COUNTER_CLASS)
+
+    def test_candidate_jvm_receipt_authority_is_never_credit(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["receipt_authority"] = "CANDIDATE_JVM"
+        manifest["candidate_jvm_receipt_credentials"] = True
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("external trusted parent", evidence["reason"])
+
+    def test_replayed_module_receipt_run_id_is_never_credit(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["modules"]["forge-game"]["receipt_run_id"] = "stale-run"
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("module receipts", evidence["reason"])
 
     def test_candidate_owned_test_source_cannot_become_qualification_authority(self) -> None:
         import copy
@@ -588,6 +609,23 @@ class PositiveExactShaPath(EvidenceCase):
         self.assertEqual(coverage["d24_framework_not_run_classes"],
                          ["forge.deck.DeckRecognizerTest"])
         self.assertEqual(coverage["d24_enabled_source_methods_not_run"], 84)
+
+    def test_other_explicit_disabled_method_is_distinct_partial_debt(self) -> None:
+        import copy
+        self.honest()
+        surface = copy.deepcopy(self.surface)
+        surface["whole_reactor_coverage_complete"] = False
+        surface["coverage_gaps"]["other_explicit_disabled_test_methods"] = [
+            "forge.card.CardDbPerformanceTests#testBenchmark"
+        ]
+        evidence = self.verdict(surface=surface)
+        self.assertNotPass(evidence, qualify.PARTIAL)
+        coverage = qualification_of(evidence)["coverage"]
+        self.assertEqual(
+            coverage["other_explicit_disabled_test_methods"],
+            ["forge.card.CardDbPerformanceTests#testBenchmark"],
+        )
+        self.assertEqual(coverage["d22_disabled_rules_tests"], [])
 
     def test_disabled_rules_test_is_not_conflated_with_d24_or_stress_skip(self) -> None:
         import copy
