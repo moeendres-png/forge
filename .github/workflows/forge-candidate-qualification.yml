@@ -261,7 +261,7 @@ jobs:
           EVIDENCE_DIR: ${{ runner.temp }}/d17-evidence
         run: |
           set -euo pipefail
-          /usr/bin/python3 -I -B .github/qualification/trusted_execution.py surface \
+          /usr/bin/python3 -I -S -B .github/qualification/trusted_execution.py surface \
             --trusted-repo . \
             --evidence-dir "$EVIDENCE_DIR" \
             --modules "$EXPECTED_MODULES" \
@@ -277,9 +277,13 @@ jobs:
         run: |
           set -euo pipefail
           command_files="$(dirname "$GITHUB_ENV")"
+          maven_home="$(dirname "$(dirname "$(readlink -f "$(command -v mvn)")")")"
           testng=()
           for jar in "$RUNNER_TEMP"/d17-testng/*.jar; do testng+=(--bundle-file "$jar"); done
-          /usr/bin/python3 -I -B .github/qualification/sandbox.py prepare \
+          # From here on the trusted side resolves tools only from the trusted PATH,
+          # which is also the PATH prepare probes.
+          export PATH="$D17_TRUSTED_PATH"
+          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare \
             --user "$D17_SANDBOX_USER" \
             --repo "$GITHUB_WORKSPACE" \
             --candidate-sha "$CANDIDATE_SHA" \
@@ -294,14 +298,14 @@ jobs:
             --probe "$command_files" \
             --stage-jdk "$JAVA_HOME" \
             --jdk-dest "$D17_TRUSTED_JDK" \
-            --stage-maven "$(dirname "$(dirname "$(readlink -f "$(command -v mvn)")")")" \
+            --stage-maven "$maven_home" \
             --maven-dest "$D17_TRUSTED_MAVEN" \
             --harden-world-writable \
             --out "$EVIDENCE_DIR/SANDBOX_PREPARE.json"
           # Every later step, trusted or sandboxed, uses the staged read-only JDK.
           echo "JAVA_HOME=$D17_TRUSTED_JDK" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/d17-seals"
-          /usr/bin/python3 -I -B .github/qualification/sandbox.py seal \
+          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py seal \
             --out "$RUNNER_TEMP/d17-seals/before-candidate.json" \
             "$EVIDENCE_DIR/required-surface.json" \
             "$EVIDENCE_DIR/SANDBOX_PREPARE.json" \
@@ -326,7 +330,7 @@ jobs:
           set -uo pipefail
           testng=()
           for jar in "$RUNNER_TEMP"/d17-testng/*.jar; do testng+=(--trusted-testng "$jar"); done
-          /usr/bin/python3 -I -B .github/qualification/trusted_execution.py execute \
+          /usr/bin/python3 -I -S -B .github/qualification/trusted_execution.py execute \
             --trusted-repo . \
             --evidence-dir "$EVIDENCE_DIR" \
             --modules "$EXPECTED_MODULES" \
@@ -349,7 +353,7 @@ jobs:
             while IFS= read -r -d '' ledger; do seal_files+=("$ledger"); done \
               < <(find "$EVIDENCE_DIR/witness" -type f -name '*.witness.jsonl' -print0)
           fi
-          /usr/bin/python3 -I -B .github/qualification/sandbox.py seal \
+          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py seal \
             --out "$RUNNER_TEMP/d17-seals/after-execution.json" "${seal_files[@]}"
           exit "$rc"
 
@@ -364,7 +368,7 @@ jobs:
           command_files="$(dirname "$GITHUB_ENV")"
           seals=()
           for seal in "$RUNNER_TEMP"/d17-seals/*.json; do seals+=(--seal "$seal"); done
-          /usr/bin/python3 -I -B .github/qualification/sandbox.py verify \
+          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py verify \
             --user "$D17_SANDBOX_USER" \
             --repo "$GITHUB_WORKSPACE" \
             --trusted-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" \

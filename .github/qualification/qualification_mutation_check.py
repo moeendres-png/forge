@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PRODUCT = ("source_lock.py", "qualify.py", "trusted_execution.py", "qualification_selftest.py")
+PRODUCT = ("source_lock.py", "qualify.py", "trusted_execution.py", "sandbox.py", "qualification_selftest.py")
 
 #: Workflow files the workflow-contract controls read. They are staged next to the
 #: product copy so those controls are exercised rather than erroring out.
@@ -268,6 +268,28 @@ MUTATIONS = [
         '    return ":".join([str(witness_classes)] + list(entries))',
         '    return ":".join(list(entries))',
         "a candidate class could shadow the trusted listener",
+    ),
+    # --- export integrity and trusted interpreter (ported from C12) --------- #
+    Mutation(
+        "export-without-blob-verification",
+        "sandbox.py",
+        "    verify_export(repo, sha, dest)\n",
+        "    pass\n",
+        "a .gitattributes export-subst/export-ignore would change the bytes built and recompiled",
+    ),
+    Mutation(
+        "trusted-python-imports-site",
+        "../workflows/forge-candidate-qualification.yml",
+        "/usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare",
+        "/usr/bin/python3 -I -B .github/qualification/sandbox.py prepare",
+        "a .pth file on the runner would run inside trusted prepare",
+    ),
+    Mutation(
+        "prepare-probes-inherited-path",
+        "../workflows/forge-candidate-qualification.yml",
+        '          export PATH="$D17_TRUSTED_PATH"\n          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare',
+        '          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare',
+        "prepare would probe and resolve tools on the inherited PATH",
     ),
 ]
 

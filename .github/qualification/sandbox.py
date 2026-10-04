@@ -59,6 +59,14 @@ PRIVILEGED_GROUPS = ("sudo", "admin", "wheel", "docker", "adm", "lxd", "root")
 # Variables a candidate process may see. Nothing else crosses the boundary.
 ENV_ALLOWLIST = ("LANG", "LC_ALL", "TZ", "MAVEN_OPTS", "JAVA_HOME")
 REAP_TIMEOUT_SECONDS = 15
+# Every tool a trusted step runs after candidate code has started: sandbox.py and
+# witness.py themselves, and the trusted workflow's own shell lines. Each must
+# resolve to a file the candidate account cannot write.
+TRUSTED_TOOLS = (
+    "python3", "git", "sudo", "env", "sh", "bash", "tar", "find", "cp", "chmod", "chown",
+    "pgrep", "pkill", "kill", "mkdir", "rm", "test", "readlink", "dirname", "sha256sum",
+    "java", "javac", "mvn", "xvfb-run",
+)
 # Trusted code resolves its tools only from root-owned system directories, never
 # from the inherited PATH (hosted runners put world-writable /opt entries first).
 TOOL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
@@ -227,18 +235,67 @@ def path_entries() -> list[Path]:
     return [Path(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p and Path(p).is_absolute()]
 
 
+def trusted_tool_paths() -> list[Path]:
+    """The real path of every tool a trusted step runs, resolved on the inherited PATH."""
+    found = []
+    for name in TRUSTED_TOOLS:
+        hit = shutil.which(name)
+        if hit:
+            real = Path(hit).resolve()
+            if real not in found:
+                found.append(real)
+    return found
+
+
+def path_probe_findings(user: str) -> list[dict]:
+    """What a trusted step resolving tools on this PATH could be made to run.
+
+    A PATH directory is probed for shadowing: the candidate could write a new
+    entry into it, or replace it through a writable ancestor. It is not probed
+    recursively, because a candidate-writable file there that no trusted step
+    runs (hosted runners ship hundreds of world-writable tool-cache files)
+    cannot reach trusted code. Every tool a trusted step does run is probed at
+    its real path, so a candidate-writable java, git or python3 still refuses.
+    """
+    return writable_by(user, path_entries(), recursive=False) + writable_by(user, trusted_tool_paths())
+
+
 def harden_world_writable() -> list[str]:
-    """Remove o+w from every non-sticky world-writable directory on the root filesystem.
+    """Remove o+w from every non-sticky world-writable directory and every world-writable file.
 
     On hosted runners /opt (tool cache, pipx) is world-writable and not sticky, so
     the candidate account could rename and replace directories that trusted steps
-    and post-job actions later execute from. Sticky directories (/tmp) are left alone.
+    and post-job actions later execute from. Files too: trusted code loads more
+    than the tools it runs (Python site files, shared libraries, git config,
+    action scripts), and the runner VM is ephemeral. Sticky directories (/tmp)
+    are left alone. One find per kind changes everything in bulk (the hosted
+    tool cache holds many thousands of such files); the returned list is the
+    directories changed plus a count of files.
     """
-    found = _run(_priv(["find", "/", "-xdev", "-type", "d", "-perm", "-0002", "!", "-perm", "-1000",
-                        "-not", "-path", "/proc/*", "-print"]))
-    changed = [line for line in found.stdout.splitlines() if line.strip()]
-    for directory in changed:
-        _must(_priv(["chmod", "o-w", directory]), "harden {}".format(directory))
+    dir_test = ["-type", "d", "-perm", "-0002", "!", "-perm", "-1000"]
+    file_test = ["-type", "f", "-perm", "-0002"]
+    # find may exit non-zero for entries that vanish during the walk; what
+    # matters is the re-check below, which fails closed if anything remains.
+    dirs = _run(_priv(["find", "/", "-xdev", *dir_test, "-not", "-path", "/proc/*",
+                       "-print", "-exec", "chmod", "o-w", "{}", "+"])).stdout
+    files = _run(_priv(["find", "/", "-xdev", *file_test, "-not", "-path", "/proc/*",
+                        "-print", "-exec", "chmod", "o-w", "{}", "+"])).stdout
+    for test in (dir_test, file_test):
+        check = _run(_priv(["find", "/", "-xdev", *test, "-not", "-path", "/proc/*", "-print", "-quit"]))
+        left = check.stdout.strip()
+        if left:
+            raise SandboxError("world-writable entry survived hardening: {}".format(left))
+        # An empty re-check proves nothing unless the walk itself ran: only
+        # entries vanishing mid-walk may make it exit non-zero.
+        errors = [line for line in check.stderr.splitlines()
+                  if line.strip() and not line.rstrip().endswith("No such file or directory")]
+        if check.returncode != 0 and (errors or not check.stderr.strip()):
+            raise SandboxError("hardening re-check did not complete ({}): {}".format(
+                check.returncode, "; ".join(errors)[:600]))
+    changed = [line for line in dirs.splitlines() if line.strip()]
+    count = sum(1 for line in files.splitlines() if line.strip())
+    if count:
+        changed.append("{} world-writable file(s)".format(count))
     return changed
 
 
@@ -273,6 +330,50 @@ def export_commit(repo: Path, sha: str, dest: Path) -> None:
     untar = subprocess.run([tool("tar"), "-x", "-C", str(dest)], input=archive.stdout, capture_output=True, check=False)
     if untar.returncode != 0:
         raise SandboxError("untar failed: {}".format(untar.stderr.decode(errors="replace")[:400]))
+    verify_export(repo, sha, dest)
+
+
+def _git_blob_id(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def verify_export(repo: Path, sha: str, dest: Path) -> None:
+    """The export must be byte-identical to the commit's blobs.
+
+    ``git archive`` applies the tree's own ``.gitattributes`` (``export-subst``,
+    ``export-ignore``, ``ident``, ``eol``, filters), so a candidate could build
+    and test bytes that are not its locked blobs. Every exported path is
+    compared with ``ls-tree`` (same set, same mode class) and every file's raw
+    bytes with its blob id; any difference refuses the export.
+    """
+    out = _must([tool("git"), "-C", str(repo), "ls-tree", "-r", "-z", "--full-tree", sha],
+                "git ls-tree").stdout
+    expected: dict = {}
+    for record in out.split("\0"):
+        if not record:
+            continue
+        meta, path = record.split("\t", 1)
+        mode, kind, blob = meta.split()
+        if kind != "blob":
+            continue  # submodule commits are not exported as content
+        expected[path] = (mode, blob)
+    seen: dict = {}
+    for item in dest.rglob("*"):
+        rel = item.relative_to(dest).as_posix()
+        if item.is_symlink():
+            seen[rel] = ("120000", _git_blob_id(os.readlink(item).encode("utf-8", "surrogateescape")))
+        elif item.is_file():
+            mode = "100755" if os.stat(item).st_mode & stat.S_IXUSR else "100644"
+            seen[rel] = (mode, _git_blob_id(item.read_bytes()))
+    missing = sorted(set(expected) - set(seen))
+    extra = sorted(set(seen) - set(expected))
+    changed = sorted(path for path in set(expected) & set(seen) if expected[path] != seen[path])
+    if missing or extra or changed:
+        raise SandboxError(
+            "export of {} differs from its blobs (gitattributes?): missing={} extra={} changed={}".format(
+                sha, missing[:5], extra[:5], changed[:5]
+            )
+        )
 
 
 def sandbox_home(sandbox: Path) -> Path:
@@ -308,18 +409,23 @@ def seed_maven_repository(user: str, home: Path, source: Path) -> bool:
 # probes and integrity
 
 
-def writable_by(user: str, paths: list[Path]) -> list[dict]:
-    """Every trusted path the candidate account could write, itself or via an ancestor."""
+def writable_by(user: str, paths: list[Path], recursive: bool = True) -> list[dict]:
+    """Every trusted path the candidate account could write, itself or via an ancestor.
+
+    ``recursive`` also searches everything below each path; without it only the
+    path itself and its ancestors are probed.
+    """
     findings: list[dict] = []
     checked_ancestors: set = set()
     for path in paths:
         if not path.exists():
             continue
-        probe = _run(_priv(["sudo", "-n", "-u", user, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin",
-                            "find", str(path), "-writable", "-print", "-quit"]))
-        hit = probe.stdout.strip()
-        if hit:
-            findings.append({"path": str(path), "writable": hit})
+        if recursive:
+            probe = _run(_priv(["sudo", "-n", "-u", user, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin",
+                                "find", str(path), "-writable", "-print", "-quit"]))
+            hit = probe.stdout.strip()
+            if hit:
+                findings.append({"path": str(path), "writable": hit})
         for ancestor in [path] + list(path.parents):
             if str(ancestor) in checked_ancestors:
                 continue
@@ -425,7 +531,7 @@ def integrity(repo: Path, sha: str, rel_dir: str, seals: list[Path], user: str, 
         doc["surviving_candidate_processes"] = survivors
         if survivors:
             doc["violations"].append("candidate_process_survived: {}".format(survivors[:5]))
-        writable = writable_by(user, probe_paths)
+        writable = writable_by(user, probe_paths) + path_probe_findings(user)
         doc["candidate_writable_trusted_paths"] = writable
         if writable:
             doc["violations"].append("trusted_path_writable_by_candidate: {}".format(writable[:5]))
@@ -471,7 +577,7 @@ def cmd_prepare(args) -> int:
         doc["bundle_dir"] = str(bundle)
         # Every PATH entry is probed too: a trusted step resolving a tool from a
         # candidate-writable directory would run candidate code as the runner.
-        probes = [Path(p) for p in args.probe] + [bundle] + path_entries()
+        probes = [Path(p) for p in args.probe] + [bundle]
         if args.stage_jdk:
             # The toolchain the trusted steps use AFTER candidate code has run must
             # not sit under a candidate-writable ancestor (on hosted runners /opt,
@@ -490,8 +596,10 @@ def cmd_prepare(args) -> int:
                 raise SandboxError("staged Maven at {} has no bin/mvn".format(maven))
             doc["trusted_maven"] = str(maven)
             probes.append(maven)
-        writable = writable_by(args.user, probes)
+        writable = writable_by(args.user, probes) + path_probe_findings(args.user)
         doc["probed_paths"] = [str(p) for p in probes]
+        doc["probed_path_entries"] = [str(p) for p in path_entries()]
+        doc["probed_trusted_tools"] = [str(p) for p in trusted_tool_paths()]
         doc["candidate_writable_trusted_paths"] = writable
         if writable:
             raise SandboxError("trusted path writable by the candidate account: {}".format(writable[:5]))
@@ -542,7 +650,7 @@ def cmd_seal(args) -> int:
 
 def cmd_verify(args) -> int:
     doc = integrity(Path(args.repo), args.trusted_sha, args.rel_dir, [Path(s) for s in args.seal],
-                    args.user, [Path(p) for p in args.probe] + path_entries())
+                    args.user, [Path(p) for p in args.probe])
     _write(args.out, doc)
     print("INTEGRITY = {}{}".format(doc["status"], " ({})".format("; ".join(doc["violations"])[:400]) if doc["violations"] else ""))
     return {"OK": 0, "VIOLATION": 1}.get(doc["status"], 2)

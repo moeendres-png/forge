@@ -54,6 +54,12 @@ provenance.** That revision was rejected at review and replaced.
 | Non-PASS is never green | `PASS` exits 0. `FAIL`, `PARTIAL`, `NOT_RUN`, `UNKNOWN` exit 1, 2, 3, 4. |
 | Absurd identity claims are rejected | A lock that does not assert `candidate_code_executed_as_validator=false`, `verdict_read_from_candidate=false`, `synthetic_merge_consulted=false`, `pr_mergeability_consulted=false`, or whose comparison base claims a synthetic merge, is rejected on load. |
 
+### Export integrity, loaded code and tool resolution (ported from C12, 2026-10-04)
+
+- **The export equals the locked blobs.** `git archive` applies the tree's own `.gitattributes` (`export-subst`, `export-ignore`, `ident`, `eol`, filters). A candidate could therefore build, and have trusted code recompile, bytes that are not its committed blobs. `sandbox.export_commit` compares every exported path with `ls-tree`: the same set, the same mode, and the same blob id computed from the raw bytes. Any difference refuses the export, both in `prepare` and in the trusted recompile (`ExportIntegrity` controls).
+- **Nothing world-writable remains on the root filesystem.** `--harden-world-writable` strips o+w from files as well as non-sticky directories (`find -xdev`, so other mounts are not walked). A re-check that finds an entry left, or that did not complete, fails `prepare`. Trusted Python in `prepare`, `execute` and `verify` runs as `/usr/bin/python3 -I -S -B`, so `site` is not imported and no `.pth` file runs (workflow contract control).
+- **PATH.** A PATH directory is probed for shadowing (a new entry written into it, or the directory replaced through a writable ancestor), not recursively: hosted runners ship many world-writable tool-cache files no trusted step runs. Every tool a trusted step runs (`TRUSTED_TOOLS`) is probed at its real path. `prepare` resolves Maven first, then switches to `PATH=$D17_TRUSTED_PATH`, which is the PATH it probes.
+
 ### Bounded influence of candidate-controlled inputs
 
 The candidate's POMs, main sources and dependency resolution stay

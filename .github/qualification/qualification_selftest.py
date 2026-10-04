@@ -1458,6 +1458,51 @@ class TrustedOrchestratorControls(unittest.TestCase):
             trusted_execution.required_classes_for_module(repo, "forge-game", "0" * 40)
 
 
+class ExportIntegrity(unittest.TestCase):
+    """The candidate is built and its tests recompiled from bytes equal to its blobs.
+
+    ``git archive`` applies the tree's own ``.gitattributes``; a candidate could
+    otherwise test bytes that are not its locked commit (ported from C12 CTRL-67).
+    """
+
+    def _commit(self, repo: Path, files: dict) -> str:
+        for rel, text in files.items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text)
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "c"], check=True)
+        return subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    def _repo(self, files: dict) -> tuple[Path, str]:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-export-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        return tmp, self._commit(repo, files)
+
+    def test_plain_export_matches_its_blobs(self) -> None:
+        import sandbox
+        tmp, sha = self._repo({"src/A.java": "class A {}\n", "run.sh": "echo $Format:%H$\n"})
+        sandbox.export_commit(tmp / "repo", sha, tmp / "out")
+        self.assertEqual((tmp / "out" / "run.sh").read_text(), "echo $Format:%H$\n")
+
+    def test_export_subst_is_refused(self) -> None:
+        import sandbox
+        tmp, sha = self._repo({".gitattributes": "*.java export-subst\n",
+                               "src/A.java": "class A { String v = \"$Format:%H$\"; }\n"})
+        with self.assertRaisesRegex(sandbox.SandboxError, "differs from its blobs"):
+            sandbox.export_commit(tmp / "repo", sha, tmp / "out")
+
+    def test_export_ignore_is_refused(self) -> None:
+        import sandbox
+        tmp, sha = self._repo({".gitattributes": "src/B.java export-ignore\n",
+                               "src/A.java": "class A {}\n", "src/B.java": "class B {}\n"})
+        with self.assertRaisesRegex(sandbox.SandboxError, "differs from its blobs"):
+            sandbox.export_commit(tmp / "repo", sha, tmp / "out")
+
+
 class WorkflowContractControls(unittest.TestCase):
     """Assert the trust-critical properties of the trusted workflow definition."""
 
@@ -1590,6 +1635,16 @@ class WorkflowContractControls(unittest.TestCase):
         # Trusted steps after candidate code never resolve python from PATH.
         for step in (execute, verify):
             self.assertNotRegex(step, r"(^|\s)python3 ")
+        # Trusted Python on the runner the candidate shares runs isolated, without
+        # site (no .pth file runs) and without writing bytecode caches.
+        for step in (prepare, execute, verify):
+            for line in re.findall(r"/usr/bin/python3[^\n]*", step):
+                with self.subTest(python=line):
+                    self.assertTrue(line.startswith("/usr/bin/python3 -I -S -B "), line)
+        # prepare resolves Maven first, then switches to the trusted PATH it probes.
+        self.assertLess(prepare.index("maven_home="), prepare.index('export PATH="$D17_TRUSTED_PATH"'))
+        self.assertLess(prepare.index('export PATH="$D17_TRUSTED_PATH"'), prepare.index("sandbox.py prepare"))
+        self.assertIn('--stage-maven "$maven_home"', prepare)
 
     def test_trusted_state_lives_outside_world_writable_opt(self) -> None:
         for key in ("D17_BUNDLE_DIR", "D17_RUNTIME_DIR", "D17_TRUSTED_JDK", "D17_TRUSTED_MAVEN"):
