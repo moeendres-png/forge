@@ -379,8 +379,13 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
     else:
         coverage = UNKNOWN
     build = UNKNOWN if maven_exit is None else (PASS if maven_exit == 0 else FAIL)
+    failure_count = sum(c["outcome"] == "FAILURE" for c in cases)
+    error_count = sum(c["outcome"] == "ERROR" for c in cases)
+    skipped_count = sum(c["outcome"] == "SKIP" for c in cases)
+    passed_count = sum(c["outcome"] == "PASS" for c in cases)
+    test_result = UNKNOWN if not cases else (FAIL if failure_count or error_count else PASS)
 
-    if FAIL in (provenance, baseline, build):
+    if FAIL in (provenance, baseline, build, test_result):
         overall = FAIL
     elif UNKNOWN in (provenance, coverage, build):
         overall = UNKNOWN
@@ -407,6 +412,7 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         "java_version": str(java_version),
         "default_reactor_modules": modules,
         "build_outcome": build,
+        "test_result_outcome": test_result,
         "maven_exit_code": maven_exit,
         "maven_execution": execution,
         "provenance_integrity": provenance,
@@ -419,10 +425,10 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
         "normalized_results": {
             "testcase_count": len(cases),
             "duration_seconds": format(total_time, "f"),
-            "passed": sum(c["outcome"] == "PASS" for c in cases),
-            "failures": sum(c["outcome"] == "FAILURE" for c in cases),
-            "errors": sum(c["outcome"] == "ERROR" for c in cases),
-            "skipped": sum(c["outcome"] == "SKIP" for c in cases),
+            "passed": passed_count,
+            "failures": failure_count,
+            "errors": error_count,
+            "skipped": skipped_count,
             "testcases": sorted(
                 cases, key=lambda c: (c["classname"], c["name"], c["status"])
             ),
@@ -447,7 +453,7 @@ def collect(repo, known_path, exit_path, java_version, expected_sha=None, run=No
             "architecture_freeze_claimed": False,
         },
     }
-    return receipt, provenance == PASS and baseline == PASS
+    return receipt, provenance == PASS and baseline == PASS and test_result != FAIL
 
 
 def write_receipt(receipt, path):
@@ -465,6 +471,7 @@ def append_summary(receipt, path):
         ),
         "- Java: {}".format(receipt["java_version"]),
         "- build outcome: {}".format(receipt["build_outcome"]),
+        "- structured test-result outcome: {}".format(receipt["test_result_outcome"]),
         "- provenance integrity: {}".format(receipt["provenance_integrity"]),
         "- known-NOT_RUN baseline integrity: {}".format(
             receipt["known_not_run_baseline_integrity"]
@@ -572,6 +579,8 @@ class Controls(unittest.TestCase):
         r, ok = self.run_collect(self.known())
         self.assertTrue(ok)
         self.assertEqual(UNKNOWN, r["overall_classification"])
+        self.assertEqual(PASS, r["build_outcome"])
+        self.assertEqual(PASS, r["test_result_outcome"])
         self.assertEqual("0.25", r["normalized_results"]["duration_seconds"])
         self.assertEqual(["module"], r["default_reactor_modules"])
         self.assertEqual("none", r["evidence_authority"]["qualification_credit"])
@@ -750,6 +759,12 @@ class Controls(unittest.TestCase):
         self.assertEqual({'tests':4,'failures':1,'errors':1,'skipped':1},report['suite_counters'])
         outcomes=[c['outcome'] for c in cases]
         self.assertEqual(['PASS','FAILURE','ERROR','SKIP'],outcomes)
+        r,ok=self.run_collect(self.known());self.assertFalse(ok)
+        self.assertEqual(PASS,r['build_outcome'])
+        self.assertEqual(FAIL,r['test_result_outcome'])
+        self.assertEqual({'passed':1,'failures':1,'errors':1,'skipped':1},
+                         {k:r['normalized_results'][k] for k in ('passed','failures','errors','skipped')})
+        self.assertEqual(FAIL,r['overall_classification'])
 
     def test_source_disabled_debt_is_partial_hash_bound_and_not_exempt(self):
         self.java('example.RealTest');self.report('example.RealTest');self.java('example.DisabledTest')
@@ -900,11 +915,12 @@ def main(argv=None):
     if args.summary:
         append_summary(receipt, Path(args.summary))
     print(
-        "D20 provenance: integrity={} baseline={} coverage={} build={} overall={}".format(
+        "D20 provenance: integrity={} baseline={} coverage={} build={} tests={} overall={}".format(
             receipt["provenance_integrity"],
             receipt["known_not_run_baseline_integrity"],
             receipt["coverage_completeness"],
             receipt["build_outcome"],
+            receipt["test_result_outcome"],
             receipt["overall_classification"],
         )
     )
