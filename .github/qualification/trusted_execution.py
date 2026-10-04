@@ -208,6 +208,48 @@ def build_definition_divergence(repo: Path, comparison_base: str, candidate_sha:
     ))
 
 
+def trusted_reactor_modules(repo: Path, base: str) -> "list[str]":
+    """Recursively enumerate Maven reactor module paths from trusted Git POMs."""
+    found = set()
+    visiting = set()
+
+    def children(pom_path: str, module_dir: str) -> None:
+        if pom_path in visiting:
+            raise ExecutionError("recursive Maven module declaration at {}".format(pom_path))
+        visiting.add(pom_path)
+        try:
+            source = git(repo, "show", "{}:{}".format(base, pom_path))
+            root = ET.fromstring(source)
+        except (ExecutionError, ET.ParseError) as exc:
+            raise ExecutionError("cannot parse trusted reactor POM {}: {}".format(pom_path, exc))
+        modules_nodes = [
+            node for node in list(root) if node.tag.rsplit("}", 1)[-1] == "modules"
+        ]
+        for modules_node in modules_nodes:
+            for child in list(modules_node):
+                if child.tag.rsplit("}", 1)[-1] != "module":
+                    continue
+                raw = (child.text or "").strip().replace("\\", "/")
+                if not raw:
+                    continue
+                rel = os.path.normpath(os.path.join(module_dir, raw)).replace("\\", "/")
+                if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+                    raise ExecutionError("trusted reactor module escapes repository: {}".format(raw))
+                if rel in found:
+                    continue
+                found.add(rel)
+                nested_pom = rel + "/pom.xml"
+                try:
+                    git(repo, "cat-file", "-e", "{}:{}".format(base, nested_pom))
+                except ExecutionError:
+                    raise ExecutionError("trusted reactor module has no POM: {}".format(rel))
+                children(nested_pom, rel)
+        visiting.remove(pom_path)
+
+    children("pom.xml", "")
+    return sorted(found)
+
+
 def required_classes_for_module(repo: Path, module: str, base: str) -> "list[str]":
     """Baseline required test classes, read from trusted Git data only.
 
@@ -1142,6 +1184,7 @@ def cmd_surface(args) -> int:
     trusted_repo = Path(args.trusted_repo).resolve()
     evidence_dir = Path(args.evidence_dir).resolve()
     modules = args.modules.split()
+    reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)
     argline = list(DEFAULT_TRUSTED_ARGLINE)
     xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
     # A stale evidence directory must never be mistaken for this run's evidence.
@@ -1206,6 +1249,7 @@ def cmd_execute(args) -> int:
         "hostile_bytecode_containment_required": True,
         "ledger_authentication_scheme": "HMAC-SHA256 chain behind mandatory code-domain containment",
         "candidate_artifacts_used_as_evidence": False,
+        "trusted_reactor_modules": reactor_modules,
         "candidate_build_definition_divergence": [],
         "maven_repository_authority": None,
         "modules": {},
@@ -1288,7 +1332,8 @@ def cmd_execute(args) -> int:
         records, scans, frozen, dropped = {}, {}, {}, {}
         for module in modules:
             entries, dropped[module] = sanitize_classpath(
-                candidate_classpath(candidate_root, module, args.cp_rel), candidate_root, modules)
+                candidate_classpath(candidate_root, module, args.cp_rel),
+                candidate_root, reactor_modules)
             out = staging / "tests" / module
             records[module] = trusted_compile_tests(export, module, [str(j) for j in testng_jars] + entries,
                                                     out, args.java)
