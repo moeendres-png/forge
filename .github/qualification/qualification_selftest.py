@@ -185,6 +185,14 @@ def required_surface(modules=None, totals=None, classes=None, base=None, class_c
         "comparison_base_tree": "c" * 40,
         "trusted_argline": ["--add-opens", "java.base/java.lang=ALL-UNNAMED"],
         "denominator_source": "TestNG -dryrun over the trusted comparison base",
+        "coverage_gaps": {
+            "d24_framework_not_run_classes": [],
+            "d24_framework_blocker_bases": [],
+            "explicitly_disabled_source_classes": [],
+            "d22_disabled_rules_tests": [],
+            "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
+        },
+        "whole_reactor_coverage_complete": True,
         "modules": {
             module: {
                 "module": module,
@@ -242,7 +250,9 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
         "witness_source": "witness/forge/d17/witness/QualifiedExecutionListener.java",
         "candidate_artifacts_used_as_evidence": False,
         "candidate_execution_identity": SANDBOX_USER,
-        "test_bytecode_origin": "trusted_compile_of_locked_git_export",
+        "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
+        "candidate_test_sources_used_for_credit": False,
+        "hostile_bytecode_containment_required": True,
         "modules": {
             module: {
                 "module": module,
@@ -252,6 +262,8 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
                 "classpath_digest": "d" * 64,
                 "testng_totals": {"total": 3, "passed": 3, "failed": 0, "skipped": 0},
                 "testng_version_entry": "testng-7.8.0.jar",
+                "hostile_bytecode_containment": qualify.CONTAINMENT_ENFORCED,
+                "containment_violation": "null",
                 "log_tail": "",
             }
             for module in modules
@@ -297,6 +309,8 @@ def write_witness(witness_dir: Path, module: str, invocations, nonce=NONCE,
             "per_class_total": per_total,
             "skip_classes": per_skip,
             "fail_classes": per_fail,
+            "containment": qualify.CONTAINMENT_ENFORCED,
+            "containment_violation": "null",
             "last_seq": len(invocations) - 1,
         }
         if summary_override:
@@ -463,6 +477,64 @@ class PositiveExactShaPath(EvidenceCase):
         self.assertIs(boundary["candidate_build_artifacts_used_as_evidence"], False)
         self.assertIs(boundary["candidate_reports_read_for_credit"], False)
         self.assertEqual(boundary["execution_observed_by"], WITNESS_CLASS)
+
+    def test_d24_framework_not_run_makes_honest_candidate_partial(self) -> None:
+        import copy
+        self.honest()
+        surface = copy.deepcopy(self.surface)
+        surface["whole_reactor_coverage_complete"] = False
+        surface["coverage_gaps"]["d24_framework_not_run_classes"] = [
+            "forge.deck.DeckRecognizerTest"
+        ]
+        evidence = self.verdict(surface=surface)
+        self.assertNotPass(evidence, qualify.PARTIAL)
+        coverage = qualification_of(evidence)["coverage"]
+        self.assertFalse(coverage["whole_reactor_complete"])
+        self.assertEqual(coverage["d24_framework_not_run_classes"],
+                         ["forge.deck.DeckRecognizerTest"])
+
+    def test_disabled_rules_test_is_not_conflated_with_d24_or_stress_skip(self) -> None:
+        import copy
+        self.honest(out_of_band=[STRESS_CLASS])
+        surface = copy.deepcopy(self.surface)
+        surface["whole_reactor_coverage_complete"] = False
+        surface["coverage_gaps"]["d22_disabled_rules_tests"] = [
+            "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
+            "#test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses"
+        ]
+        evidence = self.verdict(surface=surface, out_of_band=[STRESS_CLASS])
+        self.assertNotPass(evidence, qualify.PARTIAL)
+        self.assertEqual(
+            qualification_of(evidence)["coverage"]["d24_framework_not_run_classes"], [])
+        self.assertEqual(
+            qualification_of(evidence)["skips"]["undeclared_skipped_classes"], [])
+
+    def test_containment_violation_is_fail_even_when_tests_are_green(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["modules"]["forge-game"]["hostile_bytecode_containment"] = (
+            "SECURITY_MANAGER_VIOLATED"
+        )
+        witness = self.witness_dir / "forge-game.witness.jsonl"
+        lines = [json.loads(line) for line in witness.read_text().splitlines()]
+        lines[-1]["containment"] = "SECURITY_MANAGER_VIOLATED"
+        lines[-1]["containment_violation"] = "candidate RuntimePermission getClassLoader"
+        witness.write_text("\n".join(json.dumps(line, sort_keys=True) for line in lines) + "\n")
+        _AUTHENTICATED_LEDGERS[str(witness)] = hashlib.sha256(witness.read_bytes()).hexdigest()
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("containment", evidence["reason"])
+
+    def test_containment_unavailable_is_unknown_not_fallback(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["modules"]["forge-game"]["hostile_bytecode_containment"] = (
+            qualify.CONTAINMENT_UNAVAILABLE
+        )
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.UNKNOWN)
 
 
 # --------------------------------------------------------------------------- #
