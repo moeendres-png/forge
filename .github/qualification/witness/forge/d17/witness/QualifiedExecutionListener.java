@@ -71,7 +71,7 @@ import org.testng.internal.RuntimeBehavior;
 public final class QualifiedExecutionListener implements ITestListener, IInvokedMethodListener {
 
     /** Wire format version of the emitted evidence. */
-    public static final String SCHEMA = "forge.d17.witness/1";
+    public static final String SCHEMA = "forge.d17.witness/2";
 
     private final String module;
     private final String nonce;
