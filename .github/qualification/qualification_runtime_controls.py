@@ -94,6 +94,7 @@ class RuntimeCase(unittest.TestCase):
         return out
 
     def launch(self, test_root: Path, expected: dict[str, int],
+               expected_methods: dict[str, int],
                candidate_code=(), trusted_dependencies=(), allowed_skips=()):
         output = self.exec_sandbox / "runtime-control-output"
         sandbox.run_candidate(
@@ -118,6 +119,8 @@ class RuntimeCase(unittest.TestCase):
             cmd += ["--trusted-jar", str(jar)]
         for klass, count in sorted(expected.items()):
             cmd += ["--class", klass, "--expected-count", "{}={}".format(klass, count)]
+        for key, count in sorted(expected_methods.items()):
+            cmd += ["--expected-method-count", "{}={}".format(key, count)]
         for klass in allowed_skips:
             cmd += ["--allowed-skip-class", klass]
         return sandbox.run_candidate(
