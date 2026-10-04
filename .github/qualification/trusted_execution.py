@@ -430,7 +430,8 @@ TRUSTED_TESTNG_PINS = {
     "slf4j-api-1.7.36.jar": "d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0",
 }
 DRIVER_CLASS = "forge.d17.witness.TrustedTestNGDriver"
-LEDGER_AUTHENTICATED = "HMAC_CHAIN_VERIFIED"\nCONTAINMENT_ENFORCED = "SECURITY_MANAGER_ENFORCED"
+LEDGER_AUTHENTICATED = "HMAC_CHAIN_VERIFIED"
+CONTAINMENT_ENFORCED = "SECURITY_MANAGER_ENFORCED"
 #: Forge's own reactor artifacts, as installed in a Maven repository. A sibling
 #: resolved from an installed jar is not the candidate's code; the candidate's
 #: reactor output replaces it.
