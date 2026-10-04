@@ -162,7 +162,7 @@ public class FirstOptionRatchetTest {
                     + "|toArray\\s*\\([^()]*\\)\\s*\\[\\s*0\\s*\\])"
                     + "|\\b(?:Iterables|Iterators)\\s*\\.\\s*get[A-Za-z]*\\s*\\(");
 
-    /** Structurally guarded picks: the pick sits directly in the block of {@code if (<receiver>.size() == 1 [&& flag]...)}. */
+    /** Structurally guarded picks: the pick sits directly in the block of {@code if (<receiver>.size() == 1 [&& !optionalFlag]...)}. */
     private static final int PRODUCTION_FORCED_SINGLETONS = 34;
 
     /**
@@ -305,9 +305,10 @@ public class FirstOptionRatchetTest {
     /**
      * True only when the innermost block that contains the pick is opened by
      * {@code if (<receiver>.size() == 1)} or {@code else if (...)}, optionally
-     * conjoined ({@code &&}) with negated plain flags such as
-     * {@code !isOptional} (a decision that may be declined is not forced). A
-     * positive flag, a call, a disjunction, a negation of the size test, a
+     * conjoined ({@code &&}) only with the bridge's known optionality guards
+     * {@code !isOptional}, {@code !optional}, or {@code !cancelAllowed}. A
+     * different negated identifier, positive flag, a call, a disjunction, a
+     * negation of the size test, a
      * guard whose block closed before the pick, a comment, or a guard on a
      * different collection does not count.
      */
@@ -335,7 +336,7 @@ public class FirstOptionRatchetTest {
         }
         final String header = code.substring(from + 1, open).replaceAll("\\s+", "");
         return header.matches("(?:else)?if\\(" + Pattern.quote(receiver)
-                + "\\.size\\(\\)==1(?:&&![A-Za-z_][A-Za-z0-9_]*)*\\)");
+                + "\\.size\\(\\)==1(?:&&!(?:isOptional|optional|cancelAllowed))*\\)");
     }
 
     /**
@@ -441,6 +442,7 @@ public class FirstOptionRatchetTest {
                 "if (legal.size() >= 1) {\n    return legal.get(0);\n}",
                 "if (legal.size() == 1) return legal.get(0);",
                 "if (legal.size() == 1 && isOptional) {\n    return legal.get(0);\n}",
+                "if (legal.size() == 1 && !isMandatory) {\n    return legal.get(0);\n}",
                 "if (legal.size() == 1 && shrinkLegal()) {\n    return legal.get(0);\n}",
                 "String s = \"\"\"\n    ;\n    if (legal.size() == 1) {\n    \"\"\";\nreturn legal.get(0);"}) {
             Assert.assertFalse(only(fake).forced, fake);
