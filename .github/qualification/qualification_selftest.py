@@ -186,6 +186,8 @@ def required_surface(modules=None, totals=None, classes=None, base=None, class_c
         "trusted_argline": ["--add-opens", "java.base/java.lang=ALL-UNNAMED"],
         "denominator_source": "TestNG -dryrun over the trusted comparison base",
         "coverage_gaps": {
+            "source_test_obligation_classes_not_executed": [],
+            "source_test_annotation_inventory": {},
             "d24_framework_not_run_classes": [],
             "d24_framework_blocker_bases": [],
             "d24_framework_not_run_source_inventory": {},
@@ -510,6 +512,45 @@ class PositiveExactShaPath(EvidenceCase):
             trusted_execution.trusted_test_source_commit("a" * 40, "b" * 40),
             "a" * 40,
         )
+
+    def test_generic_source_test_obligation_not_executed_is_partial(self) -> None:
+        import copy
+        self.honest()
+        surface = copy.deepcopy(self.surface)
+        surface["whole_reactor_coverage_complete"] = False
+        surface["coverage_gaps"]["source_test_obligation_classes_not_executed"] = [
+            "pkg.HiddenCoverageTest"
+        ]
+        surface["coverage_gaps"]["source_test_annotation_inventory"] = {
+            "pkg.HiddenCoverageTest": {
+                "source_present": True,
+                "test_annotations": 2,
+                "explicitly_disabled_annotations": 0,
+                "enabled_source_methods": 2,
+            }
+        }
+        evidence = self.verdict(surface=surface)
+        self.assertNotPass(evidence, qualify.PARTIAL)
+        coverage = qualification_of(evidence)["coverage"]
+        self.assertEqual(
+            coverage["source_test_obligation_classes_not_executed"],
+            ["pkg.HiddenCoverageTest"],
+        )
+
+    def test_source_annotation_inventory_ignores_comments_and_strings(self) -> None:
+        source = """
+        class X {
+          // @Test public void fake1() {}
+          String text = "@Test(enabled=false)";
+          /* @Test public void fake2() {} */
+          @Test public void real() {}
+          @Test(enabled = false) public void disabled() {}
+        }
+        """
+        code = trusted_execution._java_code_only(source)
+        annotations = list(re.finditer(r"@Test\b(?:\s*\((.*?)\))?", code, re.S))
+        self.assertEqual(len(annotations), 2)
+        self.assertFalse(any("fake" in match.group(0) for match in annotations))
 
     def test_d24_framework_not_run_makes_honest_candidate_partial(self) -> None:
         import copy
