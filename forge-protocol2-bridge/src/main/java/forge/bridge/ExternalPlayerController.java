@@ -634,6 +634,14 @@ public final class ExternalPlayerController extends PlayerController {
 
     @Override
     public CardCollectionView tuckCardsViaMulligan(CardCollectionView hand, int cardsToReturn) {
+        // Forge's London mulligan asks after every mulligan draw, also when no
+        // card is owed (the free first mulligan in multiplayer, CR 103.5c).
+        // Returning nothing then is the only legal answer, so no choice is made.
+        // When cards are owed the bottom-card selection is a real choice that is
+        // not externally represented yet: fail closed.
+        if (cardsToReturn == 0) {
+            return CardCollection.EMPTY;
+        }
         throw unsupported("tuckCardsViaMulligan",
                 "London-tuck card selection is not externally represented");
     }

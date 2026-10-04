@@ -207,6 +207,87 @@ public class BridgeEngineTest {
         Assert.assertTrue(second.isTerminal());
     }
 
+    private static DecisionFrame.Option shipOption(DecisionFrame frame) {
+        for (DecisionFrame.Option option : frame.options) {
+            if (!option.isKeep) {
+                return option;
+            }
+        }
+        throw new AssertionError("no ship option parked");
+    }
+
+    /**
+     * Ships the first mulligan frame's player once, keeps every other player's
+     * hand, and returns the outcome of that player's second ship. In a pod of more
+     * than two players the first mulligan is free (CR 103.5c), so it must apply
+     * without any card selection; the second owes one card to the bottom.
+     */
+    private static BridgeSession.SubmitOutcome shipUntilCardOwed(BridgeSession session,
+            DecisionFrame first) {
+        Assert.assertEquals(first.kind, DecisionFrame.Kind.MULLIGAN);
+        final String shipper = first.actorPlayerId;
+        final BridgeSession.SubmitOutcome free = session.submit(shipper,
+                shipOption(first).optionId, "mulligan", first.revision);
+        Assert.assertTrue(free.applied, "the free first mulligan owes no card and must apply: "
+                + free.errorCode);
+        long revision = first.revision;
+        for (int i = 0; i < 20; i++) {
+            final DecisionFrame frame = BridgeTestSupport.awaitFrame(session, 60000);
+            Assert.assertNotNull(frame, "no decision frame after a mulligan");
+            Assert.assertTrue(frame.revision > revision, "frame did not advance");
+            revision = frame.revision;
+            Assert.assertEquals(frame.kind, DecisionFrame.Kind.MULLIGAN, "unexpected frame kind");
+            if (frame.actorPlayerId.equals(shipper)) {
+                return session.submit(shipper, shipOption(frame).optionId, "mulligan",
+                        frame.revision);
+            }
+            Assert.assertTrue(BridgeTestSupport.submitKeep(session, frame).applied);
+        }
+        throw new AssertionError("the shipping player was never asked again");
+    }
+
+    @Test(timeOut = 300000)
+    public void testFreeMulliganOwesNoCardAndContinues() {
+        final BridgeEngine engine = new BridgeEngine();
+        BridgeTestSupport.startEngine(engine);
+        final List<String> handles = BridgeTestSupport.importPod(engine);
+        BridgeTestSupport.createGame(engine, "c-free", "free-ok", handles);
+        BridgeTestSupport.startGame(engine, "free-ok");
+        final BridgeSession session = engine.sessionsForTests().get("free-ok");
+        final DecisionFrame starting = BridgeTestSupport.awaitFrame(session, 60000);
+        Assert.assertNotNull(starting);
+        Assert.assertTrue(BridgeTestSupport.submitStartingPlayer(session, starting, "p1").applied);
+        final DecisionFrame first = BridgeTestSupport.awaitFrame(session, 60000);
+        Assert.assertNotNull(first);
+        Assert.assertEquals(first.kind, DecisionFrame.Kind.MULLIGAN);
+        final String shipper = first.actorPlayerId;
+        Assert.assertTrue(session.submit(shipper, shipOption(first).optionId, "mulligan",
+                first.revision).applied, "free mulligan must apply");
+        // Every player keeps from here; the shipper is asked again on a full new hand.
+        boolean askedAgain = false;
+        DecisionFrame frame;
+        for (int i = 0; ; i++) {
+            Assert.assertTrue(i < 20, "too many mulligan iterations");
+            frame = BridgeTestSupport.awaitFrame(session, 60000);
+            Assert.assertNotNull(frame, "no frame after the free mulligan");
+            if (frame.kind != DecisionFrame.Kind.MULLIGAN) {
+                break;
+            }
+            if (frame.actorPlayerId.equals(shipper)) {
+                askedAgain = true;
+                final JsonObject state = StateProjection.gameState(session, shipper);
+                Assert.assertEquals(playerState(state, shipper).getAsJsonObject("zones")
+                        .getAsJsonArray("hand").size(), 7,
+                        "a free mulligan keeps a full hand: " + state);
+            }
+            Assert.assertTrue(BridgeTestSupport.submitKeep(session, frame).applied);
+        }
+        Assert.assertTrue(askedAgain, "the shipping player must decide again on the new hand");
+        Assert.assertEquals(frame.kind, DecisionFrame.Kind.PRIORITY, "game must reach priority");
+        Assert.assertFalse(session.isTerminal(), "no session failure: " + session.getFailReason());
+        session.shutdown(5000);
+    }
+
     @Test(timeOut = 300000)
     public void testShipAbortsLoudly() {
         final BridgeEngine engine = new BridgeEngine();
@@ -231,10 +312,11 @@ public class BridgeEngineTest {
             }
         }
         Assert.assertNotNull(ship);
+        // The 4P pod's first mulligan is free (CR 103.5c): it owes no card and applies.
+        // The same player's second mulligan owes one, which is not represented yet.
         // R14B: a submission whose execution fails the session is REJECTED (never
         // reported applied), with a generic external message. Diagnostics stay internal.
-        final BridgeSession.SubmitOutcome outcome = session.submit(frame.actorPlayerId,
-                ship.optionId, "mulligan", frame.revision);
+        final BridgeSession.SubmitOutcome outcome = shipUntilCardOwed(session, frame);
         Assert.assertFalse(outcome.applied, "FAILED settlement must reject");
         Assert.assertEquals(outcome.errorCode, BridgeErrors.SESSION_FAILED);
         Assert.assertEquals(outcome.errorMessage, "session failed");
@@ -1354,9 +1436,9 @@ public class BridgeEngineTest {
         }
         Assert.assertNotNull(ship);
         // R14B: the submission that fails the session is itself rejected (never
-        // reported applied), with a generic external message.
-        final BridgeSession.SubmitOutcome outcome = session.submit(mulligan.actorPlayerId,
-                ship.optionId, "mulligan", mulligan.revision);
+        // reported applied), with a generic external message. The free first
+        // mulligan applies; the second one owes a card and fails the session.
+        final BridgeSession.SubmitOutcome outcome = shipUntilCardOwed(session, mulligan);
         Assert.assertFalse(outcome.applied, "FAILED settlement must reject");
         Assert.assertEquals(outcome.errorCode, BridgeErrors.SESSION_FAILED);
         Assert.assertEquals(outcome.errorMessage, "session failed");
