@@ -70,7 +70,6 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -709,7 +708,6 @@ CONTAINMENT_ENFORCED = "SECURITY_MANAGER_ENFORCED"
 #: resolved from an installed jar is not the candidate's code; the candidate's
 #: reactor output replaces it.
 STALE_SIBLING_MARKERS = ("/.m2/repository/forge/",)
-_MAC_SUFFIX = re.compile(r',"mac":"([0-9a-f]{64})"\}$')
 
 
 def sha256_file(path: Path) -> str:
@@ -1157,34 +1155,6 @@ def read_candidate_bytes(path: Path):
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             return None
         return handle.read(64 * 1024 * 1024)
-
-
-def verify_ledger(data: bytes, key: bytes, nonce: str) -> "tuple[list[str] | None, str | None]":
-    """Authenticate a ledger line by line against the per-module HMAC chain.
-
-    Returns the verified lines, or the reason the ledger is rejected. Any line
-    that is not part of the unbroken chain from the header rejects the ledger.
-    """
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        return None, "ledger_not_utf8"
-    lines = text.split("\n")
-    if lines and lines[-1] == "":
-        lines = lines[:-1]
-    if not lines:
-        return None, "ledger_empty"
-    chain = nonce
-    for number, line in enumerate(lines, 1):
-        match = _MAC_SUFFIX.search(line)
-        if not match:
-            return None, "ledger_line_{}_unauthenticated".format(number)
-        body = line[: match.start()] + "}"
-        expected = hmac.new(key, (chain + "\n" + body).encode("utf-8"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, match.group(1)):
-            return None, "ledger_line_{}_mac_mismatch".format(number)
-        chain = expected
-    return lines, None
 
 
 def _write_parent_receipt_ledger(
