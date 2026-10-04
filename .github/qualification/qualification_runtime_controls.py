@@ -415,6 +415,11 @@ public class HostileMain {
                     Class.forName("org.testng.Reporter", false, loader);
                     break;
                 }
+                case "parent-loader": {
+                    ClassLoader loader = HostileMain.class.getClassLoader().getParent();
+                    loader.loadClass("org.testng.Reporter");
+                    break;
+                }
                 case "properties-object":
                     System.getProperties();
                     break;
@@ -534,6 +539,7 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
     ROUTES = (
         "system-loader",
         "context-loader",
+        "parent-loader",
         "properties-object",
         "set-properties",
         "new-classloader",
