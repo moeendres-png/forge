@@ -1086,6 +1086,7 @@ def cmd_execute(args) -> int:
     trusted_repo = Path(args.trusted_repo).resolve()
     evidence_dir = Path(args.evidence_dir).resolve()
     sandbox_dir = Path(args.sandbox_dir).resolve()
+    execution_sandbox = Path(args.execution_sandbox_dir).resolve()
     candidate_root = sandbox_dir / "candidate"
     bundle = Path(args.bundle_dir)
     work = Path(args.work_dir).resolve()
@@ -1103,7 +1104,9 @@ def cmd_execute(args) -> int:
         "witness_class": WITNESS_CLASS,
         "witness_source": WITNESS_SOURCE,
         "driver_class": DRIVER_CLASS,
-        "candidate_execution_identity": args.sandbox_user,
+        "candidate_build_identity": args.sandbox_user,
+        "candidate_execution_identity": args.execution_user,
+        "build_execution_identity_separated": args.sandbox_user != args.execution_user,
         "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
         "trusted_test_source_sha": trusted_test_source_commit(args.comparison_base, args.candidate_sha),
         "candidate_test_sources_used_for_credit": False,
@@ -1126,6 +1129,9 @@ def cmd_execute(args) -> int:
         testng_jars = verify_trusted_testng(args.trusted_testng)
         manifest["trusted_testng"] = {p.name: TRUSTED_TESTNG_PINS[p.name] for p in testng_jars}
         home = sandbox.sandbox_home(sandbox_dir)
+        if args.sandbox_user == args.execution_user:
+            raise ExecutionError("candidate build and hostile-bytecode execution must use different OS identities")
+        execution_home = sandbox.prepare_sandbox(args.execution_user, execution_sandbox)
         trusted_maven_repo = (Path(args.trusted_maven_repo).resolve()
                               if args.trusted_maven_repo else None)
         if trusted_maven_repo is None or not trusted_maven_repo.is_dir():
@@ -1165,8 +1171,13 @@ def cmd_execute(args) -> int:
              "-pl", ",".join(modules), "-am"],
             timeout=14400,
         )
-        manifest["candidate_build"] = {"exit_code": build.returncode, "user": args.sandbox_user,
-                                       "stderr_tail": build.stderr[-2000:]}
+        manifest["candidate_build"] = {
+            "exit_code": build.returncode,
+            "user": args.sandbox_user,
+            "maven_repository": str(trusted_maven_repo),
+            "offline": True,
+            "stderr_tail": build.stderr[-2000:],
+        }
         if build.returncode != 0:
             raise ExecutionError("candidate build failed (exit {})".format(build.returncode))
 
@@ -1199,10 +1210,22 @@ def cmd_execute(args) -> int:
         manifest["launch_classpath_admission"] = scans
         sandbox.stage_readonly(staging, bundle)
 
-        # 4. One trusted-driver launch per module, as the sandbox account.
-        launch_dir = sandbox_dir / "witness-out"
-        sandbox.run_candidate(args.sandbox_user, home, sandbox_dir,
-                              ["/bin/sh", "-c", 'rm -rf "$1" && mkdir -p "$1"', "d17", str(launch_dir)])
+        # 4. Hostile bytecode runs under a second UID.  A delayed process left
+        # by candidate Maven/plugin code cannot ptrace, signal or write the
+        # execution JVM/ledger as a different UID.  The per-run temp directory
+        # is private to the execution UID as well.
+        launch_dir = execution_sandbox / "witness-out"
+        exec_tmp = execution_sandbox / "tmp"
+        sandbox.run_candidate(
+            args.execution_user, execution_home, execution_sandbox,
+            ["/bin/sh", "-c",
+             'rm -rf "$1" "$2" && mkdir -p "$1" "$2" && chmod 0700 "$1" "$2"',
+             "d17", str(launch_dir), str(exec_tmp)])
+        manifest["execution_sandbox"] = {
+            "user": args.execution_user,
+            "root": str(execution_sandbox),
+            "private_tmp": str(exec_tmp),
+        }
         for module in modules:
             required = surface["modules"][module]["classes"]
             if not required:
@@ -1212,10 +1235,11 @@ def cmd_execute(args) -> int:
             log("executing {} ({} required classes) as {}".format(module, len(required), args.sandbox_user))
             manifest["modules"][module] = execute_module(
                 run_export, module, required, launch_dir, bundle, testng_jars, nonce,
-                args.java, argline, xvfbrun,
+                args.java, argline + ["-Djava.io.tmpdir=" + str(exec_tmp)], xvfbrun,
                 scans[module]["candidate_code_entries"],
                 scans[module]["trusted_dependency_entries"],
-                dropped[module], args.sandbox_user, home, evidence_dir / "witness",
+                dropped[module], args.execution_user, execution_home,
+                evidence_dir / "witness",
             )
             log("  {} exit={} ledger={} totals={}".format(
                 module, manifest["modules"][module]["launch_exit_code"],
@@ -1252,7 +1276,9 @@ def main(argv=None) -> int:
     e.add_argument("--candidate-sha", required=True, help="exact locked candidate SHA")
     e.add_argument("--candidate-tree", required=True, help="exact locked candidate TREE")
     e.add_argument("--sandbox-dir", required=True)
-    e.add_argument("--sandbox-user", required=True)
+    e.add_argument("--sandbox-user", required=True, help="candidate Maven/build OS identity")
+    e.add_argument("--execution-user", required=True, help="separate hostile-bytecode JVM OS identity")
+    e.add_argument("--execution-sandbox-dir", required=True)
     e.add_argument("--sandbox-prepare", required=True, help="SANDBOX_PREPARE.json written by sandbox.py prepare")
     e.add_argument("--bundle-dir", required=True, help="root-owned read-only directory for trusted bytecode")
     e.add_argument("--work-dir", required=True)
