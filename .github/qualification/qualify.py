@@ -738,6 +738,8 @@ def build_evidence(
             "verdict": outcome["verdict"],
             "reason": outcome["reason"],
             "signals": outcome["signals"],
+            "coverage": outcome["coverage"],
+            "containment": outcome["containment"],
             "counts": outcome["counts"],
             "required": outcome["required"],
             "dead_classes": outcome["dead_classes"],
@@ -771,14 +773,18 @@ def build_evidence(
             "execution_observed_from": "trusted listener compiled from the trusted default branch",
             "candidate_execution_identity": manifest.get("candidate_execution_identity"),
             "test_bytecode_origin": manifest.get("test_bytecode_origin"),
+            "candidate_test_sources_used_for_credit": manifest.get("candidate_test_sources_used_for_credit"),
+            "hostile_bytecode_containment_required": manifest.get("hostile_bytecode_containment_required"),
+            "hostile_bytecode_containment": outcome["containment"],
             "trusted_state_integrity": (integrity or {}).get("status") if isinstance(integrity, dict) else None,
             "candidate_definition_divergent": lock["candidate_definition_divergence"]["divergent"],
             "candidate_definition_note": lock["candidate_definition_divergence"]["note"],
             "ignored_candidate_verdict_keys": list(VERDICT_KEYS),
             "note": (
                 "no Surefire/TestNG report, generated, copied, renamed or committed "
-                "candidate artifact is read for any qualification signal; credit comes "
-                "only from the trusted dry-run denominator and the trusted witness ledger"
+                "candidate artifact is read for any qualification signal; candidate-owned "
+                "test bodies are not executed for credit; trusted comparison-base tests exercise "
+                "candidate production bytecode only behind the required containment boundary"
             ),
         },
         "repository": lock.get("repository"),
