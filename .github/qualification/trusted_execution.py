@@ -1290,6 +1290,7 @@ def _decode_child_completion(code: int, allowed_skip_classes) -> "tuple[bool, in
 
 
 def execute_module(run_root: Path, module: str, required_counts: dict,
+                   required_method_counts: dict,
                    launch_dir: Path, bundle: Path, testng_jars, receipt_run_id: str,
                    java: str, argline, xvfbrun, candidate_code_entries,
                    trusted_dependency_entries, dropped, user: str, home: Path,
@@ -1324,6 +1325,8 @@ def execute_module(run_root: Path, module: str, required_counts: dict,
         cmd += ["--trusted-jar", jar]
     for name in classes:
         cmd += ["--class", name, "--expected-count", "{}={}".format(name, int(required_counts[name]))]
+    for key, count in sorted(required_method_counts.items()):
+        cmd += ["--expected-method-count", "{}={}".format(key, int(count))]
     for name in allowed_skip_classes:
         cmd += ["--allowed-skip-class", name]
 
@@ -1348,6 +1351,7 @@ def execute_module(run_root: Path, module: str, required_counts: dict,
         "module": module,
         "required_classes": classes,
         "required_class_counts": dict(required_counts),
+        "required_method_counts": dict(required_method_counts),
         "child_process_exit_code": code,
         "launch_exit_code": 0 if completed else code,
         "execution_identity": user,
@@ -1601,9 +1605,11 @@ def cmd_execute(args) -> int:
         }
         for module in modules:
             required_counts = dict(surface["modules"][module].get("class_counts") or {})
-            if not required_counts:
+            required_method_counts = dict(surface["modules"][module].get("method_counts") or {})
+            if not required_counts or not required_method_counts:
                 manifest["modules"][module] = {
                     "module": module, "required_classes": [], "required_class_counts": {},
+                    "required_method_counts": {},
                     "launch_exit_code": 0, "skipped_no_required_tests": True,
                     "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
                     "candidate_jvm_receipt_credentials": False,
@@ -1612,8 +1618,8 @@ def cmd_execute(args) -> int:
             log("executing {} ({} required classes) as {}".format(
                 module, len(required_counts), args.execution_user))
             manifest["modules"][module] = execute_module(
-                run_export, module, required_counts, launch_dir, bundle, testng_jars,
-                receipt_run_id, args.java,
+                run_export, module, required_counts, required_method_counts,
+                launch_dir, bundle, testng_jars, receipt_run_id, args.java,
                 argline + ["-Djava.io.tmpdir=" + str(exec_tmp)], xvfbrun,
                 scans[module]["candidate_code_entries"],
                 scans[module]["trusted_dependency_entries"],
