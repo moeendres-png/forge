@@ -181,7 +181,7 @@ public final class Containment {
             return false;
         }
 
-        private void deny(String detail) {
+        void deny(String detail) {
             if (violation == null) {
                 violation = detail;
             }
