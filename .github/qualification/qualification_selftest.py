@@ -1320,6 +1320,22 @@ class RedTrustDomain(EvidenceCase):
 class ParentReceiptAuthority(unittest.TestCase):
     """The candidate JVM owns no receipt credential or evidence authority."""
 
+    def test_child_exit_decoder_never_confuses_errors_or_signals_with_skip_credit(self) -> None:
+        allowed = ["pkg.Stress"]
+        self.assertEqual(trusted_execution._decode_child_completion(0, allowed), (True, 0))
+        self.assertEqual(trusted_execution._decode_child_completion(31, allowed), (True, 1))
+        self.assertEqual(trusted_execution._decode_child_completion(69, allowed), (True, 39))
+        for code in (10, 11, 12, 13, 30, 70, 78, 79, 124, 125, 134, 139, 143, 255):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    trusted_execution._decode_child_completion(code, allowed),
+                    (False, None),
+                )
+        self.assertEqual(
+            trusted_execution._decode_child_completion(31, []),
+            (False, None),
+        )
+
     def test_parent_receipt_is_run_bound_and_contains_no_mac(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="forge-d17-parent-receipt-"))
         self.addCleanup(shutil.rmtree, tmp, True)
