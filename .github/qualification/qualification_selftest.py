@@ -51,7 +51,7 @@ import trusted_execution  # noqa: E402
 QUALIFY_WORKFLOW = ".github/workflows/forge-candidate-qualification.yml"
 EXPECTED_MODULES = ["forge-game", "forge-gui-desktop"]
 STRESS_CLASS = "forge.net.NetworkPlayIntegrationTest"
-WITNESS_CLASS = "forge.d17.witness.QualifiedExecutionListener"
+COUNTER_CLASS = "forge.d17.witness.QualifiedExecutionCounter"
 
 WORKFLOW_STUB = """name: stub
 on: [push]
@@ -193,6 +193,7 @@ def required_surface(modules=None, totals=None, classes=None, base=None, class_c
             "d24_framework_not_run_source_inventory": {},
             "d24_enabled_source_methods_not_run": 0,
             "explicitly_disabled_source_classes": [],
+            "other_explicit_disabled_test_methods": [],
             "d22_disabled_rules_tests": [],
             "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
         },
@@ -215,9 +216,8 @@ def required_surface(modules=None, totals=None, classes=None, base=None, class_c
 #: Candidate Maven/build code and hostile bytecode use different accounts.
 BUILD_USER = "d17build"
 SANDBOX_USER = "d17exec"
-#: Ledger path -> digest of the bytes the trusted listener wrote and the trusted
-#: orchestrator authenticated. Bytes written later by any other route (a test
-#: simulating candidate tampering) do not match, exactly as in production.
+#: Ledger path -> digest of the trusted parent-owned receipt copy. Bytes written
+#: later by any other route do not match the manifest-bound digest.
 _AUTHENTICATED_LEDGERS: "dict[str, str]" = {}
 
 
@@ -249,12 +249,18 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
     return {
         "schema": qualify.EXECUTION_MANIFEST_SCHEMA,
         "nonce": nonce,
+        "receipt_run_id": nonce,
+        "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+        "candidate_jvm_receipt_credentials": False,
         "candidate_sha": candidate_sha,
         "candidate_tree": candidate_tree,
         "comparison_base_sha": base or "b" * 40,
         "trusted_argline": ["--add-opens", "java.base/java.lang=ALL-UNNAMED"],
-        "witness_class": WITNESS_CLASS,
-        "witness_source": "witness/forge/d17/witness/QualifiedExecutionListener.java",
+        "child_counter_class": COUNTER_CLASS,
+        "child_counter_source": "witness/forge/d17/witness/QualifiedExecutionCounter.java",
+        "ledger_authentication_scheme": (
+            "trusted parent OS-process receipt + SHA256 + integrity seal"
+        ),
         "candidate_artifacts_used_as_evidence": False,
         "candidate_build_identity": BUILD_USER,
         "candidate_execution_identity": SANDBOX_USER,
@@ -275,8 +281,12 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
             module: {
                 "module": module,
                 "required_classes": ["pkg.C{}".format(i) for i in range(2)],
+                "child_process_exit_code": launch_codes[module],
                 "launch_exit_code": launch_codes[module],
                 "execution_identity": SANDBOX_USER,
+                "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+                "receipt_run_id": nonce,
+                "candidate_jvm_receipt_credentials": False,
                 "classpath_digest": "d" * 64,
                 "testng_totals": {"total": 3, "passed": 3, "failed": 0, "skipped": 0},
                 "testng_version_entry": "testng-7.8.0.jar",
@@ -302,13 +312,14 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
 
 def write_witness(witness_dir: Path, module: str, invocations, nonce=NONCE,
                   summary_override=None, omit_summary=False, raw_extra=None):
-    """Write a trusted witness ledger exactly as the trusted listener would.
+    """Write a trusted parent-owned receipt ledger fixture.
 
     ``invocations`` is a list of ``(class, method, status)`` tuples.
     """
     witness_dir.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps({"kind": "header", "schema": qualify.WITNESS_SCHEMA,
-                         "module": module, "nonce": nonce}, sort_keys=True)]
+                         "module": module, "nonce": nonce,
+                         "authority": "trusted_parent_os_process"}, sort_keys=True)]
     per_total, per_skip, per_fail = {}, {}, {}
     for index, (klass, method, status) in enumerate(invocations):
         lines.append(json.dumps({
@@ -330,6 +341,7 @@ def write_witness(witness_dir: Path, module: str, invocations, nonce=NONCE,
             "containment": qualify.CONTAINMENT_ENFORCED,
             "containment_violation": "null",
             "last_seq": len(invocations) - 1,
+            "authority": "trusted_parent_os_process",
         }
         if summary_override:
             summary.update(summary_override)
