@@ -1,7 +1,7 @@
 package forge.d17.witness;
 
 import java.io.FilePermission;
-import java.lang.reflect.ReflectPermission;
+import java.lang.reflect.ReflectPermission;\nimport java.lang.management.ManagementPermission;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Path;
@@ -212,6 +212,8 @@ public final class Containment {
                         || name.equals("setIO")
                         || name.equals("shutdownHooks")
                         || name.equals("getStackWalkerWithClassReference")
+                        || name.equals("getStackTrace")
+                        || name.equals("manageProcess")
                         || name.startsWith("exitVM")
                         || name.startsWith("loadLibrary")) {
                     deny("candidate RuntimePermission " + name);
@@ -221,6 +223,13 @@ public final class Containment {
                 deny("candidate reflective access suppression");
             } else if (permission instanceof SecurityPermission) {
                 deny("candidate SecurityPermission " + name);
+            } else if (permission instanceof ManagementPermission
+                    && "control".equals(name)) {
+                deny("candidate management control");
+            } else if (permission.getClass().getName().startsWith("javax.management.")
+                    || permission.getClass().getName().equals("jdk.jfr.FlightRecorderPermission")
+                    || permission.getClass().getName().equals("com.sun.tools.attach.AttachPermission")) {
+                deny("candidate VM-introspection permission " + permission.getClass().getName());
             } else if (permission instanceof PropertyPermission
                     && permission.getActions().contains("write")
                     && ("*".equals(name) || sensitiveProperty(name))) {
@@ -229,6 +238,12 @@ public final class Containment {
                 String actions = permission.getActions();
                 if (actions.contains("execute")) {
                     deny("candidate process execution " + name);
+                }
+                if (actions.contains("read")) {
+                    String unix = name.replace('\\', '/');
+                    if (unix.matches("^/proc/(self|[0-9]+)/(mem|maps|pagemap)(/.*)?$")) {
+                        deny("candidate process-memory read " + unix);
+                    }
                 }
                 if (actions.contains("write") || actions.contains("delete")) {
                     if ("<<ALL FILES>>".equals(name)) {
