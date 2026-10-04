@@ -1,61 +1,41 @@
 package forge.d17.witness;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.testng.TestNG;
 
 /**
- * Trusted entry point of every D17 candidate test JVM.
+ * Contained child-JVM entry point for D17.
  *
- * <p>The process system classpath contains only trusted witness bytecode and the
- * digest-pinned TestNG closure.  Candidate production bytecode is loaded through
- * {@link Containment.CandidateCodeLoader}; trusted comparison-base tests are
- * loaded through a separate {@link Containment.TrustedTestLoader}.  A mandatory
- * SecurityManager containment guard is installed before either domain is
- * initialized.  There is no uncontained fallback.
- *
- * <p>The HMAC key remains defense-in-depth for ledger truncation/replay.  It is
- * read before candidate classes are loaded and is inaccessible to candidate
- * bytecode through the enforced loader/security boundary.  Candidate code is
- * not permitted to obtain the system loader, access the witness package, use
- * suppress-access-check reflection, replace the security manager, load native
- * code, execute a process, or mutate the protected witness directory.
+ * <p>This process is deliberately <strong>not</strong> a receipt authority. It
+ * receives no HMAC key, receipt nonce or trusted evidence path. It runs trusted
+ * comparison-base tests against candidate production bytecode behind the
+ * mandatory containment boundary and communicates only through its OS process
+ * exit status. The trusted parent process, running outside this UID/JVM, owns
+ * all qualification receipts and evidence.
  */
 public final class TrustedTestNGDriver {
-
-    private static final int CONTAINMENT_UNAVAILABLE = 78;
+    static final int COMPLETE_PASS = 0;
+    static final int TEST_FAILURE = 10;
+    static final int UNDECLARED_SKIP = 11;
+    static final int EXECUTION_COUNT_MISMATCH = 12;
+    static final int CONTAINMENT_VIOLATION = 13;
+    static final int DECLARED_SKIP_BASE = 20;
+    static final int MAX_ENCODED_DECLARED_SKIPS = 200;
+    static final int CONTAINMENT_UNAVAILABLE = 78;
+    static final int DRIVER_ERROR = 79;
 
     private TrustedTestNGDriver() {
-    }
-
-    private static byte[] readKey(InputStream in) throws IOException {
-        ByteArrayOutputStream line = new ByteArrayOutputStream();
-        int c;
-        while ((c = in.read()) != -1 && c != '\n') {
-            line.write(c);
-            if (line.size() > 256) {
-                throw new IOException("witness key line is too long");
-            }
-        }
-        in.close();
-        String hex = new String(line.toByteArray(), StandardCharsets.US_ASCII).trim();
-        if (hex.length() != 64 || !hex.matches("[0-9a-f]{64}")) {
-            throw new IOException("witness key is not 32 hex-encoded bytes");
-        }
-        byte[] key = new byte[32];
-        for (int i = 0; i < 32; i++) {
-            key[i] = (byte) Integer.parseInt(hex.substring(2 * i, 2 * i + 2), 16);
-        }
-        return key;
     }
 
     private static URL[] urls(List<String> values) throws IOException {
@@ -66,10 +46,24 @@ public final class TrustedTestNGDriver {
         return out.toArray(new URL[0]);
     }
 
+    private static Map<String, Integer> expectedCounts(List<String> specs) {
+        Map<String, Integer> out = new HashMap<String, Integer>();
+        for (String spec : specs) {
+            int split = spec.lastIndexOf('=');
+            if (split <= 0 || split == spec.length() - 1) {
+                throw new IllegalArgumentException("bad --expected-count " + spec);
+            }
+            String name = spec.substring(0, split);
+            int count = Integer.parseInt(spec.substring(split + 1));
+            if (count <= 0 || out.put(name, Integer.valueOf(count)) != null) {
+                throw new IllegalArgumentException("invalid/duplicate expected class " + spec);
+            }
+        }
+        return out;
+    }
+
     public static void main(String[] args) throws Exception {
         String module = null;
-        String nonce = null;
-        Path ledger = null;
         Path protectedRoot = null;
         String outputDir = null;
         String trustedTests = null;
@@ -77,20 +71,18 @@ public final class TrustedTestNGDriver {
         List<String> candidateCode = new ArrayList<String>();
         List<String> trustedDependencies = new ArrayList<String>();
         List<String> classes = new ArrayList<String>();
+        List<String> expectedSpecs = new ArrayList<String>();
+        Set<String> allowedSkipClasses = new HashSet<String>();
 
         for (int i = 0; i < args.length; i++) {
             String flag = args[i];
             if (i + 1 >= args.length) {
                 System.err.println("TrustedTestNGDriver: " + flag + " needs a value");
-                System.exit(3);
+                System.exit(DRIVER_ERROR);
             }
             String value = args[++i];
             if ("--module".equals(flag)) {
                 module = value;
-            } else if ("--nonce".equals(flag)) {
-                nonce = value;
-            } else if ("--ledger".equals(flag)) {
-                ledger = Paths.get(value);
             } else if ("--protected-root".equals(flag)) {
                 protectedRoot = Paths.get(value);
             } else if ("--output-dir".equals(flag)) {
@@ -105,22 +97,31 @@ public final class TrustedTestNGDriver {
                 trustedSpi.add(Paths.get(value).toUri().toURL());
             } else if ("--class".equals(flag)) {
                 classes.add(value);
+            } else if ("--expected-count".equals(flag)) {
+                expectedSpecs.add(value);
+            } else if ("--allowed-skip-class".equals(flag)) {
+                allowedSkipClasses.add(value);
             } else {
                 System.err.println("TrustedTestNGDriver: unknown argument " + flag);
-                System.exit(3);
+                System.exit(DRIVER_ERROR);
             }
         }
 
-        if (module == null || nonce == null || ledger == null || protectedRoot == null
-                || outputDir == null || trustedTests == null || trustedSpi.isEmpty()
-                || classes.isEmpty()) {
-            System.err.println("TrustedTestNGDriver: --module, --nonce, --ledger, "
-                    + "--protected-root, --output-dir, --trusted-test-root, --trusted-jar "
-                    + "and at least one --class are required");
-            System.exit(3);
+        final Map<String, Integer> expected;
+        try {
+            expected = expectedCounts(expectedSpecs);
+        } catch (RuntimeException badExpected) {
+            System.err.println("TrustedTestNGDriver: " + badExpected);
+            System.exit(DRIVER_ERROR);
+            return;
         }
 
-        byte[] key = readKey(System.in);
+        if (module == null || protectedRoot == null || outputDir == null
+                || trustedTests == null || trustedSpi.isEmpty() || classes.isEmpty()
+                || expected.isEmpty() || !new HashSet<String>(classes).equals(expected.keySet())) {
+            System.err.println("TrustedTestNGDriver: incomplete or inconsistent trusted launch contract");
+            System.exit(DRIVER_ERROR);
+        }
 
         final Containment.Session containment;
         try {
@@ -135,27 +136,24 @@ public final class TrustedTestNGDriver {
             return;
         }
 
-        QualifiedExecutionListener witness =
-                new QualifiedExecutionListener(module, nonce, ledger, key, containment.guard);
-
+        QualifiedExecutionCounter counter = new QualifiedExecutionCounter(containment.guard);
         List<Class<?>> selected = new ArrayList<Class<?>>();
         for (String name : classes) {
             try {
                 selected.add(Class.forName(name, false, containment.tests));
             } catch (ClassNotFoundException | LinkageError exc) {
                 System.err.println("TrustedTestNGDriver: required class not loadable: " + name + ": " + exc);
+                System.exit(EXECUTION_COUNT_MISMATCH);
+                return;
             }
         }
 
-        // TestNG runtime knobs are process global.  The properties object itself
-        // is guarded; trusted-base tests may use normal test APIs while hostile
-        // candidate production frames cannot mutate testng.* state.
         for (String name : System.getProperties().stringPropertyNames()) {
             if (name.startsWith("testng.")) {
                 System.clearProperty(name);
             }
         }
-        witness.pinSystemProperties();
+        counter.pinSystemProperties();
 
         TestNG testng = new TestNG(false);
         testng.setUseDefaultListeners(false);
@@ -163,19 +161,47 @@ public final class TrustedTestNGDriver {
         testng.setOutputDirectory(outputDir);
         testng.setVerbose(0);
         testng.setTestClasses(selected.toArray(new Class<?>[0]));
-        testng.addListener(witness);
+        testng.addListener(counter);
         testng.run();
 
         if (!containment.intact()) {
-            witness.noteContainmentViolation("post-run containment integrity check failed");
+            System.err.println("D17_CONTAINMENT_VIOLATION: " + containment.guard.violation());
+            System.exit(CONTAINMENT_VIOLATION);
+            return;
         }
 
-        long total = witness.invocations();
-        long failed = witness.failures();
-        long skipped = witness.skips();
-        System.out.println("Total tests run: " + total + ", Passes: " + (total - failed - skipped)
-                + ", Failures: " + failed + ", Skips: " + skipped);
-        System.exit(testng.getStatus() == 0 && containment.intact()
-                ? 0 : (failed > 0 || !containment.intact() ? 1 : 2));
+        Map<String, Integer> observed = counter.perClassTotal();
+        if (!observed.equals(expected)) {
+            System.err.println("D17_EXECUTION_COUNT_MISMATCH expected=" + expected + " observed=" + observed);
+            System.exit(EXECUTION_COUNT_MISMATCH);
+            return;
+        }
+
+        if (counter.failures() > 0) {
+            System.exit(TEST_FAILURE);
+            return;
+        }
+
+        Set<String> undeclared = new HashSet<String>(counter.skipClasses());
+        undeclared.removeAll(allowedSkipClasses);
+        if (!undeclared.isEmpty()) {
+            System.err.println("D17_UNDECLARED_SKIP_CLASSES=" + undeclared);
+            System.exit(UNDECLARED_SKIP);
+            return;
+        }
+
+        long skipped = counter.skips();
+        if (skipped > 0) {
+            if (allowedSkipClasses.size() != 1 || skipped > MAX_ENCODED_DECLARED_SKIPS) {
+                System.err.println("D17_DECLARED_SKIP_ENCODING_UNAVAILABLE count=" + skipped
+                        + " classes=" + allowedSkipClasses);
+                System.exit(DRIVER_ERROR);
+                return;
+            }
+            System.exit(DECLARED_SKIP_BASE + (int) skipped);
+            return;
+        }
+
+        System.exit(COMPLETE_PASS);
     }
 }
