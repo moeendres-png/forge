@@ -57,10 +57,11 @@ import org.testng.internal.RuntimeBehavior;
  *       accepts.</li>
  * </ul>
  *
- * <p>Scope. The witness proves that required tests were dispatched and how they
- * finished. It cannot prove that an individual candidate-owned test method is
- * semantically strong; that is review, not CI. Candidate test and main code runs
- * in this same JVM. Before launch, the orchestrator admits the classpath only if
+ * <p>Scope. The witness proves that required comparison-base tests were
+ * dispatched and how they finished. Candidate-owned test bodies are never
+ * executed for credit. Candidate production code shares this process only
+ * behind the mandatory Containment boundary; a denied authority operation
+ * makes the run non-PASS even when the candidate catches the exception. Before launch, the orchestrator admits the classpath only if
  * no candidate-authored class references TestNG beyond test annotations and
  * assertions (so no @Listeners, hook, object factory, Reporter or test-result
  * access) or the witness package, and every dependency jar equals the trusted
@@ -75,6 +76,7 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
     private final String module;
     private final String nonce;
     private final Path output;
+    private final Containment.Guard containment;
 
     private final Map<String, Integer> passCounts = new TreeMap<String, Integer>();
     private final Map<String, Integer> failureCounts = new TreeMap<String, Integer>();
@@ -103,10 +105,12 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
      * listener has no public no-argument constructor, so a {@code -listener}
      * argument or service registration cannot instantiate an unkeyed copy.
      */
-    QualifiedExecutionListener(String module, String nonce, Path output, byte[] key) {
+    QualifiedExecutionListener(String module, String nonce, Path output, byte[] key,
+            Containment.Guard containment) {
         this.module = module;
         this.nonce = nonce;
         this.output = output;
+        this.containment = containment;
         try {
             this.mac = Mac.getInstance("HmacSHA256");
             this.mac.init(new SecretKeySpec(key, "HmacSHA256"));
@@ -151,6 +155,12 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
      * was set by code under test.
      */
     boolean runtimeAltered() {
+        // Hostile candidate bytecode runs behind the mandatory containment guard.
+        // A denied operation is sticky even if candidate code catches the
+        // SecurityException; it can never be converted back into PASS.
+        if (containment == null || !containment.intact()) {
+            return true;
+        }
         // A replaced Properties object can answer TestNG and this check
         // differently, so the object itself must still be the pinned one.
         Properties current = System.getProperties();
@@ -206,6 +216,16 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
 
     long skips() {
         return skips;
+    }
+
+    void noteContainmentViolation(String detail) {
+        if (containment != null && containment.violation() == null) {
+            try {
+                containment.deny(detail);
+            } catch (SecurityException expected) {
+                // Sticky violation is the intended effect.
+            }
+        }
     }
 
     private synchronized void record(ITestResult result) {
@@ -312,12 +332,18 @@ public final class QualifiedExecutionListener implements ITestListener, IInvoked
             observed.put(entry.getKey(), Integer.valueOf(
                     (prior == null ? 0 : prior.intValue()) + entry.getValue().intValue()));
         }
+        String containmentState = containment != null && containment.intact()
+                ? Containment.ENFORCED : Containment.VIOLATED;
+        String containmentDetail = containment == null ? "guard missing"
+                : String.valueOf(containment.violation());
         write("{\"kind\":\"summary\",\"tests\":" + sequence
                 + ",\"failed\":" + failures
                 + ",\"skipped\":" + skips
                 + ",\"per_class_total\":" + render(observed)
                 + ",\"skip_classes\":" + render(skipCounts)
                 + ",\"fail_classes\":" + render(failureCounts)
+                + ",\"containment\":" + quote(containmentState)
+                + ",\"containment_violation\":" + quote(containmentDetail)
                 + ",\"last_seq\":" + (sequence - 1L) + "}");
     }
 
