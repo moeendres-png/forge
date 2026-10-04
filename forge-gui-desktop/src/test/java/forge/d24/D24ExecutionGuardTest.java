@@ -12,14 +12,11 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import org.testng.Assert;
-import org.testng.IInvokedMethod;
-import org.testng.IInvokedMethodListener;
 import org.testng.ITestResult;
+import org.testng.annotations.BeforeSuite;
 import org.testng.annotations.AfterSuite;
-import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 
-@Listeners(D24ExecutionGuardTest.ExecutionListener.class)
 public class D24ExecutionGuardTest {
     private static final Map<String, Integer> DECLARED_TEST_METHODS = Map.ofEntries(
             Map.entry("forge.deck.DeckRecognizerTest", 84),
@@ -50,6 +47,39 @@ public class D24ExecutionGuardTest {
             "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardNewDbImplementation",
             "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
                     + "#test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses");
+
+    private static Map<String, Integer> runtimePassed = zeroCounts();
+    private static Map<String, Integer> runtimeFailed = zeroCounts();
+    private static Map<String, Integer> runtimeSkipped = zeroCounts();
+
+    @BeforeSuite(alwaysRun = true)
+    public void resetRuntimeCounters() {
+        runtimePassed = zeroCounts();
+        runtimeFailed = zeroCounts();
+        runtimeSkipped = zeroCounts();
+    }
+
+    public static synchronized void recordAffectedResult(ITestResult result) {
+        String className = result.getInstance().getClass().getName();
+        if (!runtimePassed.containsKey(className)) {
+            return;
+        }
+
+        switch (result.getStatus()) {
+        case ITestResult.SUCCESS:
+            runtimePassed.merge(className, 1, Integer::sum);
+            break;
+        case ITestResult.FAILURE:
+        case ITestResult.SUCCESS_PERCENTAGE_FAILURE:
+            runtimeFailed.merge(className, 1, Integer::sum);
+            break;
+        case ITestResult.SKIP:
+            runtimeSkipped.merge(className, 1, Integer::sum);
+            break;
+        default:
+            throw new AssertionError("unexpected TestNG status for " + className + ": " + result.getStatus());
+        }
+    }
 
     @Test
     public void affectedSourceShapeAndDisabledDebtArePinned() throws ReflectiveOperationException {
@@ -167,9 +197,9 @@ public class D24ExecutionGuardTest {
             return;
         }
 
-        Map<String, Integer> passed = new HashMap<>(ExecutionListener.passed);
-        Map<String, Integer> failed = new HashMap<>(ExecutionListener.failed);
-        Map<String, Integer> skipped = new HashMap<>(ExecutionListener.skipped);
+        Map<String, Integer> passed = new HashMap<>(runtimePassed);
+        Map<String, Integer> failed = new HashMap<>(runtimeFailed);
+        Map<String, Integer> skipped = new HashMap<>(runtimeSkipped);
 
         Map<String, Integer> discovered = zeroCounts();
         Map<String, Integer> invoked = zeroCounts();
@@ -198,38 +228,6 @@ public class D24ExecutionGuardTest {
         System.out.println("D24_EXECUTION_GUARD=PASS enabled_runtime_methods="
                 + (totalPassed + totalFailed) + " pass=" + totalPassed + " fail=" + totalFailed
                 + " skip=" + totalSkipped + " disabled_not_run=" + EXPECTED_DISABLED.size());
-    }
-
-    public static final class ExecutionListener implements IInvokedMethodListener {
-        private static Map<String, Integer> passed = zeroCounts();
-        private static Map<String, Integer> failed = zeroCounts();
-        private static Map<String, Integer> skipped = zeroCounts();
-
-        @Override
-        public void afterInvocation(IInvokedMethod method, ITestResult result) {
-            if (!method.isTestMethod()) {
-                return;
-            }
-            String className = result.getTestClass().getRealClass().getName();
-            if (!passed.containsKey(className)) {
-                return;
-            }
-
-            switch (result.getStatus()) {
-            case ITestResult.SUCCESS:
-                passed.merge(className, 1, Integer::sum);
-                break;
-            case ITestResult.FAILURE:
-            case ITestResult.SUCCESS_PERCENTAGE_FAILURE:
-                failed.merge(className, 1, Integer::sum);
-                break;
-            case ITestResult.SKIP:
-                skipped.merge(className, 1, Integer::sum);
-                break;
-            default:
-                throw new AssertionError("unexpected TestNG status for " + className + ": " + result.getStatus());
-            }
-        }
     }
 
     private static Map<String, Integer> zeroCounts() {
