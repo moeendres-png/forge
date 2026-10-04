@@ -1816,6 +1816,21 @@ class TrustedOrchestratorControls(unittest.TestCase):
             ["pkg.ComprehensiveRulesSection104"],
         )
 
+    def test_execute_binds_trusted_method_counts_into_child_contract(self) -> None:
+        import inspect
+        execute = inspect.getsource(trusted_execution.cmd_execute)
+        child = inspect.getsource(trusted_execution.execute_module)
+        self.assertIn(
+            'required_method_counts = dict(surface["modules"][module].get("method_counts") or {})',
+            execute,
+        )
+        self.assertIn(
+            "run_export, module, required_counts, required_method_counts,",
+            execute,
+        )
+        self.assertIn('"--expected-method-count"', child)
+        self.assertIn("required_method_counts.items()", child)
+
     def test_trusted_test_compile_uses_only_frozen_candidate_inputs(self) -> None:
         import inspect
         source = inspect.getsource(trusted_execution.cmd_execute)
