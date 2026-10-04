@@ -1631,6 +1631,17 @@ class TrustedOrchestratorControls(unittest.TestCase):
             trusted_execution.assemble_classpath("/w", []), "/w"
         )
 
+    def test_trusted_test_compile_uses_only_frozen_candidate_inputs(self) -> None:
+        import inspect
+        source = inspect.getsource(trusted_execution.cmd_execute)
+        scan_at = source.index("scans[module] = scan_launch_classpath(")
+        compile_at = source.index("records[module] = trusted_compile_tests(")
+        self.assertLess(scan_at, compile_at)
+        self.assertIn('scans[module]["trusted_dependency_compile_entries"]', source)
+        self.assertIn('scans[module]["candidate_compile_entries"]', source)
+        compile_block = source[compile_at - 500:compile_at + 300]
+        self.assertNotIn("+ entries", compile_block)
+
     def test_execute_uses_full_trusted_reactor_inventory_for_candidate_outputs(self) -> None:
         import inspect
         source = inspect.getsource(trusted_execution.cmd_execute)
