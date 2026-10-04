@@ -593,6 +593,53 @@ class PositiveExactShaPath(EvidenceCase):
         self.assertEqual(
             qualification_of(evidence)["skips"]["undeclared_skipped_classes"], [])
 
+    def test_d20_known_not_run_is_read_from_committed_comparison_base(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-d20-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        (repo / ".github" / "ci").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.email", "a@b.invalid"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), check=True)
+        baseline = {
+            "schema": trusted_execution.D20_KNOWN_NOT_RUN_SCHEMA,
+            "source_test_classes_not_observed": ["pkg.GapTest"],
+            "framework_blockers": ["pkg.BaseTest"],
+            "intentionally_disabled_source_classes": {},
+        }
+        path = repo / trusted_execution.D20_KNOWN_NOT_RUN_PATH
+        path.write_text(json.dumps(baseline) + "\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=str(repo), check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo), text=True).strip()
+
+        # Working-tree data is untrusted input for the denominator.
+        path.write_text('{"schema":"candidate-controlled"}\n')
+        loaded = trusted_execution._d20_known_not_run(repo, base)
+        self.assertEqual(loaded["schema"], trusted_execution.D20_KNOWN_NOT_RUN_SCHEMA)
+        self.assertEqual(loaded["source_test_classes_not_observed"], ["pkg.GapTest"])
+
+    def test_d20_known_not_run_schema_mismatch_fails_closed(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="forge-d17-d20-schema-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = tmp / "repo"
+        (repo / ".github" / "ci").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", "-b", "master", "."], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.email", "a@b.invalid"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), check=True)
+        path = repo / trusted_execution.D20_KNOWN_NOT_RUN_PATH
+        path.write_text(json.dumps({
+            "schema": "wrong/1",
+            "source_test_classes_not_observed": [],
+            "framework_blockers": [],
+            "intentionally_disabled_source_classes": {},
+        }) + "\n")
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "bad"], cwd=str(repo), check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo), text=True).strip()
+        with self.assertRaises(trusted_execution.ExecutionError):
+            trusted_execution._d20_known_not_run(repo, base)
+
     def test_candidate_maven_build_definition_divergence_is_unknown(self) -> None:
         import copy
         self.honest()
