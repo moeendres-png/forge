@@ -507,19 +507,34 @@ public class TrustedAttackCallerTest {
 
 
 class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
-    def _compile_domains(self, test_source: str, ledger: Path):
-        candidate = self.compile_source_set({"HostileMain": HOSTILE_MAIN}, "candidate-main")
-        rendered = test_source.replace("LEDGER", json.dumps(str(ledger)))
-        tests = self.compile_source_set(
-            {"TrustedCallerTest" if "honestCandidate" in rendered else "TrustedAttackCallerTest": rendered},
-            "comparison-base-tests", extra_cp=[str(candidate)])
-        return tests, candidate
+    ROUTES = (
+        "system-loader",
+        "context-loader",
+        "properties-object",
+        "set-properties",
+        "new-classloader",
+        "exit",
+        "native",
+        "ledger-write",
+        "heap-dump",
+        "proc-mem",
+        "witness-reflection",
+        "define-class",
+        "thread-race",
+    )
+
+    def _candidate_domain(self) -> Path:
+        return self.compile_source_set(
+            {"HostileMain": HOSTILE_MAIN, "Payload": PAYLOAD}, "candidate-main")
 
     def test_honest_candidate_production_bytecode_runs_inside_containment(self) -> None:
+        candidate = self._candidate_domain()
+        tests = self.compile_source_set(
+            {"TrustedCallerTest": TRUSTED_CALLER}, "comparison-base-tests-honest",
+            extra_cp=[str(candidate)])
         key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
         out = self.tmp / "contained-honest"
         out.mkdir()
-        tests, candidate = self._compile_domains(TRUSTED_CALLER, out / "forge-game.witness.jsonl")
         proc, raw = self.launch(["probe.TrustedCallerTest"], [str(tests)], out, key, nonce,
                                 candidate_code=[candidate])
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -531,23 +546,36 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
         invocations = [r for r in records if r.get("kind") == "invocation"]
         self.assertEqual([r["status"] for r in invocations], ["PASS"])
 
-    def test_hostile_candidate_authority_attempts_make_the_run_red(self) -> None:
-        key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
-        out = self.tmp / "contained-hostile"
-        out.mkdir()
-        tests, candidate = self._compile_domains(
-            TRUSTED_ATTACK_CALLER, out / "forge-game.witness.jsonl")
-        proc, raw = self.launch(["probe.TrustedAttackCallerTest"], [str(tests)], out, key, nonce,
-                                candidate_code=[candidate])
-        self.assertNotEqual(proc.returncode, 0)
-        lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
-        self.assertIsNone(problem)
-        records = [json.loads(line) for line in lines]
-        summary = records[-1]
-        self.assertEqual(summary.get("containment"), "SECURITY_MANAGER_VIOLATED")
-        self.assertTrue(summary.get("containment_violation"))
-        invocations = [r for r in records if r.get("kind") == "invocation"]
-        self.assertEqual([r["status"] for r in invocations], ["FAIL"])
+    def test_each_hostile_authority_route_is_independently_contained(self) -> None:
+        candidate = self._candidate_domain()
+        for index, route in enumerate(self.ROUTES):
+            with self.subTest(route=route):
+                out = self.tmp / ("contained-hostile-" + route)
+                out.mkdir()
+                ledger = out / "forge-game.witness.jsonl"
+                tests = self.compile_source_set(
+                    {"TrustedAttackCallerTest": trusted_attack_caller(route, ledger)},
+                    "comparison-base-tests-hostile-{}".format(index),
+                    extra_cp=[str(candidate)])
+                key, nonce = secrets.token_bytes(32), secrets.token_hex(16)
+                proc, raw = self.launch(
+                    ["probe.TrustedAttackCallerTest"], [str(tests)], out, key, nonce,
+                    candidate_code=[candidate])
+                self.assertIsNotNone(raw, "{}: {}".format(route, proc.stderr))
+                lines, problem = trusted_execution.verify_ledger(raw, key, nonce)
+                self.assertIsNone(problem, "{}: {}".format(route, problem))
+                records = [json.loads(line) for line in lines]
+                summary = records[-1]
+                # A route that merely makes the trusted assertion fail without
+                # tripping containment is a control failure: it would show that
+                # the attempted authority operation was not actually refused.
+                self.assertEqual(
+                    summary.get("containment"), "SECURITY_MANAGER_VIOLATED",
+                    "{}: stdout={} stderr={}".format(route, proc.stdout, proc.stderr))
+                self.assertTrue(summary.get("containment_violation"), route)
+                invocations = [r for r in records if r.get("kind") == "invocation"]
+                self.assertEqual([r["status"] for r in invocations], ["FAIL"], route)
+                self.assertNotEqual(proc.returncode, 0, route)
 
 
 class SandboxRuntimeControls(RuntimeCase):
