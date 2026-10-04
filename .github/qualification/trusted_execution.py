@@ -104,44 +104,11 @@ DEFAULT_TRUSTED_ARGLINE = [
 #: These are globs, matched with real glob semantics.
 TEST_INCLUDE_PATTERNS = ("Test*.java", "*Test.java", "*Tests.java", "*TestCase.java")
 
-# D24/#528: source tests that TestNG 7 cannot currently discover because their
-# PowerMockTestCase ancestry depends on the removed IObjectFactory API.  They are
-# source-policy obligations, not part of the executable TestNG dry-run count.
-# A class automatically leaves this gap when the trusted comparison base really
-# executes it; D17 never turns this list into PASS credit.
-D24_FRAMEWORK_BLOCKED_CLASSES = (
-    "forge.card.CardDbCardMockTestCase",
-    "forge.card.CardDbLazyCardLoadingCardMockTestCase",
-    "forge.card.CardDbPerformanceTests",
-    "forge.card.CardDbWithNoImageCardDbMockTestCase",
-    "forge.card.CardEditionCollectionCardMockTestCase",
-    "forge.deck.DeckRecognizerTest",
-    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103",
-    "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
-)
-D24_FRAMEWORK_BLOCKER_BASES = (
-    "forge.card.CardMockTestCase",
-    "forge.gamesimulationtests.BaseGameSimulationTest",
-)
-
-# D20/#501 read-only inventory: explicit class-level disabled source debt is a
-# separate evidence class from D24 framework NOT_RUN and from runtime stress
-# skips.  It is included only while the class exists in the trusted source tree
-# and remains absent from the executable dry-run surface.
-EXPLICIT_DISABLED_SOURCE_CLASSES = (
-    "forge.BoosterDraft1Test",
-    "forge.BoosterDraftTest",
-    "forge.GuiDownloadPicturesLQTest",
-    "forge.GuiDownloadSetPicturesLQTest",
-    "forge.PanelTest",
-    "forge.RunTest",
-    "forge.deck.generate.Generate2ColorDeckTest",
-    "forge.deck.generate.Generate3ColorDeckTest",
-    "forge.deck.generate.Generate5ColorDeckTest",
-    "forge.gui.ListChooserTest",
-    "forge.gui.game.CardDetailPanelTest",
-    "forge.model.FModelTest",
-)
+#: D20 is now canonical for named known-NOT_RUN categories. D17 still
+#: independently derives a generic source-level @Test gap, so this baseline can
+#: never grant PASS by omission.
+D20_KNOWN_NOT_RUN_PATH = ".github/ci/known-not-run.json"
+D20_KNOWN_NOT_RUN_SCHEMA = "forge.known-not-run/2"
 
 D22_DISABLED_CLASS = "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
 D22_DISABLED_METHOD = "test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses"
@@ -408,6 +375,51 @@ def _source_test_classes(repo: Path, base: str, modules) -> set:
     return found
 
 
+def _git_blob_bytes(repo: Path, spec: str) -> bytes:
+    proc = subprocess.run(
+        ["git", "show", spec], cwd=str(repo), capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise ExecutionError(
+            "git show {} failed: {}".format(
+                spec, proc.stderr.decode("utf-8", "replace").strip()))
+    return proc.stdout
+
+
+def _source_path_for_class(repo: Path, base: str, modules, class_name: str) -> "str | None":
+    suffix = class_name.replace(".", "/") + ".java"
+    for module in modules:
+        path = "{}/src/test/java/{}".format(module, suffix)
+        proc = subprocess.run(
+            ["git", "cat-file", "-e", "{}:{}".format(base, path)],
+            cwd=str(repo), capture_output=True, check=False)
+        if proc.returncode == 0:
+            return path
+    return None
+
+
+def _d20_known_not_run(repo: Path, base: str) -> dict:
+    try:
+        raw = _git_blob_bytes(repo, "{}:{}".format(base, D20_KNOWN_NOT_RUN_PATH))
+        data = json.loads(raw.decode("utf-8"))
+    except (ExecutionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ExecutionError("trusted D20 known-NOT_RUN baseline unavailable: {}".format(exc))
+    if data.get("schema") != D20_KNOWN_NOT_RUN_SCHEMA:
+        raise ExecutionError(
+            "trusted D20 known-NOT_RUN schema is {!r}, expected {!r}".format(
+                data.get("schema"), D20_KNOWN_NOT_RUN_SCHEMA))
+    for key in ("source_test_classes_not_observed", "framework_blockers"):
+        if not isinstance(data.get(key), list) or not all(
+                isinstance(item, str) and item for item in data[key]):
+            raise ExecutionError("trusted D20 baseline has invalid {}".format(key))
+    disabled = data.get("intentionally_disabled_source_classes")
+    if not isinstance(disabled, dict) or not all(
+            isinstance(name, str) and isinstance(digest, str)
+            and re.fullmatch(r"[0-9a-f]{64}", digest)
+            for name, digest in disabled.items()):
+        raise ExecutionError("trusted D20 baseline has invalid disabled-source hashes")
+    return data
+
+
 def _source_for_class(repo: Path, base: str, modules, class_name: str) -> "str | None":
     suffix = class_name.replace(".", "/") + ".java"
     for module in modules:
@@ -565,14 +577,38 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
         name for entry in surface["modules"].values() for name in entry.get("classes", [])
     }
     source_classes = _source_test_classes(trusted_repo, base, modules)
+    d20 = _d20_known_not_run(trusted_repo, base)
+
     framework_not_run = sorted(
-        name for name in D24_FRAMEWORK_BLOCKED_CLASSES
+        name for name in d20["source_test_classes_not_observed"]
         if name in source_classes and name not in executable
     )
-    explicit_disabled = sorted(
-        name for name in EXPLICIT_DISABLED_SOURCE_CLASSES
-        if name in source_classes and name not in executable
+    framework_blockers = sorted(
+        name for name in d20["framework_blockers"] if name in source_classes
     )
+
+    disabled_hashes = d20["intentionally_disabled_source_classes"]
+    explicit_disabled = []
+    d20_baseline_drift = []
+    for name, expected_hash in sorted(disabled_hashes.items()):
+        path = _source_path_for_class(trusted_repo, base, modules, name)
+        if path is None:
+            d20_baseline_drift.append({
+                "class": name, "problem": "disabled baseline source missing"})
+            continue
+        actual_hash = hashlib.sha256(
+            _git_blob_bytes(trusted_repo, "{}:{}".format(base, path))).hexdigest()
+        if actual_hash != expected_hash:
+            d20_baseline_drift.append({
+                "class": name, "problem": "disabled source hash drift",
+                "expected_sha256": expected_hash, "actual_sha256": actual_hash,
+            })
+        if name in executable:
+            d20_baseline_drift.append({
+                "class": name, "problem": "disabled baseline class is now executable"})
+        else:
+            explicit_disabled.append(name)
+
     d22_disabled = []
     if _d22_disabled_method_present(trusted_repo, base, modules):
         d22_disabled.append(D22_DISABLED_CLASS + "#" + D22_DISABLED_METHOD)
@@ -586,17 +622,13 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
     )
     d24_inventory = {
         name: all_source_inventory.get(name, {"source_present": False})
-        for name in (
-            framework_not_run + [
-                item for item in D24_FRAMEWORK_BLOCKER_BASES if item in source_classes
-            ]
-        )
+        for name in (framework_not_run + framework_blockers)
     }
     surface["coverage_gaps"] = {
         "d24_framework_not_run_classes": framework_not_run,
-        "d24_framework_blocker_bases": [
-            name for name in D24_FRAMEWORK_BLOCKER_BASES if name in source_classes
-        ],
+        "d24_framework_blocker_bases": framework_blockers,
+        "d20_known_not_run_schema": d20.get("schema"),
+        "d20_baseline_drift": d20_baseline_drift,
         "source_test_obligation_classes_not_executed": source_test_obligations_not_executed,
         "source_test_annotation_inventory": {
             name: all_source_inventory[name]
@@ -614,6 +646,7 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
     surface["whole_reactor_coverage_complete"] = not (
         source_test_obligations_not_executed
         or framework_not_run or explicit_disabled or d22_disabled
+        or d20_baseline_drift
     )
     return surface
 
