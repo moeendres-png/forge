@@ -463,6 +463,25 @@ def derive_verdict(
             identity, launched_as, (integrity or {}).get("user") if isinstance(integrity, dict) else None
         ),
     )
+    build_identity = manifest.get("candidate_build_identity")
+    integrity_users = (integrity or {}).get("users") if isinstance(integrity, dict) else None
+    build_execution_separated = (
+        isinstance(build_identity, str) and bool(build_identity)
+        and isinstance(identity, str) and bool(identity)
+        and build_identity != identity
+        and build_identity not in TRUSTED_IDENTITIES
+        and identity not in TRUSTED_IDENTITIES
+        and manifest.get("build_execution_identity_separated") is True
+        and (manifest.get("candidate_build") or {}).get("user") in (None, build_identity)
+        and (not isinstance(integrity_users, list)
+             or sorted(set(integrity_users)) == sorted({build_identity, identity}))
+    )
+    signal(
+        "build_and_execution_identities_separated",
+        build_execution_separated,
+        "build={!r} execute={!r} integrity_users={!r}".format(
+            build_identity, identity, integrity_users),
+    )
 
     # --- 11. Trusted state integrity held across every candidate execution -- #
     integrity_status = integrity.get("status") if isinstance(integrity, dict) else None
@@ -663,6 +682,11 @@ def derive_verdict(
     elif not by_name["candidate_executed_as_sandbox_account"]["satisfied"]:
         verdict, reason = FAIL, (
             "candidate code was not shown to run as the separate sandbox account"
+        )
+    elif not by_name["build_and_execution_identities_separated"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "candidate Maven/build code and hostile production bytecode were not proven "
+            "to run under distinct untrusted OS identities"
         )
     elif not by_name["trusted_state_integrity"]["satisfied"]:
         verdict, reason = UNKNOWN, (
