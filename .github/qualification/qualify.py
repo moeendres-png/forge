@@ -915,8 +915,13 @@ def build_evidence(
             "verdict_read_from_candidate": False,
             "candidate_build_artifacts_used_as_evidence": False,
             "candidate_reports_read_for_credit": False,
-            "execution_observed_by": manifest.get("witness_class"),
-            "execution_observed_from": "trusted listener compiled from the trusted default branch",
+            "execution_observed_by": manifest.get("receipt_authority"),
+            "execution_observed_from": (
+                "external trusted parent observes contained child OS exit and writes receipt"
+            ),
+            "child_counter_class": manifest.get("child_counter_class"),
+            "candidate_jvm_receipt_credentials": manifest.get("candidate_jvm_receipt_credentials"),
+            "receipt_run_id": manifest.get("receipt_run_id"),
             "candidate_execution_identity": manifest.get("candidate_execution_identity"),
             "test_bytecode_origin": manifest.get("test_bytecode_origin"),
             "candidate_test_sources_used_for_credit": manifest.get("candidate_test_sources_used_for_credit"),
@@ -929,8 +934,9 @@ def build_evidence(
             "note": (
                 "no Surefire/TestNG report, generated, copied, renamed or committed "
                 "candidate artifact is read for any qualification signal; candidate-owned "
-                "test bodies are not executed for credit; trusted comparison-base tests exercise "
-                "candidate production bytecode only behind the required containment boundary"
+                "test bodies are not executed for credit; the candidate JVM receives no receipt "
+                "secret/nonce/evidence handle; trusted comparison-base tests exercise candidate "
+                "production bytecode behind containment and the external parent owns credited receipts"
             ),
         },
         "repository": lock.get("repository"),
