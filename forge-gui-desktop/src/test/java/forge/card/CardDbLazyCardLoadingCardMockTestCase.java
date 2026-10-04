@@ -25,6 +25,7 @@ public class CardDbLazyCardLoadingCardMockTestCase extends CardMockTestCase {
     @Override
     protected void initializeStaticData() {
         StaticData data = CardDatabaseHelper.getStaticDataToPopulateOtherMocks(getClass(), true);
+        CardDatabaseHelper.resetForTestMethod(data);
         setMagicDb(data);
     }
 
