@@ -366,6 +366,45 @@ def _source_test_classes(repo: Path, base: str, modules) -> set:
     return found
 
 
+def _source_for_class(repo: Path, base: str, modules, class_name: str) -> "str | None":
+    suffix = class_name.replace(".", "/") + ".java"
+    for module in modules:
+        path = "{}/src/test/java/{}".format(module, suffix)
+        try:
+            return git(repo, "show", "{}:{}".format(base, path))
+        except ExecutionError:
+            continue
+    return None
+
+
+def _testng_annotation_inventory(repo: Path, base: str, modules, classes) -> dict:
+    """Transparent source-level obligations for framework-undiscoverable classes.
+
+    This is not substituted for real TestNG execution.  It records the trusted
+    source's method-level @Test annotations so NOT_RUN debt cannot disappear
+    behind the executable dry-run denominator.
+    """
+    inventory = {}
+    for class_name in sorted(classes):
+        source = _source_for_class(repo, base, modules, class_name)
+        if source is None:
+            inventory[class_name] = {"source_present": False}
+            continue
+        annotations = list(re.finditer(r"@Test\b(?:\s*\((.*?)\))?", source, re.S))
+        disabled = 0
+        for match in annotations:
+            args = match.group(1) or ""
+            if re.search(r"\benabled\s*=\s*false\b", args):
+                disabled += 1
+        inventory[class_name] = {
+            "source_present": True,
+            "test_annotations": len(annotations),
+            "explicitly_disabled_annotations": disabled,
+            "enabled_source_methods": len(annotations) - disabled,
+        }
+    return inventory
+
+
 def _d22_disabled_method_present(repo: Path, base: str, modules) -> bool:
     suffix = D22_DISABLED_CLASS.replace(".", "/") + ".java"
     for module in modules:
@@ -433,11 +472,22 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
     d22_disabled = []
     if _d22_disabled_method_present(trusted_repo, base, modules):
         d22_disabled.append(D22_DISABLED_CLASS + "#" + D22_DISABLED_METHOD)
+    d24_inventory = _testng_annotation_inventory(
+        trusted_repo, base, modules,
+        framework_not_run + [
+            name for name in D24_FRAMEWORK_BLOCKER_BASES if name in source_classes
+        ],
+    )
     surface["coverage_gaps"] = {
         "d24_framework_not_run_classes": framework_not_run,
         "d24_framework_blocker_bases": [
             name for name in D24_FRAMEWORK_BLOCKER_BASES if name in source_classes
         ],
+        "d24_framework_not_run_source_inventory": d24_inventory,
+        "d24_enabled_source_methods_not_run": sum(
+            int(item.get("enabled_source_methods", 0))
+            for item in d24_inventory.values() if isinstance(item, dict)
+        ),
         "explicitly_disabled_source_classes": explicit_disabled,
         "d22_disabled_rules_tests": d22_disabled,
         "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
