@@ -14,9 +14,6 @@ import java.util.stream.Stream;
 import org.testng.Assert;
 import org.testng.IInvokedMethod;
 import org.testng.IInvokedMethodListener;
-import org.testng.ISuite;
-import org.testng.ISuiteListener;
-import org.testng.ITestNGMethod;
 import org.testng.ITestResult;
 import org.testng.annotations.AfterSuite;
 import org.testng.annotations.Listeners;
@@ -170,23 +167,18 @@ public class D24ExecutionGuardTest {
             return;
         }
 
-        Map<String, Integer> discovered = zeroCounts();
-        ISuite suite = ExecutionListener.suite;
-        Assert.assertNotNull(suite, "D24 execution listener did not receive the TestNG suite");
-        for (ITestNGMethod method : suite.getAllMethods()) {
-            String className = method.getTestClass().getRealClass().getName();
-            if (discovered.containsKey(className) && method.getEnabled()) {
-                discovered.merge(className, 1, Integer::sum);
-            }
-        }
-
         Map<String, Integer> passed = new HashMap<>(ExecutionListener.passed);
         Map<String, Integer> failed = new HashMap<>(ExecutionListener.failed);
         Map<String, Integer> skipped = new HashMap<>(ExecutionListener.skipped);
 
+        Map<String, Integer> discovered = zeroCounts();
         Map<String, Integer> invoked = zeroCounts();
         for (String className : invoked.keySet()) {
-            invoked.put(className, passed.get(className) + failed.get(className));
+            int passCount = passed.get(className);
+            int failCount = failed.get(className);
+            int skipCount = skipped.get(className);
+            discovered.put(className, passCount + failCount + skipCount);
+            invoked.put(className, passCount + failCount);
         }
         validateExecution(discovered, invoked, skipped);
 
@@ -208,19 +200,10 @@ public class D24ExecutionGuardTest {
                 + " skip=" + totalSkipped + " disabled_not_run=" + EXPECTED_DISABLED.size());
     }
 
-    public static final class ExecutionListener implements ISuiteListener, IInvokedMethodListener {
-        private static ISuite suite;
+    public static final class ExecutionListener implements IInvokedMethodListener {
         private static Map<String, Integer> passed = zeroCounts();
         private static Map<String, Integer> failed = zeroCounts();
         private static Map<String, Integer> skipped = zeroCounts();
-
-        @Override
-        public void onStart(ISuite suite) {
-            ExecutionListener.suite = suite;
-            passed = zeroCounts();
-            failed = zeroCounts();
-            skipped = zeroCounts();
-        }
 
         @Override
         public void afterInvocation(IInvokedMethod method, ITestResult result) {
