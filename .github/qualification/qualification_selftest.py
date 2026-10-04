@@ -1792,6 +1792,15 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("candidate_code_entries", params)
         self.assertIn("trusted_dependency_entries", params)
 
+    def test_candidate_loader_parent_cannot_expose_trusted_dependency_bridge(self) -> None:
+        source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
+                  / "Containment.java").read_text()
+        block = source.split("static final class CandidateCodeLoader", 1)[1].split(
+            "static final class TrustedTestLoader", 1)[0]
+        self.assertIn("super(urls, ClassLoader.getPlatformClassLoader());", block)
+        self.assertIn("this.dependencies = dependencies;", block)
+        self.assertNotIn("super(urls, dependencies);", block)
+
     def test_candidate_bytecode_is_never_on_the_system_classpath(self) -> None:
         import inspect
         source = inspect.getsource(trusted_execution.execute_module)
