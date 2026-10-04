@@ -32,6 +32,8 @@ public final class BridgeProtocol {
     public static final String START_GAME = "start_game";
     public static final String GET_GAME_STATE = "get_game_state";
     public static final String GET_LEGAL_ACTIONS = "get_legal_actions";
+    /** Orchestration channel (#441 decision (c)); refused without a launch key. */
+    public static final String GET_CONSTRUCTED_STATE = "get_constructed_state";
     public static final String SUBMIT_ACTION = "submit_action";
     public static final String PASS_PRIORITY = "pass_priority";
     public static final String SELECT_TARGETS = "select_targets";
