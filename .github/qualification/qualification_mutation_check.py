@@ -335,6 +335,13 @@ MUTATIONS = [
         "candidate code could replace Maven plugin/dependency jars before later build phases",
     ),
     Mutation(
+        "allow-candidate-annotation-processors",
+        "trusted_execution.py",
+        '             "-Dmaven.compiler.proc=none",\n',
+        '',
+        "candidate source could execute as an annotation processor and synthesize downstream bytecode",
+    ),
+    Mutation(
         "allow-network-resolution-in-candidate-build",
         "trusted_execution.py",
         '             [args.mvn, "-o", "-B", "-q",',
