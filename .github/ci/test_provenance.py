@@ -70,9 +70,9 @@ def source_identity(repo, expected_sha=None):
             )
         )
     changed = git(repo, 'diff', '--name-only', 'HEAD', '--')
-    untracked_tests = git(repo, 'ls-files', '--others', '--exclude-standard', '--', '**/src/test/java/**')
-    if changed or untracked_tests:
-        errors.append('execution source differs from declared Git TREE: '+changed+' '+untracked_tests)
+    untracked = git(repo, 'ls-files', '--others', '--exclude-standard')
+    if changed or untracked:
+        errors.append('execution source differs from declared Git TREE: '+changed+' '+untracked)
     return {"sha": sha, "tree": tree, "errors": errors}
 
 
@@ -704,6 +704,14 @@ class Controls(unittest.TestCase):
         self.assertTrue(self.orig(self.root)['errors'])
         subprocess.run(['git','-C',str(self.root),'checkout','--','module/src/test/java/example/RealTest.java'],check=True)
         injected=self.root/'module/src/test/java/example/Injected.java';injected.write_text('package example; public class Injected {}\\n')
+        self.assertTrue(self.orig(self.root)['errors'])
+        injected.unlink()
+        main=self.root/'module/src/main/java/example/InjectedRuntime.java';main.parent.mkdir(parents=True,exist_ok=True)
+        main.write_text('package example; public class InjectedRuntime {}\\n')
+        self.assertTrue(self.orig(self.root)['errors'])
+        main.unlink()
+        resource=self.root/'module/src/test/resources/injected.properties';resource.parent.mkdir(parents=True,exist_ok=True)
+        resource.write_text('outside_tree=true\\n')
         self.assertTrue(self.orig(self.root)['errors'])
 
     def test_missing_exit_receipt_is_red(self):
