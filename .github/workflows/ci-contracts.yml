@@ -1,0 +1,35 @@
+name: CI contracts
+
+# Static contracts over this repository's own workflow definitions (D18 #499).
+# Standard-library Python only; no dependency is installed.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+      - '.github/ci/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/ci/**'
+
+# D18 (#499): a newer head of the same pull request supersedes this run, so
+# the older run is cancelled. Every other event (a push to master or to a
+# qualification branch, a tag, workflow_dispatch, schedule) gets a group of
+# its own and is never cancelled. Contract: .github/ci/test_concurrency_contract.py
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
+        with:
+          persist-credentials: false
+      - name: Concurrency contract
+        run: python3 -I .github/ci/test_concurrency_contract.py -v
