@@ -318,11 +318,11 @@ jobs:
             "$EVIDENCE_DIR/SANDBOX_PREPARE.json" \
             "$RUNNER_TEMP"/d17-testng/*.jar
 
-      # The orchestrator compiles the trusted driver/listener, builds candidate
-      # production code as the sandbox account, then compiles TEST BODIES ONLY
-      # FROM THE TRUSTED COMPARISON BASE against that candidate production
-      # classpath. Candidate production bytecode runs behind the mandatory
-      # containment loader/SecurityManager boundary.
+      # The trusted parent compiles a receiptless child harness, builds candidate
+      # production code as the build UID, and compiles TEST BODIES ONLY FROM THE
+      # TRUSTED COMPARISON BASE. Candidate bytecode runs behind containment as a
+      # second UID. The child receives no receipt nonce/key/evidence handle; the
+      # parent creates credited evidence only after observing the child OS exit.
       - name: Run trusted witnessed execution as the sandbox account
         id: execute
         shell: /usr/bin/bash --noprofile --norc {0}
@@ -337,6 +337,10 @@ jobs:
           set -uo pipefail
           testng=()
           for jar in "$RUNNER_TEMP"/d17-testng/*.jar; do testng+=(--trusted-testng "$jar"); done
+          out_of_band=()
+          for class in $QUALIFY_OUT_OF_BAND_CLASSES; do
+            out_of_band+=(--out-of-band-test-class "$class")
+          done
           /usr/bin/python3 -I -S -B .github/qualification/trusted_execution.py execute \
             --trusted-repo . \
             --evidence-dir "$EVIDENCE_DIR" \
@@ -355,7 +359,8 @@ jobs:
             --java "$D17_TRUSTED_JDK/bin/java" \
             --xvfb-run "/usr/bin/xvfb-run -a" \
             --trusted-maven-repo "$HOME/.m2/repository" \
-            "${testng[@]}"
+            "${testng[@]}" \
+            "${out_of_band[@]}"
           rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           seal_files=("$EVIDENCE_DIR/execution-manifest.json")
