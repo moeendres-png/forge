@@ -327,6 +327,14 @@ MUTATIONS = [
         "prepare would probe and resolve tools on the inherited PATH",
     ),
     Mutation(
+        "compile-trusted-tests-against-candidate-writable-classpath",
+        "trusted_execution.py",
+        '                + scans[module]["trusted_dependency_compile_entries"]\n'
+        '                + scans[module]["candidate_compile_entries"]\n',
+        '                + entries\n',
+        "trusted javac would parse candidate-build-UID-writable inputs before the freeze boundary",
+    ),
+    Mutation(
         "limit-candidate-production-to-test-bearing-modules",
         "trusted_execution.py",
         "    reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)\n",
