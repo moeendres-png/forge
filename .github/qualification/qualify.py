@@ -335,6 +335,16 @@ def derive_verdict(
     coverage_gaps = surface.get("coverage_gaps")
     coverage_gaps = coverage_gaps if isinstance(coverage_gaps, dict) else {}
     framework_not_run = list(coverage_gaps.get("d24_framework_not_run_classes") or [])
+    d24_inventory = coverage_gaps.get("d24_framework_not_run_source_inventory")
+    d24_inventory = d24_inventory if isinstance(d24_inventory, dict) else {}
+    d24_enabled_source_methods_not_run = coverage_gaps.get(
+        "d24_enabled_source_methods_not_run")
+    if not isinstance(d24_enabled_source_methods_not_run, int) or isinstance(
+            d24_enabled_source_methods_not_run, bool):
+        d24_enabled_source_methods_not_run = sum(
+            int(item.get("enabled_source_methods", 0))
+            for item in d24_inventory.values() if isinstance(item, dict)
+        )
     explicit_disabled = list(coverage_gaps.get("explicitly_disabled_source_classes") or [])
     d22_disabled = list(coverage_gaps.get("d22_disabled_rules_tests") or [])
     coverage_complete = (
@@ -344,8 +354,10 @@ def derive_verdict(
     signal(
         "whole_reactor_coverage_complete",
         coverage_complete,
-        "D24_NOT_RUN={} explicit_disabled={} D22_disabled={}".format(
-            framework_not_run, explicit_disabled, d22_disabled),
+        "D24_NOT_RUN={} D24_enabled_source_methods_not_run={} explicit_disabled={} "
+        "D22_disabled={}".format(
+            framework_not_run, d24_enabled_source_methods_not_run,
+            explicit_disabled, d22_disabled),
     )
 
     # --- 4. Trusted launches completed -------------------------------------- #
@@ -680,6 +692,8 @@ def derive_verdict(
         "coverage": {
             "whole_reactor_complete": coverage_complete,
             "d24_framework_not_run_classes": framework_not_run,
+            "d24_framework_not_run_source_inventory": d24_inventory,
+            "d24_enabled_source_methods_not_run": d24_enabled_source_methods_not_run,
             "explicitly_disabled_source_classes": explicit_disabled,
             "d22_disabled_rules_tests": d22_disabled,
         },
