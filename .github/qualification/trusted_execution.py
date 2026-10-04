@@ -377,12 +377,59 @@ def _source_for_class(repo: Path, base: str, modules, class_name: str) -> "str |
     return None
 
 
-def _testng_annotation_inventory(repo: Path, base: str, modules, classes) -> dict:
-    """Transparent source-level obligations for framework-undiscoverable classes.
+def _java_code_only(source: str) -> str:
+    """Blank comments and string/char literals while preserving code/newlines.
 
-    This is not substituted for real TestNG execution.  It records the trusted
-    source's method-level @Test annotations so NOT_RUN debt cannot disappear
-    behind the executable dry-run denominator.
+    Source-level TestNG annotation inventory is evidence, so comment examples or
+    string literals containing @Test must not create synthetic obligations.
+    """
+    out = []
+    i, state = 0, "code"
+    while i < len(source):
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                out.extend("  "); i += 2; state = "line"; continue
+            if ch == "/" and nxt == "*":
+                out.extend("  "); i += 2; state = "block"; continue
+            if ch == '"':
+                out.append(" "); i += 1; state = "string"; continue
+            if ch == "'":
+                out.append(" "); i += 1; state = "char"; continue
+            out.append(ch); i += 1; continue
+        if state == "line":
+            if ch == "\n":
+                out.append("\n"); state = "code"
+            else:
+                out.append(" ")
+            i += 1; continue
+        if state == "block":
+            if ch == "*" and nxt == "/":
+                out.extend("  "); i += 2; state = "code"; continue
+            out.append("\n" if ch == "\n" else " "); i += 1; continue
+        if state in ("string", "char"):
+            quote = '"' if state == "string" else "'"
+            if ch == "\\":
+                out.append(" ")
+                if i + 1 < len(source):
+                    out.append("\n" if source[i + 1] == "\n" else " ")
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if ch == quote:
+                out.append(" "); i += 1; state = "code"; continue
+            out.append("\n" if ch == "\n" else " "); i += 1
+    return "".join(out)
+
+
+def _testng_annotation_inventory(repo: Path, base: str, modules, classes) -> dict:
+    """Transparent source-level obligations for TestNG test source.
+
+    This is not substituted for real execution. It records trusted-source @Test
+    annotations so silently undiscovered test classes cannot disappear behind
+    the executable dry-run denominator.
     """
     inventory = {}
     for class_name in sorted(classes):
@@ -390,7 +437,8 @@ def _testng_annotation_inventory(repo: Path, base: str, modules, classes) -> dic
         if source is None:
             inventory[class_name] = {"source_present": False}
             continue
-        annotations = list(re.finditer(r"@Test\b(?:\s*\((.*?)\))?", source, re.S))
+        code = _java_code_only(source)
+        annotations = list(re.finditer(r"@Test\b(?:\s*\((.*?)\))?", code, re.S))
         disabled = 0
         for match in annotations:
             args = match.group(1) or ""
@@ -472,17 +520,32 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
     d22_disabled = []
     if _d22_disabled_method_present(trusted_repo, base, modules):
         d22_disabled.append(D22_DISABLED_CLASS + "#" + D22_DISABLED_METHOD)
-    d24_inventory = _testng_annotation_inventory(
-        trusted_repo, base, modules,
-        framework_not_run + [
-            name for name in D24_FRAMEWORK_BLOCKER_BASES if name in source_classes
-        ],
+    all_source_inventory = _testng_annotation_inventory(
+        trusted_repo, base, modules, source_classes)
+    source_test_obligations_not_executed = sorted(
+        name for name, item in all_source_inventory.items()
+        if isinstance(item, dict)
+        and int(item.get("test_annotations", 0)) > 0
+        and name not in executable
     )
+    d24_inventory = {
+        name: all_source_inventory.get(name, {"source_present": False})
+        for name in (
+            framework_not_run + [
+                item for item in D24_FRAMEWORK_BLOCKER_BASES if item in source_classes
+            ]
+        )
+    }
     surface["coverage_gaps"] = {
         "d24_framework_not_run_classes": framework_not_run,
         "d24_framework_blocker_bases": [
             name for name in D24_FRAMEWORK_BLOCKER_BASES if name in source_classes
         ],
+        "source_test_obligation_classes_not_executed": source_test_obligations_not_executed,
+        "source_test_annotation_inventory": {
+            name: all_source_inventory[name]
+            for name in source_test_obligations_not_executed
+        },
         "d24_framework_not_run_source_inventory": d24_inventory,
         "d24_enabled_source_methods_not_run": sum(
             int(item.get("enabled_source_methods", 0))
@@ -493,7 +556,8 @@ def build_required_surface(trusted_repo: Path, base: str, modules, java, argline
         "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
     }
     surface["whole_reactor_coverage_complete"] = not (
-        framework_not_run or explicit_disabled or d22_disabled
+        source_test_obligations_not_executed
+        or framework_not_run or explicit_disabled or d22_disabled
     )
     return surface
 
