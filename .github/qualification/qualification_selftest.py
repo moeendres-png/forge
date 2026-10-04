@@ -1833,6 +1833,15 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("candidate_code_entries", params)
         self.assertIn("trusted_dependency_entries", params)
 
+    def test_runtime_testng_allowlist_does_not_open_all_annotations(self) -> None:
+        source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
+                  / "Containment.java").read_text()
+        block = source.split("private static boolean allowedTestNg", 1)[1].split(
+            "private static boolean isPlatform", 1)[0]
+        self.assertNotIn('name.startsWith("org.testng.annotations.")', block)
+        self.assertIn('name.equals("org.testng.annotations.Test")', block)
+        self.assertNotIn('name.equals("org.testng.annotations.Listeners")', block)
+
     def test_candidate_loader_parent_cannot_expose_trusted_dependency_bridge(self) -> None:
         source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
                   / "Containment.java").read_text()
