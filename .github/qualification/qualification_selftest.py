@@ -1216,17 +1216,17 @@ class RedVerdictDerivation(EvidenceCase):
 
 
 class RedTrustDomain(EvidenceCase):
-    """Coordinator finding at 17d42d7e: the candidate shared the validator's identity.
+    """Receipt authority, identity separation and final integrity controls.
 
-    Credit now requires an orchestrator-authenticated ledger copy, candidate
-    execution as the separate sandbox account, and a verified INTEGRITY.json.
+    Credit requires a trusted-parent-owned receipt copy, candidate execution as
+    the separate sandbox account, and a verified INTEGRITY.json.
     """
 
     def test_an_honest_but_unauthenticated_ledger_is_not_credit(self) -> None:
         self.honest()
         evidence = self.verdict(authenticated=False)
         self.assertNotPass(evidence, qualify.FAIL)
-        self.assertIn("orchestrator-authenticated", evidence["reason"])
+        self.assertIn("trusted parent-owned", evidence["reason"])
 
     def test_a_ledger_rewritten_after_authentication_is_not_credit(self) -> None:
         self.honest()
@@ -1236,7 +1236,8 @@ class RedTrustDomain(EvidenceCase):
         path = self.witness_dir / "forge-game.witness.jsonl"
         records = honest_invocations("forge-game", 6)
         lines = [json.dumps({"kind": "header", "schema": qualify.WITNESS_SCHEMA,
-                             "module": "forge-game", "nonce": NONCE}, sort_keys=True)]
+                             "module": "forge-game", "nonce": NONCE,
+                             "authority": "trusted_parent_os_process"}, sort_keys=True)]
         for index, (klass, method, status) in enumerate(records):
             lines.append(json.dumps({"kind": "invocation", "seq": index, "class": klass, "method": method,
                                      "status": status, "invoked": status != "SKIP", "context": "TestNG", "thread": "TestNG-0"},
@@ -1248,7 +1249,8 @@ class RedTrustDomain(EvidenceCase):
                                  "per_class_total": per, "skip_classes": {}, "fail_classes": {},
                                  "containment": qualify.CONTAINMENT_ENFORCED,
                                  "containment_violation": "null",
-                                 "last_seq": len(records) - 1}, sort_keys=True))
+                                 "last_seq": len(records) - 1,
+                                 "authority": "trusted_parent_os_process"}, sort_keys=True))
         path.write_text("\n".join(lines) + "\n")
         evidence = self.verdict(manifest=manifest, authenticated=False)
         self.assertNotPass(evidence, qualify.FAIL)
