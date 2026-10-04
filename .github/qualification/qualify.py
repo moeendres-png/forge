@@ -58,9 +58,9 @@ import json
 import sys
 from pathlib import Path
 
-REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/1"
-EXECUTION_MANIFEST_SCHEMA = "forge.candidate-qualification.execution-manifest/1"
-WITNESS_SCHEMA = "forge.d17.witness/1"
+REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/2"
+EXECUTION_MANIFEST_SCHEMA = "forge.candidate-qualification.execution-manifest/2"
+WITNESS_SCHEMA = "forge.d17.witness/2"
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -82,6 +82,8 @@ TESTNG_LAUNCH_COMPLETED_CODES = (0, 2)
 
 #: The orchestrator's verdict on a ledger's HMAC chain; nothing else is credit.
 LEDGER_AUTHENTICATED = "HMAC_CHAIN_VERIFIED"
+CONTAINMENT_ENFORCED = "SECURITY_MANAGER_ENFORCED"
+CONTAINMENT_UNAVAILABLE = "UNAVAILABLE"
 INTEGRITY_SCHEMA = "forge.candidate-qualification.integrity/1"
 #: Accounts that must never be the identity that executed candidate code.
 TRUSTED_IDENTITIES = ("root", "runner")
@@ -217,6 +219,9 @@ def read_witness(path: Path, module: str, nonce: str) -> dict:
         raise QualificationError("witness summary failure total disagrees with its records")
     if summary.get("skipped") != sum(per_class_skip.values()):
         raise QualificationError("witness summary skip total disagrees with its records")
+    containment = summary.get("containment")
+    if containment not in (CONTAINMENT_ENFORCED, "SECURITY_MANAGER_VIOLATED"):
+        raise QualificationError("witness summary has no valid hostile-bytecode containment state")
 
     return {
         "module": module,
@@ -228,6 +233,8 @@ def read_witness(path: Path, module: str, nonce: str) -> dict:
         "per_class_pass": per_class_pass,
         "per_class_skip": per_class_skip,
         "per_class_fail": per_class_fail,
+        "containment": containment,
+        "containment_violation": summary.get("containment_violation"),
         "summary_matches_records": True,
     }
 
@@ -292,6 +299,25 @@ def derive_verdict(
         "required_surface_non_empty",
         required_total > 0 and any(required_classes.values()),
         "{} required invocation(s) across {} module(s)".format(required_total, len(modules)),
+    )
+
+    # D24/D20/D22 source-policy obligations are distinct from the executable
+    # TestNG dry-run denominator.  Their presence means honest infrastructure
+    # may be valid, but whole-reactor test coverage is still only PARTIAL.
+    coverage_gaps = surface.get("coverage_gaps")
+    coverage_gaps = coverage_gaps if isinstance(coverage_gaps, dict) else {}
+    framework_not_run = list(coverage_gaps.get("d24_framework_not_run_classes") or [])
+    explicit_disabled = list(coverage_gaps.get("explicitly_disabled_source_classes") or [])
+    d22_disabled = list(coverage_gaps.get("d22_disabled_rules_tests") or [])
+    coverage_complete = (
+        surface.get("whole_reactor_coverage_complete") is True
+        and not framework_not_run and not explicit_disabled and not d22_disabled
+    )
+    signal(
+        "whole_reactor_coverage_complete",
+        coverage_complete,
+        "D24_NOT_RUN={} explicit_disabled={} D22_disabled={}".format(
+            framework_not_run, explicit_disabled, d22_disabled),
     )
 
     # --- 4. Trusted launches completed -------------------------------------- #
@@ -428,7 +454,31 @@ def derive_verdict(
         "unauthenticated ledgers: {}".format(json.dumps(unauthenticated, sort_keys=True) if unauthenticated else "none"),
     )
 
-    # --- 13. Required classes ran from trusted-compiled bytecode ------------ #
+    # --- 13. Hostile candidate bytecode containment ------------------------ #
+    containment_states = {}
+    for module in expected_modules:
+        launch = launch_entries.get(module) or {}
+        witness = witness_by_module.get(module) or {}
+        containment_states[module] = {
+            "manifest": launch.get("hostile_bytecode_containment"),
+            "witness": witness.get("containment"),
+        }
+    containment_unavailable = any(
+        state.get("manifest") == CONTAINMENT_UNAVAILABLE
+        for state in containment_states.values()
+    )
+    containment_ok = bool(containment_states) and all(
+        state.get("manifest") == CONTAINMENT_ENFORCED
+        and state.get("witness") == CONTAINMENT_ENFORCED
+        for state in containment_states.values()
+    )
+    signal(
+        "hostile_candidate_bytecode_contained",
+        containment_ok,
+        "states={}".format(json.dumps(containment_states, sort_keys=True)),
+    )
+
+    # --- 14. Required classes ran from trusted-compiled bytecode ------------ #
     # The trusted test directory precedes the candidate's classes on the launch
     # classpath, so a required class trusted javac did not produce would be
     # loaded from candidate-built bytecode (main output or a dependency).
@@ -457,7 +507,7 @@ def derive_verdict(
         ),
     )
 
-    # --- 14. The launch classpath was admitted before candidate code ran ----- #
+    # --- 15. The launch classpath was admitted before candidate code ran ----- #
     # Candidate-authored bytecode may not register a suite-wide TestNG listener,
     # hook or object factory, reach a test result, or touch the witness package;
     # a dependency jar must equal the trusted Maven repository's copy.
@@ -490,6 +540,11 @@ def derive_verdict(
 
     if integrity_status == "VIOLATION":
         verdict, reason = FAIL, "trusted state integrity was violated during candidate execution"
+    elif containment_unavailable:
+        verdict, reason = UNKNOWN, (
+            "hostile candidate bytecode containment is unavailable on this runtime; "
+            "uncontained execution receives no qualification credit"
+        )
     elif not by_name["candidate_identity_bound"]["satisfied"]:
         verdict, reason = FAIL, "candidate identity is not bound to the locked exact SHA/TREE"
     elif (isinstance(manifest.get("error"), str) and not compilation
@@ -546,6 +601,11 @@ def derive_verdict(
             "a credited witness ledger is not the orchestrator-authenticated copy; "
             "see witness_ledgers_authenticated"
         )
+    elif not by_name["hostile_candidate_bytecode_contained"]["satisfied"]:
+        verdict, reason = FAIL, (
+            "candidate production bytecode did not remain inside the trusted in-JVM "
+            "containment boundary; see hostile_candidate_bytecode_contained"
+        )
     elif not by_name["candidate_executed_as_sandbox_account"]["satisfied"]:
         verdict, reason = FAIL, (
             "candidate code was not shown to run as the separate sandbox account"
@@ -559,9 +619,15 @@ def derive_verdict(
             "the launch classpath was not admitted (missing compilation or admission record, "
             "or a dependency jar absent from the trusted repository); see launch_classpath_admitted"
         )
+    elif not by_name["whole_reactor_coverage_complete"]["satisfied"]:
+        verdict, reason = PARTIAL, (
+            "trusted execution is valid for the executable surface, but source-policy "
+            "obligations remain NOT_RUN/disabled (D24/D20/D22); full Forge test coverage "
+            "is not claimed"
+        )
     else:
         verdict, reason = PASS, (
-            "exact candidate SHA/TREE executed the whole trusted required surface "
+            "exact candidate SHA/TREE executed the complete trusted source-policy surface "
             "without failure"
         )
 
@@ -569,6 +635,17 @@ def derive_verdict(
         "verdict": verdict,
         "reason": reason,
         "signals": signals,
+        "coverage": {
+            "whole_reactor_complete": coverage_complete,
+            "d24_framework_not_run_classes": framework_not_run,
+            "explicitly_disabled_source_classes": explicit_disabled,
+            "d22_disabled_rules_tests": d22_disabled,
+        },
+        "containment": {
+            "required": True,
+            "states": containment_states,
+            "unavailable": containment_unavailable,
+        },
         "counts": {
             "observed_invocations": observed_total,
             "required_invocations": required_total,
