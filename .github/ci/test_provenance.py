@@ -712,9 +712,10 @@ class Controls(unittest.TestCase):
             '<testcase classname="example.RealTest" name="ambiguous" time="0.10"><skipped/><failure/></testcase>'
             '<testcase classname="example.RealTest" name="pass" time="0.15"/></testsuite>\\n'
         )
+        with self.assertRaisesRegex(ValueError, 'multiple terminal outcomes'):
+            parse_report(self.root, path)
         r,ok=self.run_collect(self.known());self.assertFalse(ok)
         self.assertEqual(FAIL,r['provenance_integrity'])
-        self.assertTrue(any('multiple terminal outcomes' in x for x in r['provenance_errors']))
 
     def test_source_disabled_debt_is_partial_hash_bound_and_not_exempt(self):
         self.java('example.RealTest');self.report('example.RealTest');self.java('example.DisabledTest')
