@@ -145,7 +145,9 @@ public abstract class CardMockTestCase {
     }
 
     protected void initializeStaticData() {
-        setMagicDb(CardDatabaseHelper.getStaticDataToPopulateOtherMocks(getClass()));
+        StaticData data = CardDatabaseHelper.getStaticDataToPopulateOtherMocks(getClass());
+        CardDatabaseHelper.resetForTestMethod(data);
+        setMagicDb(data);
     }
 
     protected final void setMagicDb(final StaticData data) {
