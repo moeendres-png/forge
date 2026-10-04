@@ -1698,6 +1698,20 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("candidate_code_entries", params)
         self.assertIn("trusted_dependency_entries", params)
 
+    def test_candidate_bytecode_is_never_on_the_system_classpath(self) -> None:
+        import inspect
+        source = inspect.getsource(trusted_execution.execute_module)
+        self.assertIn(
+            'full_cp = assemble_classpath(bundle / "witness", staged_testng)',
+            source,
+        )
+        self.assertNotIn(
+            'assemble_classpath(bundle / "witness", staged_testng + list(candidate_code_entries))',
+            source,
+        )
+        self.assertIn('--candidate-code', source)
+        self.assertIn('--trusted-dependency', source)
+
 
 class IntegrityRecordShape(EvidenceCase):
     """Review P2 at 63731d9f: qualify must accept the record sandbox.py verify really writes."""
