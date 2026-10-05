@@ -550,7 +550,10 @@ class PositiveExactShaPath(EvidenceCase):
         import copy
         self.honest()
         surface = copy.deepcopy(self.surface)
-        surface["whole_reactor_coverage_complete"] = False
+        # Keep the aggregate flag deliberately contradictory/green. The named
+        # source obligation itself must independently prevent PASS; otherwise a
+        # stale or forged aggregate could hide newly undiscovered trusted tests.
+        self.assertTrue(surface["whole_reactor_coverage_complete"])
         surface["coverage_gaps"]["source_test_obligation_classes_not_executed"] = [
             "pkg.HiddenCoverageTest"
         ]
@@ -614,7 +617,9 @@ class PositiveExactShaPath(EvidenceCase):
         import copy
         self.honest()
         surface = copy.deepcopy(self.surface)
-        surface["whole_reactor_coverage_complete"] = False
+        # The explicit method debt must independently prevent PASS even when
+        # the aggregate coverage bit is incorrectly still true.
+        self.assertTrue(surface["whole_reactor_coverage_complete"])
         surface["coverage_gaps"]["other_explicit_disabled_test_methods"] = [
             "forge.card.CardDbPerformanceTests#testBenchmark"
         ]
@@ -2175,6 +2180,14 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertNotIn("sensitiveProperty", check_key)
         self.assertIn("putIfAbsent(Object key, Object value)", guarded)
         self.assertIn("remove(Object key, Object value)", guarded)
+
+    def test_driver_cannot_ignore_testng_configuration_failure_status(self) -> None:
+        source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
+                  / "TrustedTestNGDriver.java").read_text()
+        self.assertIn(
+            'if (counter.failures() > 0 || (testng.getStatus() & 1) != 0) {',
+            source,
+        )
 
 
 class IntegrityRecordShape(EvidenceCase):
