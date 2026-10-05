@@ -2179,6 +2179,10 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn('loader == candidate || loader == dependencies', source)
         self.assertIn('deps.bindGuard(guard)', source)
         self.assertIn('dependency attempted to load trusted authority class', source)
+        dependency_loader = source.split("static final class DependencyLoader", 1)[1].split(
+            "static final class CandidateCodeLoader", 1)[0]
+        self.assertNotIn("ClassLoader trusted", dependency_loader)
+        self.assertNotIn("trusted.loadClass(", dependency_loader)
         self.assertIn('return CONTEXT_HOSTILE;', source)
         self.assertIn(
             'return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
