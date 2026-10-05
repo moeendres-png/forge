@@ -2188,7 +2188,7 @@ class FrozenLaunchClasspath(unittest.TestCase):
         for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
                       "/proc/thread-self/fd", "proc-self-mem-write",
                       "async_confused_deputy", "jdk-async-properties-deputy",
-                      "symlink-proc-alias", "sun-reflection-factory",
+                      "symlink-proc-alias", "sun-reflection-internals", "jdk-internal-unsafe",
                       "runtime_defined_bytecode_remains_in_hostile_candidate_domain"):
             self.assertIn(alias, runtime)
         guarded = source.split("static final class GuardedProperties", 1)[1].split(
