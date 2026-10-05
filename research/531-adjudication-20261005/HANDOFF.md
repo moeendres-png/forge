@@ -64,3 +64,47 @@ The first short-code-only repair770944 left two failures: accepted British
 That diagnostic run84/9 is not final after evidence. The parser now maps that
 already accepted spelling to the same existing COLORLESS enum; no assertions
 or grammar broadened. Five-method after/negative controls must rerun on this head.
+
+## Final adjudication (this branch head)
+
+All 32 census methods are now classified; none is left UNKNOWN and no
+expectation was copied from current output without a cited source.
+
+- Fixture defect (1 class of failures): CardMockTestCase now initializes
+  language/type data before the parallel card parse (above).
+- Product defects, fixed with red-before controls:
+  - DeckRecognizer short mana symbols and accepted `Colourless` (5 methods);
+  - CardEdition.UNKNOWN/USER built without code defaults (sentinel getters
+    dereferenced null; new control);
+  - DeckRecognizer rejected real database names/collector numbers
+    (`Continue?`, M19-185j, POR-57s, A-150e, a1_2007, 118†s, SLD star variants;
+    new database grammar control, original collector-number form kept first);
+  - CardDb.setPreferredArt stored the fallback print as the preferred art when
+    the requested art did not exist (setPreferredArtForCard red before the fix).
+- Upstream contract change, not oracle staleness: Forge 38da2046 (#8080) made
+  tryGetCard's documented fallback live; affected methods assert exactly that
+  fallback and every legacy-DB null assertion is kept.
+- Card-data evolution, each expectation cited at the test: FDN, SLC, PLST/MP2
+  codes, SOA, SLZ, PF26, SPG 128, PRM Island art fallback, derived missing-art
+  index, a real FDN date instead of 2023-09-31.
+
+D24ExecutionGuardTest denominators move 163/160 -> 165/162 for the two new
+controls (the guard caught them; nothing relaxed).
+
+Local validation (sandbox, C.UTF-8):
+- targeted CardDb*/DeckRecognizerTest/CardEditionCollection*: 257 tests,
+  0 failures on Java 17 (64 failing invocations before);
+- full `-pl forge-gui-desktop,forge-protocol2-bridge -am` under xvfb on
+  Java 21: 725 tests, 1 failure, 6 skipped. The failure is
+  NetworkPlayIntegrationTest.testServerStartAndStop (BindException on port
+  55556). It also fails in isolation, and an independent plain socket bind of
+  55556 fails in this sandbox: the port is held by the sandbox. The branch
+  touches no network code. ENVIRONMENTAL, not credited either way.
+- Java 17 full run here cannot instantiate forge.PanelTest because the
+  sandbox's JDK 17 is the headless package (no libawt_xawt). ENVIRONMENTAL.
+- Hosted CI on the pushed head is the evidence of record; LOCAL_OBSERVED
+  results above are not credit.
+
+Out of scope and unchanged: Rules Core, card scripts, workflows, D17/D22.
+Full coverage and JDK reduction remain unqualified.
+PRODUCTION_PROVIDER=NOT_SELECTED; ARCHITECTURE_FREEZE=NOT_CLAIMED.
