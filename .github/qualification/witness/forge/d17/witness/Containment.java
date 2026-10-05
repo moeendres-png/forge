@@ -323,7 +323,9 @@ public final class Containment {
                 }
                 String name = frame.getName();
                 if (name.startsWith("java.lang.ClassLoader")
-                        || name.equals("java.security.AccessController")) {
+                        || name.equals("java.security.AccessController")
+                        || name.equals("jdk.internal.loader.ClassLoaders$AppClassLoader")
+                        || name.equals("forge.d17.witness.Containment$TrustedTestLoader")) {
                     sawPackageCheckFrame = true;
                     continue;
                 }
