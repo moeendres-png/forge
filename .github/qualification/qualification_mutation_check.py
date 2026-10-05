@@ -421,6 +421,13 @@ MUTATIONS = [
         "the non-authoritative candidate compatibility javac could race candidate-writable inputs",
     ),
     Mutation(
+        "omit-current-module-candidate-production",
+        "trusted_execution.py",
+        '    return [str(own)] + deps\n',
+        '    return deps\n',
+        "the current module could run without its own exact-candidate production bytecode",
+    ),
+    Mutation(
         "leave-installed-forge-siblings-on-the-classpath",
         "trusted_execution.py",
         "        if marker in normalized:\n",
