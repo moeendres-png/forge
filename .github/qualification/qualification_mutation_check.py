@@ -566,6 +566,24 @@ MUTATIONS = [
         "candidate code could delegate a delayed sensitive operation to a dependency-only thread",
     ),
     Mutation(
+        "trust-jdk-deputy-beneath-active-testng-invocation",
+        "witness/forge/d17/witness/Containment.java",
+        '            if (invocationDepth.get().intValue() > 0) {\n'
+        '                return trustedWitness ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n'
+        '            }\n',
+        '',
+        "a candidate-supplied pure-JDK synchronous deputy could borrow a lower TestNG frame's trusted authority",
+    ),
+    Mutation(
+        "drop-testng-invocation-barrier-hooks",
+        "witness/forge/d17/witness/QualifiedExecutionCounter.java",
+        '        if (method != null) {\n'
+        '            containment.enterInvocation();\n'
+        '        }\n',
+        '',
+        "trusted TestNG invocation would not activate the synchronous-deputy containment barrier",
+    ),
+    Mutation(
         "trust-jdk-only-asynchronous-authority",
         "witness/forge/d17/witness/Containment.java",
         '            return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n',
