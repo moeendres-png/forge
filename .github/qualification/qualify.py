@@ -301,7 +301,8 @@ def derive_verdict(
     test_source_ok = (
         manifest.get("trusted_test_source_sha") == lock["comparison_base"]["sha"]
         and manifest.get("candidate_test_sources_used_for_credit") is False
-        and manifest.get("test_bytecode_origin") == "trusted_compile_of_comparison_base_git_export"
+        and manifest.get("test_bytecode_origin")
+        == "trusted_compile_of_comparison_base_git_export_against_comparison_base_production"
     )
     signal(
         "trusted_test_source_bound_to_comparison_base",
@@ -309,6 +310,24 @@ def derive_verdict(
         "test_source_sha={} origin={} candidate_tests_used={}".format(
             manifest.get("trusted_test_source_sha"), manifest.get("test_bytecode_origin"),
             manifest.get("candidate_test_sources_used_for_credit")),
+    )
+    compile_authority = manifest.get("trusted_test_compile_authority")
+    compile_authority = compile_authority if isinstance(compile_authority, dict) else {}
+    compile_authority_status = compile_authority.get("status")
+    compile_authority_ok = (
+        compile_authority.get("mode")
+        == "comparison_base_authority_plus_candidate_bytecode_equality_probe"
+        and compile_authority_status == "PROVEN"
+        and compile_authority.get("candidate_probe_used_for_execution") is False
+        and not compile_authority.get("semantic_divergence")
+    )
+    signal(
+        "trusted_test_compile_candidate_independent",
+        compile_authority_ok,
+        "mode={} status={} candidate_probe_used_for_execution={} semantic_divergence={}".format(
+            compile_authority.get("mode"), compile_authority_status,
+            compile_authority.get("candidate_probe_used_for_execution"),
+            compile_authority.get("semantic_divergence")),
     )
     build_divergence = manifest.get("candidate_build_definition_divergence")
     maven_authority = manifest.get("maven_repository_authority")
@@ -677,6 +696,20 @@ def derive_verdict(
             "base; D17 refuses candidate-controlled build definitions: {}".format(
                 build_divergence[:20])
         )
+    elif compile_authority_status == "CANDIDATE_INCOMPATIBLE":
+        verdict, reason = FAIL, (
+            "candidate production cannot compile the locked trusted test source against its "
+            "admitted API; no trusted test-policy execution is possible"
+        )
+    elif compile_authority_status == "UNKNOWN_CANDIDATE_SENSITIVE":
+        verdict, reason = UNKNOWN, (
+            "candidate production changes the bytecode produced from trusted test source; "
+            "candidate-sensitive trusted-test compilation is unsupported"
+        )
+    elif not by_name["trusted_test_compile_candidate_independent"]["satisfied"]:
+        verdict, reason = UNKNOWN, (
+            "candidate-independent trusted test compilation authority was not proven"
+        )
     elif (isinstance(manifest.get("error"), str) and not compilation
           and (manifest.get("candidate_build") or {}).get("exit_code") in (None, 0)):
         # Trusted infrastructure stopped before it compiled anything (TestNG pin
@@ -803,6 +836,11 @@ def derive_verdict(
             "candidate_build_definition_divergence": build_divergence,
             "maven_repository_authority": maven_authority,
             "trusted": build_definition_ok,
+        },
+        "test_policy_authority": {
+            "trusted_source_bound": test_source_ok,
+            "compile_candidate_independent": compile_authority_ok,
+            "compile_authority": compile_authority,
         },
         "containment": {
             "required": True,
