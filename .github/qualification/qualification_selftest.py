@@ -2363,6 +2363,19 @@ class ExportIntegrity(unittest.TestCase):
         with self.assertRaisesRegex(sandbox.SandboxError, "differs from its blobs"):
             sandbox.export_commit(tmp / "repo", sha, tmp / "out")
 
+    def test_committed_symlink_alias_is_refused(self) -> None:
+        import sandbox
+        tmp, _ = self._repo({"README.md": "trusted\n"})
+        repo = tmp / "repo"
+        os.symlink("/proc/self/mem", repo / "hostile-proc-alias")
+        git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "symlink"], check=True)
+        sha = subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True,
+                             text=True).stdout.strip()
+        with self.assertRaisesRegex(sandbox.SandboxError, "symlink export path is unsupported"):
+            sandbox.export_commit(repo, sha, tmp / "out")
+
 
 class WorkflowContractControls(unittest.TestCase):
     """Assert the trust-critical properties of the trusted workflow definition."""
