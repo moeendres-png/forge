@@ -2013,6 +2013,10 @@ class TrustedOrchestratorControls(unittest.TestCase):
         self.assertIn('"-o", "-B", "-q"', source)
         self.assertIn('"-Dmaven.repo.local=" + str(trusted_maven_repo)', source)
         self.assertIn('"-Dmaven.compiler.proc=none"', source)
+        self.assertIn('"-DskipTests", "compile", "dependency:build-classpath"', source)
+        candidate_build = source.split("# 2. Compile the exact candidate production source", 1)[1].split(
+            "# 3. Trusted test-policy compilation.", 1)[0]
+        self.assertNotIn('"test-compile"', candidate_build)
         self.assertIn("build_definition_divergence(", source)
 
     def test_required_surface_include_patterns_match_surefire_defaults(self) -> None:
