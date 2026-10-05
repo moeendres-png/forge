@@ -2172,7 +2172,11 @@ class FrozenLaunchClasspath(unittest.TestCase):
         source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
                   / "Containment.java").read_text()
         self.assertIn('name.equals("defineClass")', source)
-        self.assertIn('(mem|maps|pagemap|fd|fdinfo)', source)
+        self.assertIn('unix.equals("/proc") || unix.startsWith("/proc/")', source)
+        runtime = (Path(__file__).resolve().parent / "qualification_runtime_controls.py").read_text()
+        for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
+                      "/proc/thread-self/fd"):
+            self.assertIn(alias, runtime)
         guarded = source.split("static final class GuardedProperties", 1)[1].split(
             "static final class Session", 1)[0]
         check_key = guarded.split("private void checkKey", 1)[1].split("@Override", 1)[0]
