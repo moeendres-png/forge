@@ -1,0 +1,37 @@
+{
+  "source_sha": "ff4302432fa518573a2d05e5e81a3160928a6c00",
+  "source_tree": "15fbcb83ed6227d2ae8e6dba5bc142f069a9f708",
+  "code_delta_sha256": null,
+  "code_delta_file": null,
+  "java": "17",
+  "java_version": "openjdk version \"17.0.20.1\" 2026-08-18\nOpenJDK Runtime Environment (build 17.0.20.1+1-1-24.04-Ubuntu)\nOpenJDK 64-Bit Server VM (build 17.0.20.1+1-1-24.04-Ubuntu, mixed mode, sharing)\n",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-o",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T20:34:16.866242+00:00",
+  "completed_at": "2026-10-05T20:36:43.876226+00:00",
+  "maven_exit": 0,
+  "suite": {
+    "name": "TestSuite",
+    "time": "31.782",
+    "tests": "25",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "0"
+  },
+  "failures": [],
+  "raw_xml_sha256": "02a78260cb010d779bd5b9896f3cd63665381aeb82e627fa0428f4e2a8d3f630",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}
