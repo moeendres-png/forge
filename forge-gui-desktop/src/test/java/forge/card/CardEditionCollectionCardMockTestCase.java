@@ -41,7 +41,9 @@ public class CardEditionCollectionCardMockTestCase extends CardMockTestCase {
 
         CardDb cardDb = FModel.getMagicDb().getCommonCards();
         String[] cardNames = { "Shivan Dragon", "Animate Wall", "Balance", "Blessing", "Force of Will" };
-        String[] expectedSets = { "P30T", "30A", "30A", "30A", "DMR" };
+        // #531: Foundations (FDN, 2024-11-15) reprints Shivan Dragon after P30T (2023-09-01), and
+        // Secrets of Strixhaven Mystical Archive (SOA, 2026-04-24) reprints Force of Will after DMR.
+        String[] expectedSets = { "FDN", "30A", "30A", "30A", "SOA" };
         List<PaperCard> cards = new ArrayList<>();
         for (int i = 0; i < 5; i++) {
             String cardName = cardNames[i];
@@ -55,5 +57,16 @@ public class CardEditionCollectionCardMockTestCase extends CardMockTestCase {
         pool.add(cards);
         CardEdition ed = editions.getTheLatestOfAllTheOriginalEditionsOfCardsIn(pool);
         assertEquals(ed.getCode(), "ALL");
+    }
+
+    @Test
+    public void testUnknownEditionSentinelExposesCodes() {
+        // Cards without any edition entry are stored under the "???" sentinel and
+        // StaticData.getCardEdition returns CardEdition.UNKNOWN for them.
+        CardEdition unknown = FModel.getMagicDb().getCardEdition(CardEdition.UNKNOWN_CODE);
+        assertEquals(unknown, CardEdition.UNKNOWN);
+        assertEquals(unknown.getScryfallCode(), CardEdition.UNKNOWN_CODE);
+        assertEquals(unknown.getTokensCode(), "t" + CardEdition.UNKNOWN_CODE);
+        assertEquals(unknown.getCardsLangCode(), "en");
     }
 }

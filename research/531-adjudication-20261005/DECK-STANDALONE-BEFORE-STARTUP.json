@@ -1,0 +1,20 @@
+{
+  "source_sha": "50218b92949fef92dd94d47146f025c76bf4104a",
+  "source_tree": "ea65715d915015f7083693ba4fa227988eeef678",
+  "java": "21",
+  "maven_exit": 1,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "forge.deck.DeckRecognizerTest",
+    "time": "3.447",
+    "tests": "84",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "49"
+  },
+  "raw_xml_sha256": "2f70e70609fe70e6d3671f46eaa6b857c46eec7b61e7ae8adf82e514d24beb6c",
+  "command": "xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=DeckRecognizerTest -Dsurefire.failIfNoSpecifiedTests=false clean test",
+  "cause": "Lang uninitialized before threaded CardStorageReader: Spider-UK functional-variant parsing throws, partial batch omitted;49 failures, unlike full-suite12. Independent isolated fixture is required.",
+  "qualification_credit": "none"
+}
