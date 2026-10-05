@@ -5,10 +5,28 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 import org.testng.Assert;
+import org.testng.ITestResult;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
+
+import forge.d24.D24ExecutionGuardTest;
 
 /** Construction-only control; no actual-card behavior qualification credit. */
 public class LichFixtureInitializationTest {
+    // This class deliberately does not extend CardMockTestCase (the probe must
+    // start from a cold JVM), so it reports itself to the D24 execution guard
+    // the same way CardMockTestCase does for every other guarded class.
+    @BeforeMethod
+    public void recordDiscovery() {
+        D24ExecutionGuardTest.recordAffectedDiscovery(getClass());
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void recordResult(final ITestResult result) {
+        D24ExecutionGuardTest.recordAffectedResult(result);
+    }
+
     @Test
     public void multiwordTypesAreLoadedBeforeCardParsing() throws Exception {
         // The parent may already have cached correct types/cards. Never reuse them.
