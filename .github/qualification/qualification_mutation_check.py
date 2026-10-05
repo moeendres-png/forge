@@ -19,6 +19,7 @@ Usage: ``python3 qualification_mutation_check.py``
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -32,16 +33,23 @@ PRODUCT = ("source_lock.py", "qualify.py", "trusted_execution.py", "sandbox.py",
 #: product copy so those controls are exercised rather than erroring out.
 WORKFLOWS = ("forge-candidate-qualification.yml", "test-build.yaml")
 
+#: Real-JVM control module. A mutation that names runtime killers must also be
+#: caught by those full-path controls (real driver, real TestNG, sandbox UID),
+#: not only by the structural selftest pins.
+RUNTIME_MODULE = "qualification_runtime_controls"
+
 
 class Mutation:
     """One deliberate violation of one qualification safety property."""
 
-    def __init__(self, name: str, filename: str, old: str, new: str, expected: str) -> None:
+    def __init__(self, name: str, filename: str, old: str, new: str, expected: str,
+                 runtime: "tuple[str, ...]" = ()) -> None:
         self.name = name
         self.filename = filename
         self.old = old
         self.new = new
         self.expected = expected
+        self.runtime = tuple(runtime)
 
     def apply(self, root: Path) -> None:
         path = root / self.filename
@@ -609,6 +617,12 @@ MUTATIONS = [
         '                if (loader == candidate || loader == dependencies) {\n',
         '                if (loader == candidate) {\n',
         "candidate code could delegate a delayed sensitive operation to a dependency-only thread",
+        runtime=(
+            "HostileBytecodeContainmentRuntimeControls."
+            "test_trusted_dependency_cannot_be_used_as_async_confused_deputy",
+            "HostileBytecodeContainmentRuntimeControls."
+            "test_dependency_frame_is_hostile_beneath_trusted_testng_authority",
+        ),
     ),
     Mutation(
         "trust-jdk-deputy-beneath-active-testng-invocation",
@@ -649,6 +663,12 @@ MUTATIONS = [
         '                ClassLoader loader = classLoaderOf(frame);\n',
         '                ClassLoader loader = frame.getClassLoader();\n',
         "guard-internal loader inspection would recursively re-enter RuntimePermission(getClassLoader)",
+        runtime=(
+            "ParentReceiptRuntimeControls."
+            "test_honest_candidate_code_completes_without_receipt_credentials",
+            "HostileBytecodeContainmentRuntimeControls."
+            "test_parent_loader_is_structurally_cut_off_from_testng",
+        ),
     ),
     Mutation(
         "reenter-package-access-during-authority-loader-inspection",
@@ -790,6 +810,23 @@ def run_controls(root: Path) -> "tuple[int, str]":
     return proc.returncode, proc.stdout + proc.stderr
 
 
+def run_runtime_controls(root: Path, tests: "tuple[str, ...]") -> "tuple[int, str]":
+    """Run named real-JVM controls against the staged copy, toolchain required.
+
+    D17_REQUIRE_TOOLCHAIN=1 turns a missing JDK, TestNG closure or sandbox into
+    an error rather than a skip, so an unavailable runtime can never read as a
+    green baseline or as a killed mutant.
+    """
+    env = dict(os.environ)
+    env["D17_REQUIRE_TOOLCHAIN"] = "1"
+    proc = subprocess.run(
+        [sys.executable, "-m", "unittest", "-v"]
+        + ["{}.{}".format(RUNTIME_MODULE, test) for test in tests],
+        cwd=str(root), env=env, capture_output=True, text=True, check=False,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
 def failing_tests(output: str) -> "set[str]":
     names = set()
     for line in output.splitlines():
@@ -804,6 +841,7 @@ def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="forge-d17-mutation-"))
     survived = []
     undetected = []
+    runtime_survived = []
     try:
         baseline_root = stage(scratch / "baseline")
         code, output = run_controls(baseline_root)
@@ -811,6 +849,15 @@ def main() -> int:
             sys.stderr.write("baseline control suite is not green:\n{}\n".format(output[-4000:]))
             return 1
         print("baseline           : GREEN ({} controls)".format(output.count(" ... ")))
+        runtime_tests = tuple(sorted({test for mutation in MUTATIONS for test in mutation.runtime}))
+        if runtime_tests:
+            code, output = run_runtime_controls(baseline_root, runtime_tests)
+            ran = output.count(" ... ok")
+            if code != 0 or ran != len(runtime_tests):
+                sys.stderr.write("baseline runtime controls are not green ({}/{} ok):\n{}\n".format(
+                    ran, len(runtime_tests), output[-4000:]))
+                return 1
+            print("baseline runtime   : GREEN ({} full-path controls)".format(ran))
 
         for index, mutation in enumerate(MUTATIONS):
             root = stage(scratch / "mutant-{}".format(index))
@@ -825,6 +872,16 @@ def main() -> int:
                     len(detected), mutation.name, mutation.expected))
                 if not detected:
                     undetected.append(mutation.name)
+            if mutation.runtime:
+                # Independent of the structural result: the named full-path
+                # controls must themselves go red on the mutated guard.
+                code, output = run_runtime_controls(root, mutation.runtime)
+                red = failing_tests(output)
+                if code == 0 or not red:
+                    runtime_survived.append(mutation.name)
+                    print("RUNTIME-SURVIVED   : {}".format(mutation.name))
+                else:
+                    print("runtime  ({:>2} red) : {}".format(len(red), mutation.name))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -832,11 +889,14 @@ def main() -> int:
     print("mutations          : {}".format(len(MUTATIONS)))
     print("detected           : {}".format(len(MUTATIONS) - len(survived)))
     print("survived           : {}".format(len(survived)))
-    if survived or undetected:
+    print("runtime survived   : {}".format(len(runtime_survived)))
+    if survived or undetected or runtime_survived:
         for name in survived:
             print("  SURVIVED  {}".format(name))
         for name in undetected:
             print("  NO-RED    {}".format(name))
+        for name in runtime_survived:
+            print("  RUNTIME-SURVIVED  {}".format(name))
         return 1
     print("")
     print("all mutations detected: the controls are non-vacuous")
