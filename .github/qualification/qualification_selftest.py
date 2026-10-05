@@ -2348,6 +2348,12 @@ class FrozenLaunchClasspath(unittest.TestCase):
         )[0]
         self.assertIn("inspectingClassLoader.set(Boolean.TRUE)", inspection)
         self.assertIn("inspectingClassLoader.remove()", inspection)
+        package_access = source.split(
+            "public void checkPackageAccess(String pkg)", 1
+        )[1].split("static final class GuardedProperties", 1)[0]
+        self.assertIn(
+            "if (Boolean.TRUE.equals(inspectingClassLoader.get()))", package_access
+        )
         self.assertIn('java.nio.file.LinkPermission', source)
         self.assertIn('pkg.startsWith("sun.")', source)
         self.assertIn('new CandidateCodeLoader(candidateCode, deps)', source)
