@@ -48,8 +48,10 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
     // Get Card From Editions Test fixtures
     protected final String originalArtShivanDragonEdition = "LEA";
     // next lines need to be updated with each printing of Shivan Dragon
-    protected final String latestArtShivanDragonEdition = "P30T";
-    protected final String latestArtShivanDragonEditionNoPromo = "DMR";
+    // #531: Foundations (FDN, 2024-11-15) reprints Shivan Dragon after P30T (2023-09-01).
+    protected final String latestArtShivanDragonEdition = "FDN";
+    // #531: FDN is Type=Core, so it is also the latest core/expansion/reprint print (DMR: 2023-01-13).
+    protected final String latestArtShivanDragonEditionNoPromo = "FDN";
 
     protected final String originalArtLightningDragonEdition = "USG";
     protected final String originalArtLightningDragonEditionNoPromo = "USG";
@@ -57,8 +59,10 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
     protected final String latestArtLightningDragonEdition = "VMA";
     protected final String latestArtLightningDragonEditionNoPromo = "USG";
 
-    protected final String latestArtHymnToTourachEdition = "PLIST";
-    protected final String latestArtHymnToTourachEditionNoPromo = "PLIST";
+    // #531: Secret Lair Countdown (SLC, 2022-11-01) reprints Hymn to Tourach after The List
+    // (2020-09-26), whose code is now PLST (PLIST survives only as its Code2 alias).
+    protected final String latestArtHymnToTourachEdition = "SLC";
+    protected final String latestArtHymnToTourachEditionNoPromo = "PLST";
     protected final String originalArtHymnToTourachEdition = "FEM";
     protected final String originalArtHymnToTourachEditionNoPromo = "FEM";
 
@@ -95,17 +99,48 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
             "A25", "MH2", "SLD" };
 
     protected final String counterspellReleasedBeforeMagicOnlinePromosDate = "2018-03-15";
-    protected final String[] counterspellLatestArtsReleasedBeforeMagicOnlinePromos = { "MPS_AKH", "EMA" };
+    // #531: Amonkhet Invocations is now Code=MP2 (MPS_AKH survives only as its Code2 alias).
+    protected final String[] counterspellLatestArtsReleasedBeforeMagicOnlinePromos = { "MP2", "EMA" };
 
     protected final String counterspellReleasedBeforeEternalMastersDate = "2016-06-10";
     protected final String[] counterspellLatestArtReleasedBeforeEternalMasters = { "TPR", "7ED" };
-    protected final String[] counterspellOriginalArtReleasedAfterEternalMasters = { "MPS_AKH", "A25" };
+    protected final String[] counterspellOriginalArtReleasedAfterEternalMasters = { "MP2", "A25" }; // #531: MP2 alias
 
     protected final String counterspellReleasedAfterBattleRoyaleDate = "1999-11-12";
     protected final String[] counterspellOriginalArtReleasedAfterBattleRoyale = { "G00", "7ED" };
 
     // test for date restrictions - boundary cases
     protected final String alphaEditionReleaseDate = "1993-08-05";
+
+    /** The highest art index any edition holds for {@code cardName}. */
+    protected int highestArtIndex(String cardName) {
+        int highest = 0;
+        for (PaperCard print : this.cardDb.getAllCards(cardName)) {
+            highest = Math.max(highest, print.getArtIndex());
+        }
+        assertTrue(highest > 0, "no print of " + cardName);
+        return highest;
+    }
+
+    /**
+     * #531: since upstream 38da2046 ("Fix CardDb fallback", Forge #8080) a request naming a
+     * print that does not exist (wrong edition, art index or collector number) resolves through
+     * tryGetCard's documented fallback, "Either No Edition has been specified OR as a fallback in
+     * case of any error!": the default art preference with the request's art index. It no longer
+     * returns null. The result must be exactly that fallback and never the missing print itself.
+     */
+    protected void assertMissingPrintFallsBack(PaperCard actual, String cardName, String missingSet,
+                                               int missingArtIndex) {
+        int fallbackArtIndex = Math.max(missingArtIndex, IPaperCard.DEFAULT_ART_INDEX);
+        PaperCard expected = this.cardDb.getCardFromEditions(cardName, this.cardDb.getCardArtPreference(),
+                fallbackArtIndex);
+        assertNotNull(expected, "the fallback lookup itself must resolve for this fixture");
+        assertEquals(actual, expected);
+        assertEquals(actual.getName(), cardName);
+        boolean sameSet = missingSet.equalsIgnoreCase(actual.getEdition());
+        assertFalse(sameSet && (missingArtIndex <= 0 || actual.getArtIndex() == missingArtIndex),
+                "the missing print " + missingSet + "/" + missingArtIndex + " must never be returned");
+    }
 
     @BeforeMethod
     public void setup() {
@@ -283,15 +318,15 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
         PaperCard legacyCard = this.legacyCardDb.getCard(cardNameShivanDragon, wrongEditionCode);
         assertNull(legacyCard);
         PaperCard card = this.cardDb.getCard(cardNameShivanDragon, wrongEditionCode);
-        assertNull(card);
+        assertMissingPrintFallsBack(card, cardNameShivanDragon, wrongEditionCode, IPaperCard.NO_ART_INDEX);
         // Wrong Art Index
         legacyCard = this.legacyCardDb.getCard(cardNameShivanDragon, editionShivanDragon, 3);
         assertNull(legacyCard);
         card = this.cardDb.getCard(cardNameShivanDragon, editionShivanDragon, 3);
-        assertNull(card);
+        assertMissingPrintFallsBack(card, cardNameShivanDragon, editionShivanDragon, 3);
         // Wrong collector number
         card = this.cardDb.getCard(cardNameShivanDragon, editionShivanDragon, "wrongCN");
-        assertNull(card);
+        assertMissingPrintFallsBack(card, cardNameShivanDragon, editionShivanDragon, IPaperCard.NO_ART_INDEX);
     }
 
     @Test
@@ -634,8 +669,10 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
             nullCard = this.cardDb.getCardFromEditions(null, preference);
             assertNull(nullCard);
 
-            //30A Shivan Dragon had 2 treatments, so bumped artIndex to 3
-            shivanNotExistingDragon = this.cardDb.getCardFromEditions(cardNameShivanDragon, preference, 3);
+            // #531: an art index no edition has. The literal 3 ("30A had 2 treatments") went stale
+            // once Secret Lair Drop listed a third Shivan Dragon art; derive it from the data instead.
+            shivanNotExistingDragon = this.cardDb.getCardFromEditions(cardNameShivanDragon, preference,
+                    highestArtIndex(cardNameShivanDragon) + 1);
             assertNull(shivanNotExistingDragon);
 
             nullCard = this.cardDb.getCardFromEditions(cardNameHymnToTourach, preference, 5);
@@ -1628,8 +1665,11 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
                 CardDb.CardArtPreference.LATEST_ART_ALL_EDITIONS, 2);
         assertNotNull(hymnToTourachCard);
         assertEquals(hymnToTourachCard.getName(), cardName);
-        // expecting this edition as present in request info
-        assertEquals(hymnToTourachCard.getEdition(), httEdition);
+        // #531: getCardFromEditions picks the edition by art preference; the request's edition
+        // is not a filter (it never was, since this test was added in e5350c83). FEM used to be
+        // the only edition with a second Hymn art; Secret Lair Countdown (SLC) now has two and is
+        // the latest, so the latest-art lookup with art index 2 resolves there.
+        assertEquals(hymnToTourachCard.getEdition(), latestArtHymnToTourachEdition);
         // artIndex should be overwritten this time, as it's provided and not default
         assertEquals(hymnToTourachCard.getArtIndex(), 2);
 
@@ -1668,7 +1708,7 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
     @Test
     public void testGetCardByNameAndSetWithWrongORNullCollectorNumber() {
         PaperCard httCard = this.cardDb.getCard(cardNameHymnToTourach, editionHymnToTourach, "589b");
-        assertNull(httCard);
+        assertMissingPrintFallsBack(httCard, cardNameHymnToTourach, editionHymnToTourach, IPaperCard.NO_ART_INDEX);
 
         httCard = this.cardDb.getCard(cardNameHymnToTourach, editionHymnToTourach, null);
         assertNotNull(httCard);
@@ -1736,7 +1776,8 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
             SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd");
             alphaReleaseDate = format.parse(alphaEditionReleaseDate);
             // next line needs to be updated each time Shivan Dragon is reprinted
-            latestShivanDragonReleaseDateToDate = format.parse("2023-09-31");
+            // #531: Foundations (FDN) 2024-11-15; the former "2023-09-31" was not a real date.
+            latestShivanDragonReleaseDateToDate = format.parse("2024-11-15");
         } catch (ParseException e) {
             e.printStackTrace();
             fail();
@@ -1975,7 +2016,7 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
         // Loyal Unicorn: Available in Forge in The List and COMMANDER 2018
         loyalUnicorn = this.cardDb.getCard(cnLoyalUnicorn);
         assertNotNull(loyalUnicorn);
-        assertEquals(loyalUnicorn.getEdition(), "PLIST");
+        assertEquals(loyalUnicorn.getEdition(), "PLST"); // #531: The List is Code=PLST (PLIST is its Code2 alias)
 
         legacyLoyalUnicorn = this.legacyCardDb.getCardFromEdition(cnLoyalUnicorn,
                 LegacyCardDb.LegacySetPreference.LatestCoreExp);
@@ -2060,7 +2101,7 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
 
         loyalUnicorn = this.cardDb.getCard(cnLoyalUnicorn);
         assertNotNull(loyalUnicorn);
-        assertEquals(loyalUnicorn.getEdition(), "PLIST");
+        assertEquals(loyalUnicorn.getEdition(), "PLST"); // #531: The List is Code=PLST (PLIST is its Code2 alias)
 
         legacyLoyalUnicorn = this.legacyCardDb.getCardFromEdition(cnLoyalUnicorn,
                 LegacyCardDb.LegacySetPreference.EarliestCoreExp);
@@ -2105,15 +2146,15 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
         String requestInfo = CardDb.CardRequest.compose(cardName, wrongSetCode);
         PaperCard blindingAngelCard = this.cardDb.getCard(requestInfo);
         PaperCard legacyBlindingAngelCard = this.legacyCardDb.getCard(requestInfo);
-        assertNull(legacyBlindingAngelCard); // be sure behaviour is the same
-        assertNull(blindingAngelCard);
+        assertNull(legacyBlindingAngelCard); // the legacy DB still returns null
+        assertMissingPrintFallsBack(blindingAngelCard, cardName, wrongSetCode, IPaperCard.NO_ART_INDEX);
 
         String nonExistingSetCode = "9TH"; // non-existing, should be 9ED
         requestInfo = CardDb.CardRequest.compose(cardName, nonExistingSetCode);
         blindingAngelCard = this.cardDb.getCard(requestInfo);
         legacyBlindingAngelCard = this.legacyCardDb.getCard(requestInfo);
-        assertNull(legacyBlindingAngelCard); // be sure behaviour is the same
-        assertNull(blindingAngelCard);
+        assertNull(legacyBlindingAngelCard); // the legacy DB still returns null
+        assertMissingPrintFallsBack(blindingAngelCard, cardName, nonExistingSetCode, IPaperCard.NO_ART_INDEX);
     }
 
     // Case Insensitive Search/Retrieval Tests
@@ -2191,7 +2232,10 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
                 CardDb.CardArtPreference.ORIGINAL_ART_CORE_EXPANSIONS_REPRINT_ONLY, 12);
         assertNotNull(islandOriginal);
         assertEquals(islandOriginal.getName(), "Island");
-        assertEquals(islandOriginal.getEdition(), "SLD");
+        // #531: no core/expansion/reprint edition has a twelfth Island art, so the too-strict
+        // preference falls back to all editions in original-art order. Magic Online Promos
+        // (PRM, 2002-06-24) now lists 27 Island arts and precedes SLD (2019-12-02).
+        assertEquals(islandOriginal.getEdition(), "PRM");
         assertEquals(islandOriginal.getArtIndex(), 12);
     }
 
@@ -2294,7 +2338,7 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
         int artIndex = 4; // non-existing
         String cardRequest = CardDb.CardRequest.compose(this.cardNameCounterspell, setCode, artIndex);
         PaperCard nonExistingCounterSpell = this.cardDb.getCard(cardRequest);
-        assertNull(nonExistingCounterSpell);
+        assertMissingPrintFallsBack(nonExistingCounterSpell, this.cardNameCounterspell, setCode, artIndex);
     }
 
     @Test

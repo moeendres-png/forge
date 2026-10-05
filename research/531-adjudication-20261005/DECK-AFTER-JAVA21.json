@@ -1,0 +1,74 @@
+{
+  "source_sha": "7709440d055e11fcb5fdfa7edceabfd9ba3a5a83",
+  "source_tree": "50d405c9b1aa24bff7887e125b75991e8989f3f5",
+  "java": "21",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=DeckRecognizerTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T13:57:59.252188+00:00",
+  "completed_at": "2026-10-05T13:58:52.544184+00:00",
+  "maven_exit": 1,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "forge.deck.DeckRecognizerTest",
+    "time": "8.444",
+    "tests": "84",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "9"
+  },
+  "code_delta_file": null,
+  "code_delta_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_xml_sha256": "cd925c9e84dc802870a8e711dc7035332e01e0a720bd0888e2ddf584d6db9294",
+  "failures": [
+    {
+      "method": "testCardRequestVariesUponChangesInArtPreference",
+      "message": "expected [30A] but found [SLZ]"
+    },
+    {
+      "method": "testChangesInArtPreference",
+      "message": "expected [DSC] but found [PF26]"
+    },
+    {
+      "method": "testCornerCasesWithSpecialMulticolourAndColorlessTokens",
+      "message": "expected [any localised string {C}] but found [any localised string {C} // any localised string {W}{U}{B}{R}{G}]"
+    },
+    {
+      "method": "testMatchAllCardNamesInForgeDB",
+      "message": "Cannot invoke \"String.toLowerCase()\" because \"this.scryfallCode\" is null"
+    },
+    {
+      "method": "testMatchAllSetCodesAndAlternateCodesInForgeDB",
+      "message": "Fail on ??? expected [true] but found [false]"
+    },
+    {
+      "method": "testMultiColourOrColourlessManaTokensWillBeHandledSeparately",
+      "message": "expected [any localised string {U} // any localised string {C}] but found [any localised string {U} // any localised string {W}{U}{B}{R}{G}]"
+    },
+    {
+      "method": "testRecogniseCardToken",
+      "message": "expected [30A] but found [SLZ]"
+    },
+    {
+      "method": "testRecognizeCommanderCardInDeckstatsExportFormat",
+      "message": "expected [SLD] but found [SPG]"
+    },
+    {
+      "method": "testSingleWordCardNameMatchesCorrectly",
+      "message": "expected [DSC] but found [PF26]"
+    }
+  ],
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}

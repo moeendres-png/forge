@@ -19,23 +19,23 @@ import org.testng.annotations.Test;
 
 public class D24ExecutionGuardTest {
     private static final Map<String, Integer> DECLARED_TEST_METHODS = Map.ofEntries(
-            Map.entry("forge.deck.DeckRecognizerTest", 84),
+            Map.entry("forge.deck.DeckRecognizerTest", 85),
             Map.entry("forge.card.CardDbCardMockTestCase", 54),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 12),
             Map.entry("forge.card.CardDbLazyCardLoadingCardMockTestCase", 4),
             Map.entry("forge.card.CardDbPerformanceTests", 4),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103", 2),
-            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 2),
+            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 3),
             Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 1));
 
     private static final Map<String, Integer> ENABLED_RUNTIME_METHODS = Map.ofEntries(
-            Map.entry("forge.deck.DeckRecognizerTest", 84),
+            Map.entry("forge.deck.DeckRecognizerTest", 85),
             Map.entry("forge.card.CardDbCardMockTestCase", 54),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 11),
             Map.entry("forge.card.CardDbLazyCardLoadingCardMockTestCase", 4),
             Map.entry("forge.card.CardDbPerformanceTests", 56),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103", 2),
-            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 2),
+            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 3),
             Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 55));
 
     private static final List<String> BASE_CLASSES = List.of(
@@ -126,8 +126,11 @@ public class D24ExecutionGuardTest {
             assertNoPowerMockSuperclass(base);
         }
 
-        Assert.assertEquals(declared, 163, "D24 declared-method denominator drifted");
-        Assert.assertEquals(enabled, 160, "D24 enabled declared-method denominator drifted");
+        // #531 adds two controls: the database deck-text grammar
+        // (DeckRecognizerTest) and the UNKNOWN sentinel edition codes
+        // (CardEditionCollectionCardMockTestCase).
+        Assert.assertEquals(declared, 165, "D24 declared-method denominator drifted");
+        Assert.assertEquals(enabled, 162, "D24 enabled declared-method denominator drifted");
         Assert.assertEquals(disabled, EXPECTED_DISABLED, "disabled NOT_RUN obligations drifted");
     }
 

@@ -1,0 +1,19 @@
+{
+  "source_sha": "971206e2e0267075c98782c0a70516cc649de620",
+  "source_tree": "57517cb547ed7c056da683068dc8f52880d7790d",
+  "java": "21",
+  "maven_exit": 1,
+  "command": "xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=DeckRecognizerTest -Dsurefire.failIfNoSpecifiedTests=false clean test",
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "forge.deck.DeckRecognizerTest",
+    "time": "9.804",
+    "tests": "84",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "12"
+  },
+  "raw_xml_sha256": "6129311844d7f8511e5f53a96fce7195a264c75f73f39d0d8f7e58ca2547d558",
+  "qualification_credit": "none"
+}

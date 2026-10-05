@@ -29,6 +29,9 @@ import forge.localinstance.properties.ForgePreferences;
 import forge.localinstance.properties.ForgeProfileProperties;
 import forge.model.FModel;
 import forge.util.Localizer;
+import forge.util.Lang;
+import forge.util.FileSection;
+import forge.util.FileUtil;
 import forge.util.TextUtil;
 
 public abstract class CardMockTestCase {
@@ -119,6 +122,14 @@ public abstract class CardMockTestCase {
         initForgeConstants();
         initForgePreferences();
         initCardImageMocks();
+        // FModel startup is mocked: prepare the real language/type data before
+        // eagerly parsing card scripts, including multiword types and aliases.
+        Lang.createInstance("en-US");
+        if (!CardType.Constant.LOADED.isSet()) {
+            FileSection.parseSections(FileUtil.readFile(ForgeConstants.TYPE_LIST_FILE))
+                    .forEach(CardType.Helper::parseTypes);
+            CardType.Constant.LOADED.set();
+        }
         initializeStaticData();
     }
 

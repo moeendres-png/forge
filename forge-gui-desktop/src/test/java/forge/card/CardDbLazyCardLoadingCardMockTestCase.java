@@ -75,7 +75,13 @@ public class CardDbLazyCardLoadingCardMockTestCase extends CardMockTestCase {
         assertEquals(borrowingCard.getName(), expectedCardName);
         assertEquals(borrowingCard.getEdition(), setCode);
 
-        assertNull(this.cardDb.getCard(cardName, "IMA")); // not added yet
+        // #531: the IMA print exists in the edition data but has not been loaded lazily yet.
+        // Since upstream 38da2046 ("Fix CardDb fallback") a request for a print the database
+        // does not hold falls back to the default art preference instead of returning null;
+        // getting the one loaded KTK print back is what shows the IMA print was not added.
+        PaperCard noSuchPrint = this.cardDb.getCard(cardName, "IMA");
+        assertEquals(noSuchPrint, borrowingCard);
+        assertEquals(noSuchPrint.getEdition(), setCode);
     }
 
     @Test
