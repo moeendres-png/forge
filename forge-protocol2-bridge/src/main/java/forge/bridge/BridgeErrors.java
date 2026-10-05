@@ -37,5 +37,6 @@ public final class BridgeErrors {
     public static final String ENGINE_IDENTITY_UNAVAILABLE = "engine_identity_unavailable";
     public static final String EVENT_LOG_UNSUPPORTED = "event_log_unsupported";
     public static final String PROJECTION_FAILED = "projection_failed";
+    public static final String ORCHESTRATION_CHANNEL_NOT_ENABLED = "orchestration_channel_not_enabled";
     public static final String INTERNAL_ERROR = "internal_error";
 }

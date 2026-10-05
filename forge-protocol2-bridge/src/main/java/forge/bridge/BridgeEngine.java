@@ -135,6 +135,8 @@ public final class BridgeEngine {
                     return getGameState(request);
                 case BridgeProtocol.GET_LEGAL_ACTIONS:
                     return getLegalActions(request);
+                case BridgeProtocol.GET_CONSTRUCTED_STATE:
+                    return getConstructedState(request);
                 case BridgeProtocol.SUBMIT_ACTION:
                     return submitAction(request);
                 case BridgeProtocol.PASS_PRIORITY:
@@ -252,6 +254,10 @@ public final class BridgeEngine {
         caps.addProperty("mode_selection_supported", true);
         caps.addProperty("trigger_order_supported", true);
         caps.addProperty("mulligan_supported", false);
+        // Orchestration channel (#441 decision (c)): refused without a launch key.
+        caps.addProperty("constructed_state_supported", true);
+        caps.addProperty("constructed_state_scope",
+                "orchestration_keyed_digests_refused_without_launch_key");
         caps.addProperty("concede_supported", true);
         caps.addProperty("game_shutdown_supported", true);
         caps.addProperty("engine_shutdown_supported", true);
@@ -644,6 +650,40 @@ public final class BridgeEngine {
                     "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
         }
         payload.add("bridge", StateProjection.bridgeMeta(session, observer));
+        return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
+    }
+
+    /**
+     * The engine's normalized constructed state for the Lab's generic-lane
+     * construction proof (Commander-Lab #441 decision (c)). An orchestration
+     * channel, not a principal observation: refused on every launch without an
+     * orchestration key, and hidden zone content leaves only as HMAC digests
+     * under that key ({@link StateProjection#constructedState}).
+     */
+    private String getConstructedState(BridgeProtocol.Request request) {
+        if (!OrchestrationKey.enabled()) {
+            final String problem = OrchestrationKey.problem();
+            return BridgeProtocol.error(request.requestId,
+                    BridgeErrors.ORCHESTRATION_CHANNEL_NOT_ENABLED,
+                    problem == null ? "this launch carries no orchestration key" : problem, 0);
+        }
+        final BridgeSession session = requireSession(request);
+        if (session == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_GAME,
+                    "unknown game_id: " + request.gameId, 0);
+        }
+        if (session.getGame() == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.INTERNAL_ERROR,
+                    "game object missing", (int) session.auditSize());
+        }
+        final JsonObject payload = new JsonObject();
+        payload.addProperty("game_id", session.getGameId());
+        try {
+            payload.add("constructed_state", StateProjection.constructedState(session));
+        } catch (BridgeProjectionException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
+                    "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
+        }
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }
 

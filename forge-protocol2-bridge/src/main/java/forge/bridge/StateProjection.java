@@ -1,8 +1,10 @@
 package forge.bridge;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import forge.card.MagicColor;
 import forge.game.Game;
 import forge.game.GameOutcome;
@@ -188,6 +190,125 @@ public final class StateProjection {
         state.addProperty("decision_protocol_version", SemanticReplay.DECISION_PROTOCOL_VERSION);
         state.addProperty("tape_contract", SemanticReplay.TAPE_CONTRACT);
         return state;
+    }
+
+    /** Schema of {@link #constructedState(BridgeSession)}. */
+    public static final String CONSTRUCTED_STATE_SCHEMA = "commander-lab.generic-constructed-state/2";
+
+    /**
+     * Commander-Lab #441 decision (c): the engine's normalized constructed state,
+     * for the Lab's generic-lane construction proof. Served only through the
+     * orchestration channel ({@link OrchestrationKey}); never a principal view.
+     *
+     * <p>Seats are named by their one-based seat number ({@code P1}..). Public
+     * facts are plain: life, poison, loss, zone sizes, and each commander's
+     * identity, zone and command-zone cast count. Each seat's library and hand
+     * together (a name multiset, no order) leave only as an HMAC under the launch
+     * key; no other card name of any zone leaves. The token layout is the one
+     * the Lab computes from the record: schema, zone label, seat, then
+     * {@code name<TAB>count} per distinct name in {@link String} order. Each
+     * seat's {@code library_shuffles} counts the engine's own shuffles of that
+     * library so far (its GameEventShuffle).</p>
+     */
+    public static JsonObject constructedState(BridgeSession session) {
+        final Game game = session.getGame();
+        if (game == null) {
+            throw new BridgeProjectionException("game", "no game object");
+        }
+        final JsonObject state = new JsonObject();
+        state.addProperty("schema", CONSTRUCTED_STATE_SCHEMA);
+        state.addProperty("observation_scope", "orchestration_keyed_digests");
+        state.addProperty("lifecycle", statusOf(session));
+        final PhaseHandler phases = require("phase_handler", () -> game.getPhaseHandler());
+        state.addProperty("turn_number", require("turn_number", () -> Math.max(0, phases.getTurn())));
+        final PhaseType phase = require("phase", () -> phases.getPhase());
+        if (phase == null) {
+            state.add("phase", JsonNull.INSTANCE);
+        } else {
+            state.addProperty("phase", mapPhase(phase));
+        }
+        state.add("active_player", seatName(session, require("active_player", () -> phases.getPlayerTurn())));
+        state.add("priority_player",
+                seatName(session, require("priority_player", () -> phases.getPriorityPlayer())));
+        state.addProperty("stack_size", require("stack", () -> game.getStack().size()));
+        final List<Player> enginePlayers = require("players", () -> session.registryPlayers());
+        final JsonArray players = new JsonArray();
+        for (Player player : enginePlayers) {
+            final int seat = session.seatOf(player) + 1;
+            final String seatId = "P" + seat;
+            final JsonObject entry = new JsonObject();
+            entry.addProperty("player_id", seatId);
+            entry.addProperty("seat", seat);
+            entry.addProperty("life", require("life:" + seatId, () -> player.getLife()));
+            entry.addProperty("poison",
+                    require("poison:" + seatId, () -> Math.max(0, player.getPoisonCounters())));
+            entry.addProperty("lost", require("has_lost:" + seatId, () -> player.hasLost()));
+            entry.addProperty("left",
+                    require("in_game:" + seatId, () -> !game.getPlayers().contains(player)));
+            final List<String> libraryAndHand = new ArrayList<>(zoneNames(player, ZoneType.Library));
+            entry.addProperty("library_size", libraryAndHand.size());
+            final List<String> hand = zoneNames(player, ZoneType.Hand);
+            entry.addProperty("hand_size", hand.size());
+            libraryAndHand.addAll(hand);
+            entry.addProperty("library_and_hand_digest",
+                    zoneDigest(seatId, "library_and_hand", libraryAndHand));
+            entry.addProperty("graveyard_size",
+                    require("zone.Graveyard", () -> player.getCardsIn(ZoneType.Graveyard).size()));
+            entry.addProperty("exile_size",
+                    require("zone.Exile", () -> player.getCardsIn(ZoneType.Exile).size()));
+            entry.addProperty("library_shuffles", session.libraryShuffles(player));
+            entry.addProperty("battlefield_size",
+                    require("zone.Battlefield", () -> player.getCardsIn(ZoneType.Battlefield).size()));
+            final JsonArray commanders = new JsonArray();
+            for (Card commander : require("commanders:" + seatId, () -> player.getCommanders())) {
+                final Card live = game.getCardState(commander, commander);
+                final Card card = live == null ? commander : live;
+                final JsonObject entryCommander = new JsonObject();
+                entryCommander.addProperty("card_identity",
+                        require("commander.name", () -> card.getName()));
+                entryCommander.add("owner", seatName(session, require("commander.owner", () -> card.getOwner())));
+                final ZoneType zone = require("commander.zone", () -> {
+                    final forge.game.zone.Zone at = game.getZoneOf(card);
+                    return at == null ? null : at.getZoneType();
+                });
+                if (zone == null) {
+                    entryCommander.add("zone", JsonNull.INSTANCE);
+                } else {
+                    entryCommander.addProperty("zone", zone.name().toLowerCase(java.util.Locale.ROOT));
+                }
+                entryCommander.addProperty("prior_command_zone_cast_count",
+                        require("commander.casts", () -> Math.max(0, player.getCommanderCast(card))));
+                commanders.add(entryCommander);
+            }
+            entry.add("commanders", commanders);
+            players.add(entry);
+        }
+        state.add("players", players);
+        // No seed value: Rules seed control is acknowledged on game creation.
+        return state;
+    }
+
+    private static JsonElement seatName(BridgeSession session, Player player) {
+        if (player == null) {
+            return JsonNull.INSTANCE;
+        }
+        return new JsonPrimitive("P" + (session.seatOf(player) + 1));
+    }
+
+    /** HMAC under the launch's orchestration key over a seat's zone content as a name multiset. */
+    static String zoneDigest(String seatId, String zone, List<String> names) {
+        final java.util.TreeMap<String, Integer> counts = new java.util.TreeMap<>();
+        for (String name : names) {
+            counts.merge(name, 1, Integer::sum);
+        }
+        final List<String> tokens = new ArrayList<>();
+        tokens.add(CONSTRUCTED_STATE_SCHEMA);
+        tokens.add(zone);
+        tokens.add(seatId);
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            tokens.add(entry.getKey() + "\t" + entry.getValue());
+        }
+        return OrchestrationKey.digest(tokens);
     }
 
     /**
