@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PRODUCT = ("source_lock.py", "qualify.py", "trusted_execution.py", "sandbox.py", "qualification_selftest.py")
+PRODUCT = ("source_lock.py", "qualify.py", "trusted_execution.py", "sandbox.py", "qualification_selftest.py", "qualification_runtime_controls.py")
 
 #: Workflow files the workflow-contract controls read. They are staged next to the
 #: product copy so those controls are exercised rather than erroring out.
