@@ -204,25 +204,58 @@ public final class Containment {
      */
     @SuppressWarnings("removal")
     static final class Guard extends SecurityManager {
+        private static final int CONTEXT_HOSTILE = 1;
+        private static final int CONTEXT_TRUSTED_AUTHORITY = 2;
+        private static final int CONTEXT_UNTRUSTED_ASYNC = 3;
+
         private final CandidateCodeLoader candidate;
         private final DependencyLoader dependencies;
+        private final ClassLoader trusted;
         private final Path protectedRoot;
         private volatile String violation;
 
-        Guard(CandidateCodeLoader candidate, DependencyLoader dependencies, Path protectedRoot) {
+        Guard(CandidateCodeLoader candidate, DependencyLoader dependencies,
+                ClassLoader trusted, Path protectedRoot) {
             this.candidate = candidate;
             this.dependencies = dependencies;
+            this.trusted = trusted;
             this.protectedRoot = protectedRoot.toAbsolutePath().normalize();
         }
 
-        boolean candidateInContext() {
+        private int authorityContext() {
+            boolean trustedAuthority = false;
             for (Class<?> frame : getClassContext()) {
                 ClassLoader loader = frame.getClassLoader();
                 if (loader == candidate || loader == dependencies) {
-                    return true;
+                    // Hostile always wins even though TestNG appears lower on the
+                    // normal invocation stack.
+                    return CONTEXT_HOSTILE;
+                }
+                if (loader == trusted) {
+                    String name = frame.getName();
+                    if (name.equals("forge.d17.witness.TrustedTestNGDriver")
+                            || name.startsWith("org.testng.")) {
+                        trustedAuthority = true;
+                    }
                 }
             }
-            return false;
+            // A JDK-only asynchronous task has neither a hostile frame nor an
+            // explicit trusted authority frame. Treat it as untrusted so a
+            // candidate cannot shed its taint through a configured JDK deputy.
+            return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
+        }
+
+        boolean candidateInContext() {
+            return authorityContext() == CONTEXT_HOSTILE;
+        }
+
+        boolean authorityRestrictedContext() {
+            return authorityContext() != CONTEXT_TRUSTED_AUTHORITY;
+        }
+
+        private String authorityLabel() {
+            return authorityContext() == CONTEXT_HOSTILE
+                    ? "candidate/dependency" : "untrusted asynchronous context";
         }
 
         void deny(String detail) {
@@ -242,9 +275,10 @@ public final class Containment {
 
         @Override
         public void checkPermission(Permission permission) {
-            if (!candidateInContext()) {
+            if (!authorityRestrictedContext()) {
                 return;
             }
+            String actor = authorityLabel();
             String name = permission.getName() == null ? "" : permission.getName();
             if (permission instanceof RuntimePermission) {
                 if (name.equals("setSecurityManager")
@@ -270,26 +304,26 @@ public final class Containment {
                         || name.startsWith("accessClassInPackage.jdk.internal.")
                         || name.startsWith("exitVM")
                         || name.startsWith("loadLibrary")) {
-                    deny("candidate RuntimePermission " + name);
+                    deny(actor + " RuntimePermission " + name);
                 }
             } else if (permission instanceof ReflectPermission
                     && "suppressAccessChecks".equals(name)) {
-                deny("candidate reflective access suppression");
+                deny(actor + " reflective access suppression");
             } else if (permission instanceof SecurityPermission) {
-                deny("candidate SecurityPermission " + name);
+                deny(actor + " SecurityPermission " + name);
             } else if (permission instanceof ManagementPermission
                     && "control".equals(name)) {
-                deny("candidate management control");
+                deny(actor + " management control");
             } else if (permission.getClass().getName().startsWith("javax.management.")
                     || permission.getClass().getName().equals("jdk.jfr.FlightRecorderPermission")
                     || permission.getClass().getName().equals("com.sun.tools.attach.AttachPermission")) {
-                deny("candidate VM-introspection permission " + permission.getClass().getName());
+                deny(actor + " VM-introspection permission " + permission.getClass().getName());
             } else if (permission instanceof PropertyPermission
                     && permission.getActions().contains("write")) {
                 // Process-global properties are trusted-runtime state.  Even a
                 // property not presently consumed by TestNG can change class
                 // loading, provider selection or a future witness dependency.
-                deny("candidate property mutation " + name);
+                deny(actor + " property mutation " + name);
             } else if (permission instanceof FilePermission) {
                 String actions = permission.getActions();
                 String unix = name.replace('\\', '/');
@@ -298,7 +332,7 @@ public final class Containment {
                     target = Path.of(name).toAbsolutePath().normalize();
                 } catch (RuntimeException badPath) {
                     if (actions.contains("write") || actions.contains("delete")) {
-                        deny("candidate mutation through non-normalizable path " + name);
+                        deny(actor + " mutation through non-normalizable path " + name);
                     }
                 }
                 String targetUnix = target == null ? "" : target.toString().replace('\\', '/');
@@ -307,17 +341,17 @@ public final class Containment {
                 // /proc/self/mem can also be opened write-only.
                 if (unix.equals("/proc") || unix.startsWith("/proc/")
                         || targetUnix.equals("/proc") || targetUnix.startsWith("/proc/")) {
-                    deny("candidate procfs access " + actions + " " + unix);
+                    deny(actor + " procfs access " + actions + " " + unix);
                 }
                 if (actions.contains("execute")) {
-                    deny("candidate process execution " + name);
+                    deny(actor + " process execution " + name);
                 }
                 if (actions.contains("write") || actions.contains("delete")) {
                     if ("<<ALL FILES>>".equals(name)) {
-                        deny("candidate all-files mutation permission");
+                        deny(actor + " all-files mutation permission");
                     }
                     if (target != null && target.startsWith(protectedRoot)) {
-                        deny("candidate mutation of protected witness path " + target);
+                        deny(actor + " mutation of protected witness path " + target);
                     }
                 }
             }
@@ -325,12 +359,12 @@ public final class Containment {
 
         @Override
         public void checkPackageAccess(String pkg) {
-            if (candidateInContext()
+            if (authorityRestrictedContext()
                     && (pkg.startsWith("forge.d17.witness")
                     || pkg.startsWith("org.testng")
                     || pkg.startsWith("sun.misc")
                     || pkg.startsWith("jdk.internal"))) {
-                deny("candidate package access " + pkg);
+                deny(authorityLabel() + " package access " + pkg);
             }
         }
     }
@@ -349,12 +383,12 @@ public final class Containment {
         }
 
         private void checkKey(Object key) {
-            if (guard.candidateInContext()) {
+            if (guard.authorityRestrictedContext()) {
                 // The Properties object is process-global trusted runtime state.
                 // Candidate production code has no authority to mutate *any*
                 // entry, even one not currently consumed by TestNG: otherwise a
                 // future provider/loader/library property could become a bypass.
-                guard.deny("candidate direct Properties mutation " + key);
+                guard.deny("untrusted direct Properties mutation " + key);
             }
         }
 
@@ -384,7 +418,7 @@ public final class Containment {
 
         @Override
         public synchronized void putAll(Map<?, ?> values) {
-            if (guard.candidateInContext()) {
+            if (guard.authorityRestrictedContext()) {
                 for (Object key : values.keySet()) {
                     checkKey(key);
                 }
@@ -394,32 +428,32 @@ public final class Containment {
 
         @Override
         public synchronized void clear() {
-            if (guard.candidateInContext()) {
-                guard.deny("candidate Properties.clear");
+            if (guard.authorityRestrictedContext()) {
+                guard.deny("untrusted Properties.clear");
             }
             super.clear();
         }
 
         @Override
         public Set<Map.Entry<Object, Object>> entrySet() {
-            if (guard.candidateInContext()) {
-                guard.deny("candidate mutable Properties.entrySet view");
+            if (guard.authorityRestrictedContext()) {
+                guard.deny("untrusted mutable Properties.entrySet view");
             }
             return super.entrySet();
         }
 
         @Override
         public Set<Object> keySet() {
-            if (guard.candidateInContext()) {
-                guard.deny("candidate mutable Properties.keySet view");
+            if (guard.authorityRestrictedContext()) {
+                guard.deny("untrusted mutable Properties.keySet view");
             }
             return super.keySet();
         }
 
         @Override
         public Collection<Object> values() {
-            if (guard.candidateInContext()) {
-                guard.deny("candidate mutable Properties.values view");
+            if (guard.authorityRestrictedContext()) {
+                guard.deny("untrusted mutable Properties.values view");
             }
             return super.values();
         }
@@ -438,8 +472,8 @@ public final class Containment {
 
         @Override
         public synchronized void replaceAll(BiFunction<? super Object, ? super Object, ?> function) {
-            if (guard.candidateInContext()) {
-                guard.deny("candidate Properties.replaceAll");
+            if (guard.authorityRestrictedContext()) {
+                guard.deny("untrusted Properties.replaceAll");
             }
             super.replaceAll(function);
         }
@@ -499,7 +533,7 @@ public final class Containment {
         DependencyLoader deps = new DependencyLoader(dependencies, system);
         CandidateCodeLoader candidate = new CandidateCodeLoader(candidateCode, deps, system);
         TrustedTestLoader tests = new TrustedTestLoader(trustedTests, candidate, system);
-        Guard guard = new Guard(candidate, deps, protectedRoot);
+        Guard guard = new Guard(candidate, deps, system, protectedRoot);
         candidate.bindGuard(guard);
         GuardedProperties guarded = new GuardedProperties(System.getProperties(), guard);
         System.setProperties(guarded);
