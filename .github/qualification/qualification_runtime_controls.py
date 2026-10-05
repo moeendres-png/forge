@@ -65,6 +65,22 @@ class RuntimeCase(unittest.TestCase):
         trusted_execution.compile_witness(
             HERE, self.harness, self.java,
             str(self.testng_dir / "testng-7.10.2.jar"))
+
+        # The hosted runner's $RUNNER_TEMP ancestry is not guaranteed traversable
+        # by the separate d17exec OS identity. Copy the already digest-verified
+        # pinned closure into this per-test /tmp tree, then make only that exact
+        # copy readable to the execution UID.
+        runtime_testng_dir = self.tmp / "trusted-testng"
+        runtime_testng_dir.mkdir()
+        self.runtime_testng = []
+        for jar in self.testng:
+            target = runtime_testng_dir / jar.name
+            shutil.copy2(jar, target)
+            self.assertEqual(
+                trusted_execution.sha256_file(target),
+                trusted_execution.TRUSTED_TESTNG_PINS[jar.name],
+            )
+            self.runtime_testng.append(target)
         chmod_tree_readable(self.tmp)
 
     @property
@@ -102,7 +118,7 @@ class RuntimeCase(unittest.TestCase):
             ["/bin/sh", "-c",
              'rm -rf "$1" && mkdir -p "$1" && chmod 0700 "$1"',
              "d17", str(output)])
-        cp = ":".join([str(self.harness)] + [str(p) for p in self.testng])
+        cp = ":".join([str(self.harness)] + [str(p) for p in self.runtime_testng])
         cmd = [
             self.java, "-Djava.security.manager=allow", "-XX:+DisableAttachMechanism",
             "-cp", cp, trusted_execution.DRIVER_CLASS,
@@ -115,7 +131,7 @@ class RuntimeCase(unittest.TestCase):
             cmd += ["--candidate-code", str(path)]
         for path in trusted_dependencies:
             cmd += ["--trusted-dependency", str(path)]
-        for jar in self.testng:
+        for jar in self.runtime_testng:
             cmd += ["--trusted-jar", str(jar)]
         for klass, count in sorted(expected.items()):
             cmd += ["--class", klass, "--expected-count", "{}={}".format(klass, count)]
@@ -130,8 +146,10 @@ class RuntimeCase(unittest.TestCase):
         body = body.replace("AttackProduct.class", name + ".class")
         source = """package probe;
 public class %s {
+    private static void checkedBoundary() throws ClassNotFoundException { }
     public static int attack() {
         try {
+            checkedBoundary();
             %s
             return 0;
         } catch (SecurityException | ClassNotFoundException expected) {
@@ -561,7 +579,11 @@ class FilesystemAuthorityRuntimeControls(RuntimeCase):
             ["/bin/sh", "-c", 'printf pwn > "$1/x"', "d17", str(private)],
             timeout=30)
         self.assertNotEqual(proc.returncode, 0)
-        self.assertFalse((private / "x").exists())
+        verify = sandbox.run_candidate(
+            self.exec_user, self.exec_home, self.exec_sandbox,
+            ["/bin/sh", "-c", 'test ! -e "$1"', "d17", str(private / "x")],
+            timeout=30)
+        self.assertEqual(verify.returncode, 0, verify.stderr)
 
 
 if __name__ == "__main__":
