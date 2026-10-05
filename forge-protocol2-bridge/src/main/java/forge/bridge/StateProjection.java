@@ -193,7 +193,7 @@ public final class StateProjection {
     }
 
     /** Schema of {@link #constructedState(BridgeSession)}. */
-    public static final String CONSTRUCTED_STATE_SCHEMA = "commander-lab.generic-constructed-state/2";
+    public static final String CONSTRUCTED_STATE_SCHEMA = "commander-lab.generic-constructed-state/3";
 
     /**
      * Commander-Lab #441 decision (c): the engine's normalized constructed state,
@@ -278,6 +278,25 @@ public final class StateProjection {
                 }
                 entryCommander.addProperty("prior_command_zone_cast_count",
                         require("commander.casts", () -> Math.max(0, player.getCommanderCast(card))));
+                // Native object attributes (schema /3), read from the engine's
+                // card: its controller, counters (lower-case counter names, the
+                // Lab's naming), face-down status, tapped state and attached
+                // cards. Nothing is inferred from the request.
+                entryCommander.add("controller",
+                        seatName(session, require("commander.controller", () -> card.getController())));
+                final JsonObject counters = new JsonObject();
+                for (com.google.common.collect.Multiset.Entry<forge.game.card.CounterType> counter
+                        : require("commander.counters", () -> card.getCounters()).entrySet()) {
+                    if (counter.getCount() > 0) {
+                        counters.addProperty(counter.getElement().toString().toLowerCase(java.util.Locale.ROOT),
+                                counter.getCount());
+                    }
+                }
+                entryCommander.add("counters", counters);
+                entryCommander.addProperty("face_down", require("commander.face_down", () -> card.isFaceDown()));
+                entryCommander.addProperty("tapped", require("commander.tapped", () -> card.isTapped()));
+                entryCommander.addProperty("attachments",
+                        require("commander.attachments", () -> card.getAttachedCards().size()));
                 commanders.add(entryCommander);
             }
             entry.add("commanders", commanders);

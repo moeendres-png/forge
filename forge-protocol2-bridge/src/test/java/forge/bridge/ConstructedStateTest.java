@@ -147,6 +147,14 @@ public class ConstructedStateTest {
             Assert.assertEquals(commander.get("owner").getAsString(), "P" + seat);
             Assert.assertEquals(commander.get("zone").getAsString(), "command");
             Assert.assertEquals(commander.get("prior_command_zone_cast_count").getAsInt(), 0);
+            // Native attributes (schema /3): controlled by its owner, face up,
+            // untapped, no counters, nothing attached.
+            Assert.assertEquals(commander.get("controller").getAsString(),
+                    commander.get("owner").getAsString());
+            Assert.assertEquals(commander.getAsJsonObject("counters").size(), 0);
+            Assert.assertFalse(commander.get("face_down").getAsBoolean());
+            Assert.assertFalse(commander.get("tapped").getAsBoolean());
+            Assert.assertEquals(commander.get("attachments").getAsInt(), 0);
         }
         final String text = response.toString();
         Assert.assertFalse(text.contains("Mountain"), "no hidden card name may appear: " + text);
