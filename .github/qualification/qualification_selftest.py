@@ -1127,8 +1127,20 @@ class RedVerdictDerivation(EvidenceCase):
         self.assertNotPass(evidence, qualify.FAIL)
         self.assertIn("did not complete cleanly", evidence["reason"])
 
-    def test_launch_completing_with_skips_is_not_a_broken_launch(self) -> None:
-        """TestNG exit 2 means completed-with-skips, which the skip policy judges."""
+    def test_declared_skip_parent_receipt_is_not_a_broken_launch(self) -> None:
+        """A declared skip is judged from the trusted parent receipt, not child exit 2.
+
+        Under the external-parent receipt boundary only a clean child exit is
+        launch-complete.  Skip attribution is carried by the parent-authored
+        receipt; accepting raw child exit 2 would reintroduce candidate-controlled
+        ambiguity into qualification authority.
+        """
+        self.honest(out_of_band=[STRESS_CLASS])
+        evidence = self.verdict(out_of_band=[STRESS_CLASS])
+        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+
+    def test_raw_child_exit_two_cannot_manufacture_declared_skip_credit(self) -> None:
+        """A candidate-controlled exit 2 is not trusted skip evidence."""
         self.honest(out_of_band=[STRESS_CLASS])
         manifest = execution_manifest(
             self.lock["candidate"]["sha"], self.lock["candidate"]["tree"],
@@ -1136,7 +1148,8 @@ class RedVerdictDerivation(EvidenceCase):
             base=self.lock["comparison_base"]["sha"],
         )
         evidence = self.verdict(manifest=manifest, out_of_band=[STRESS_CLASS])
-        self.assertEqual(evidence["verdict"], qualify.PASS, evidence["reason"])
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("did not complete cleanly", evidence["reason"])
 
     def test_crashed_launch_without_totals_is_fail(self) -> None:
         self.honest()
@@ -1922,6 +1935,11 @@ class TrustedOrchestratorControls(unittest.TestCase):
         subprocess.run(["git", "config", "user.email", "a@b.invalid"], cwd=str(repo), check=True)
         subprocess.run(["git", "config", "user.name", "T"], cwd=str(repo), check=True)
         base = repo / "forge-game" / "src" / "test" / "java" / "pkg"
+        # required_classes_for_module intentionally derives discovery policy from
+        # trusted Git POMs.  Keep the synthetic comparison base structurally valid
+        # rather than bypassing that authority in the test fixture.
+        (repo / "pom.xml").write_text("<project/>\n")
+        (repo / "forge-game" / "pom.xml").write_text("<project/>\n")
         for name in ("AlphaTest.java", "BetaTest.java", "Support.java", "TestHelperX.java"):
             (base / name).write_text("package pkg;\n")
         subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
