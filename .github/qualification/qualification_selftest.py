@@ -2183,6 +2183,10 @@ class FrozenLaunchClasspath(unittest.TestCase):
             "static final class CandidateCodeLoader", 1)[0]
         self.assertNotIn("ClassLoader trusted", dependency_loader)
         self.assertNotIn("trusted.loadClass(", dependency_loader)
+        candidate_loader = source.split("static final class CandidateCodeLoader", 1)[1].split(
+            "static final class TrustedTestLoader", 1)[0]
+        self.assertNotIn("ClassLoader trusted", candidate_loader)
+        self.assertNotIn("trusted.loadClass(", candidate_loader)
         self.assertIn('return CONTEXT_HOSTILE;', source)
         self.assertIn(
             'return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
@@ -2191,6 +2195,7 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn('if (!authorityRestrictedContext())', source)
         self.assertIn('java.nio.file.LinkPermission', source)
         self.assertIn('pkg.startsWith("sun.")', source)
+        self.assertIn('new CandidateCodeLoader(candidateCode, deps)', source)
         self.assertIn('new Guard(candidate, deps, system, protectedRoot)', source)
         runtime = (Path(__file__).resolve().parent / "qualification_runtime_controls.py").read_text()
         for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
