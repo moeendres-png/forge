@@ -361,7 +361,13 @@ def verify_export(repo: Path, sha: str, dest: Path) -> None:
     for item in dest.rglob("*"):
         rel = item.relative_to(dest).as_posix()
         if item.is_symlink():
-            seen[rel] = ("120000", _git_blob_id(os.readlink(item).encode("utf-8", "surrogateescape")))
+            # D17's FilePermission containment is path based. A committed link
+            # such as candidate/link -> /proc/self/mem would otherwise let
+            # hostile code reach a forbidden target through an innocuous lexical
+            # path. Current trusted Forge carries no symlinks; any future use
+            # requires an explicit trusted-policy review rather than silent
+            # qualification.
+            raise SandboxError("symlink export path is unsupported for qualification: {}".format(rel))
         elif item.is_file():
             mode = "100755" if os.stat(item).st_mode & stat.S_IXUSR else "100644"
             seen[rel] = (mode, _git_blob_id(item.read_bytes()))
