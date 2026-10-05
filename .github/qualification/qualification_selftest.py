@@ -2192,6 +2192,17 @@ class FrozenLaunchClasspath(unittest.TestCase):
             'return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
             source,
         )
+        self.assertIn('if (invocationDepth.get().intValue() > 0)', source)
+        self.assertIn(
+            'return trustedWitness ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
+            source,
+        )
+        self.assertIn('void enterInvocation()', source)
+        self.assertIn('void exitInvocation()', source)
+        counter_source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17"
+                          / "witness" / "QualifiedExecutionCounter.java").read_text()
+        self.assertIn("containment.enterInvocation();", counter_source)
+        self.assertIn("containment.exitInvocation();", counter_source)
         self.assertIn('if (!authorityRestrictedContext())', source)
         self.assertIn('java.nio.file.LinkPermission', source)
         self.assertIn('pkg.startsWith("sun.")', source)
@@ -2201,6 +2212,7 @@ class FrozenLaunchClasspath(unittest.TestCase):
         for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
                       "/proc/thread-self/fd", "proc-self-mem-write",
                       "async_confused_deputy", "dependency_domain_cannot_bridge_testng_authority",
+                      "synchronous_jdk_deputy_is_denied_under_testng",
                       "jdk-async-properties-deputy",
                       "symlink-proc-alias", "preexisting_symlink_alias_to_procfs",
                       "sun-reflection-internals", "jdk-internal-unsafe",
