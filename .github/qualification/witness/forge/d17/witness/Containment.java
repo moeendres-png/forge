@@ -195,24 +195,29 @@ public final class Containment {
     }
 
     /**
-     * Sticky containment guard.  Only frames loaded from CandidateCodeLoader are
-     * treated as hostile; comparison-base tests are trusted policy, not candidate
-     * input.
+     * Sticky containment guard. Candidate production and its pinned dependency
+     * domain are both treated as hostile authority-wise. This prevents a malicious
+     * candidate from turning a trusted dependency into an asynchronous confused
+     * deputy after the original candidate frame has returned. Comparison-base
+     * tests remain trusted policy.
      */
     @SuppressWarnings("removal")
     static final class Guard extends SecurityManager {
         private final CandidateCodeLoader candidate;
+        private final DependencyLoader dependencies;
         private final Path protectedRoot;
         private volatile String violation;
 
-        Guard(CandidateCodeLoader candidate, Path protectedRoot) {
+        Guard(CandidateCodeLoader candidate, DependencyLoader dependencies, Path protectedRoot) {
             this.candidate = candidate;
+            this.dependencies = dependencies;
             this.protectedRoot = protectedRoot.toAbsolutePath().normalize();
         }
 
         boolean candidateInContext() {
             for (Class<?> frame : getClassContext()) {
-                if (frame.getClassLoader() == candidate) {
+                ClassLoader loader = frame.getClassLoader();
+                if (loader == candidate || loader == dependencies) {
                     return true;
                 }
             }
@@ -286,32 +291,32 @@ public final class Containment {
                 deny("candidate property mutation " + name);
             } else if (permission instanceof FilePermission) {
                 String actions = permission.getActions();
+                String unix = name.replace('\\', '/');
+                Path target = null;
+                try {
+                    target = Path.of(name).toAbsolutePath().normalize();
+                } catch (RuntimeException badPath) {
+                    if (actions.contains("write") || actions.contains("delete")) {
+                        deny("candidate mutation through non-normalizable path " + name);
+                    }
+                }
+                String targetUnix = target == null ? "" : target.toString().replace('\\', '/');
+                // procfs exposes process memory, fd tables, task aliases and
+                // root-based aliases. Deny every operation, not only reads:
+                // /proc/self/mem can also be opened write-only.
+                if (unix.equals("/proc") || unix.startsWith("/proc/")
+                        || targetUnix.equals("/proc") || targetUnix.startsWith("/proc/")) {
+                    deny("candidate procfs access " + actions + " " + unix);
+                }
                 if (actions.contains("execute")) {
                     deny("candidate process execution " + name);
-                }
-                if (actions.contains("read")) {
-                    String unix = name.replace('\\', '/');
-                    // /proc has many equivalent aliases for the same process
-                    // authority: thread-self, self/task/<tid>, numeric pid/task,
-                    // and /proc/<pid>/root/proc/... can all route around a
-                    // filename denylist. Candidate production bytecode has no
-                    // legitimate qualification-authority reason to read procfs,
-                    // so deny the whole procfs namespace fail-closed.
-                    if (unix.equals("/proc") || unix.startsWith("/proc/")) {
-                        deny("candidate procfs read " + unix);
-                    }
                 }
                 if (actions.contains("write") || actions.contains("delete")) {
                     if ("<<ALL FILES>>".equals(name)) {
                         deny("candidate all-files mutation permission");
                     }
-                    try {
-                        Path target = Path.of(name).toAbsolutePath().normalize();
-                        if (target.startsWith(protectedRoot)) {
-                            deny("candidate mutation of protected witness path " + target);
-                        }
-                    } catch (RuntimeException badPath) {
-                        deny("candidate mutation through non-normalizable path " + name);
+                    if (target != null && target.startsWith(protectedRoot)) {
+                        deny("candidate mutation of protected witness path " + target);
                     }
                 }
             }
@@ -469,7 +474,7 @@ public final class Containment {
         DependencyLoader deps = new DependencyLoader(dependencies, system);
         CandidateCodeLoader candidate = new CandidateCodeLoader(candidateCode, deps, system);
         TrustedTestLoader tests = new TrustedTestLoader(trustedTests, candidate, system);
-        Guard guard = new Guard(candidate, protectedRoot);
+        Guard guard = new Guard(candidate, deps, protectedRoot);
         candidate.bindGuard(guard);
         GuardedProperties guarded = new GuardedProperties(System.getProperties(), guard);
         System.setProperties(guarded);
