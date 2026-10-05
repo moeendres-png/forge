@@ -1,0 +1,37 @@
+{
+  "source_sha": "4bc55fabed2731f72ca6305de3c133f1b439407e",
+  "source_tree": "5c2c7b1cae2f070ab371e605ac915dcf31fa36cf",
+  "code_delta_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "code_delta_file": null,
+  "java": "21",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T13:56:35.354418+00:00",
+  "completed_at": "2026-10-05T13:57:26.675546+00:00",
+  "maven_exit": 0,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "TestSuite",
+    "time": "11.56",
+    "tests": "23",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "0"
+  },
+  "failures": [],
+  "raw_xml_sha256": "d71a61f40ad05608355ce5a8a91320b2fae22a0c8e2c7250a13761778983cad9",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}
