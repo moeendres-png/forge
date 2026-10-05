@@ -288,6 +288,16 @@ def derive_verdict(
             surface.get("comparison_base_sha"), lock["comparison_base"]["sha"]
         ),
     )
+    current_test_policy_ok = (
+        lock["comparison_base"]["sha"] == lock["workflow_authority"]["sha"]
+    )
+    signal(
+        "comparison_base_is_current_trusted_policy",
+        current_test_policy_ok,
+        "comparison base={} vs current workflow authority={}".format(
+            lock["comparison_base"]["sha"], lock["workflow_authority"]["sha"]
+        ),
+    )
     test_source_ok = (
         manifest.get("trusted_test_source_sha") == lock["comparison_base"]["sha"]
         and manifest.get("candidate_test_sources_used_for_credit") is False
@@ -656,6 +666,11 @@ def derive_verdict(
         )
     elif not by_name["candidate_identity_bound"]["satisfied"]:
         verdict, reason = FAIL, "candidate identity is not bound to the locked exact SHA/TREE"
+    elif not by_name["comparison_base_is_current_trusted_policy"]["satisfied"]:
+        verdict, reason = UNKNOWN, (
+            "candidate does not contain the current trusted workflow/test-policy authority; "
+            "merge current master before requesting qualification"
+        )
     elif isinstance(build_divergence, list) and build_divergence:
         verdict, reason = UNKNOWN, (
             "candidate changes Maven build/plugin authority relative to the trusted comparison "
