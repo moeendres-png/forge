@@ -414,6 +414,41 @@ public class ShadowTest { @Test public void trustedWins(){ assertEquals(Shared.v
             candidate_code=[candidate], trusted_dependencies=[trusted])
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    def test_dependency_domain_cannot_bridge_testng_authority(self) -> None:
+        trusted = self.compile_sources({
+            "deputy.LoaderDeputy": """package deputy;
+public class LoaderDeputy {
+  public static int attack() {
+    try {
+      Class.forName("org.testng.TestNG", true, LoaderDeputy.class.getClassLoader());
+      return 0;
+    } catch (ClassNotFoundException | SecurityException expected) {
+      return 1;
+    } catch (Throwable other) {
+      return 2;
+    }
+  }
+}
+"""
+        }, "loader-deputy")
+        candidate = self.compile_sources({
+            "probe.DependencyLoaderAttackProduct": """package probe;
+public class DependencyLoaderAttackProduct {
+  public static int attack() {
+    return deputy.LoaderDeputy.attack();
+  }
+}
+"""
+        }, "dependency-loader-attack", extra_cp=[trusted])
+        tests = self.trusted_attack_test(
+            "DependencyLoaderAttackProduct", expected_value=1,
+            class_name="DependencyLoaderAttackTest", extra_cp=[candidate, trusted])
+        proc = self.launch(
+            tests, {"probe.DependencyLoaderAttackTest": 1},
+            {"probe.DependencyLoaderAttackTest#attackIsRefused": 1},
+            candidate_code=[candidate], trusted_dependencies=[trusted])
+        self.assertEqual(proc.returncode, 13, proc.stderr)
+
     def test_trusted_dependency_cannot_be_used_as_async_confused_deputy(self) -> None:
         trusted = self.compile_sources({
             "deputy.AsyncDeputy": """package deputy;
