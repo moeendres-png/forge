@@ -442,11 +442,16 @@ public class DeckRecognizer {
     // lightning marks). The second form needs a digit, so a word such as a set
     // code or part of a card name is never read as a number, and its separators
     // are never whitespace, '*', '|' or a closing bracket, so a following foil
-    // marker or delimiter is not swallowed into the number.
+    // marker or delimiter is not swallowed into the number. It must also start
+    // with a digit or carry a separator: a bare word such as a trailing "x4"
+    // quantity is never read as a collector number.
+    private static final String COLL_NUMBER_SEP = "[^\\s*|)\\]}>0-9A-Za-z]";
     public static final String REX_COLL_NUMBER = String.format(
             "(?<%s>\\*?[0-9A-Z]+(?:\\S[0-9A-Z]*)?"
-                    + "|\\*?(?=[^\\s*|)\\]}>]*[0-9])[0-9A-Za-z]+(?:[^\\s*|)\\]}>][0-9A-Za-z]*){0,2})",
-            REGRP_COLLNR);
+                    + "|\\*?(?=[^\\s*|)\\]}>]*[0-9])"
+                    + "(?:[0-9][0-9A-Za-z]*(?:%s[0-9A-Za-z]*){0,2}"
+                    + "|[0-9A-Za-z]+(?:%s[0-9A-Za-z]*){1,2}))",
+            REGRP_COLLNR, COLL_NUMBER_SEP, COLL_NUMBER_SEP);
     public static final String REX_CARD_COUNT = String.format("(?<%s>[\\d]{1,2})(?<mult>x)?", REGRP_CARDNO);
     // EXTRA
     // Foil markers: (F) MTGGoldfish; *F* foil and *E* etched foil, Moxfield/MTGA style

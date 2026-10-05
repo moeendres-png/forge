@@ -108,3 +108,24 @@ Local validation (sandbox, C.UTF-8):
 Out of scope and unchanged: Rules Core, card scripts, workflows, D17/D22.
 Full coverage and JDK reduction remain unqualified.
 PRODUCTION_PROVIDER=NOT_SELECTED; ARCHITECTURE_FREEZE=NOT_CLAIMED.
+
+## Adversarial review (fresh context) and follow-up
+
+No P1. P2 fixed: the widened collector-number form also read a trailing
+quantity such as `x4` (and bare words such as `qty4`, `set2`, `p146`) as a
+number; with the set-level fallback a `4x`-intended line imported one copy.
+The second form now has to start with a digit or carry a non-alphanumeric
+separator. New negative controls (`x4`, `x10`, `qty4`, `set2`, `p146`, and
+full lines `1 Power Sink (TMP) x4`, `1 Lightning Bolt (M10) x4 *F*`) fail on
+the previous regex and pass now; the whole-database grammar control still
+passes, so no real collector number is rejected. Upper-case `X4` fits the
+original upper-case form and was already accepted before #531 (unchanged).
+P3 fixed: PRM lists 27 basic Island arts (comment said 30). P3 noted:
+DeckUrlImportTextBuilder (Moxfield/Archidekt URL import) filters numbers with
+the same regex, by design, so the parser accepts exactly what the importer
+emits; real database numbers such as `380★☇` are now kept there too. P3
+noted, no current case: setPreferredArt compares the main edition code, so
+a print stored under a Code2 alias would be refused (fail-safe).
+
+After the follow-up, Java 21 C.UTF-8 targeted CardDb*/DeckRecognizerTest/
+CardEditionCollection*/D24ExecutionGuardTest: 262 tests, 0 failures.

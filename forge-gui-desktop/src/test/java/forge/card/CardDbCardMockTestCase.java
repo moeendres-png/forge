@@ -2234,7 +2234,7 @@ public class CardDbCardMockTestCase extends CardMockTestCase {
         assertEquals(islandOriginal.getName(), "Island");
         // #531: no core/expansion/reprint edition has a twelfth Island art, so the too-strict
         // preference falls back to all editions in original-art order. Magic Online Promos
-        // (PRM, 2002-06-24) now lists 30 Island arts and precedes SLD (2019-12-02).
+        // (PRM, 2002-06-24) now lists 27 Island arts and precedes SLD (2019-12-02).
         assertEquals(islandOriginal.getEdition(), "PRM");
         assertEquals(islandOriginal.getArtIndex(), 12);
     }

@@ -907,7 +907,18 @@ public class DeckRecognizerTest extends CardMockTestCase {
         assertTrue(goldfish.matches());
         assertEquals(goldfish.group(DeckRecognizer.REGRP_COLLNR), "M19-185j");
         // A number never spans whitespace.
-        assertFalse(Pattern.compile(DeckRecognizer.REX_COLL_NUMBER).matcher("380 j").matches());
+        Pattern number = Pattern.compile(DeckRecognizer.REX_COLL_NUMBER);
+        assertFalse(number.matcher("380 j").matches());
+        // A trailing quantity or a bare word is not a collector number: a set
+        // lookup with an unknown number falls back to any print of the set, so
+        // reading "x4" as a number would silently import one copy instead of four.
+        // (Upper-case "X4" fits the original upper-case form and was accepted
+        // before #531; that pre-existing grammar is unchanged here.)
+        for (String word : new String[] {"x4", "x10", "qty4", "set2", "p146"}) {
+            assertFalse(number.matcher(word).matches(), word);
+        }
+        assertFalse(DeckRecognizer.CARD_SET_COLLNO_PATTERN.matcher("1 Power Sink (TMP) x4").matches());
+        assertFalse(DeckRecognizer.CARD_SET_COLLNO_PATTERN.matcher("1 Lightning Bolt (M10) x4 *F*").matches());
     }
 
     // === Card-Set-CollectorNumber Pattern Request
