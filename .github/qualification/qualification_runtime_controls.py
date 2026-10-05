@@ -244,6 +244,13 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'System.setProperties(new java.util.Properties());',
         "direct-properties-mutation":
             'System.getProperties().put("d17.hostile.property", "candidate");',
+        "properties-entryset-mutation":
+            'for (java.util.Map.Entry<Object,Object> e : System.getProperties().entrySet()) '
+            '{ e.setValue("candidate"); break; }',
+        "properties-keyset-mutation":
+            'System.getProperties().keySet().remove("user.dir");',
+        "properties-values-mutation":
+            'System.getProperties().values().clear();',
         "security-manager-replacement":
             'System.setSecurityManager(null);',
         "new-classloader":
