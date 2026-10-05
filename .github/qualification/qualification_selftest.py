@@ -2152,6 +2152,19 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn('--candidate-code', source)
         self.assertIn('--trusted-dependency', source)
 
+    def test_containment_policy_covers_dynamic_class_global_state_and_proc_fds(self) -> None:
+        source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
+                  / "Containment.java").read_text()
+        self.assertIn('name.equals("defineClass")', source)
+        self.assertIn('(mem|maps|pagemap|fd|fdinfo)', source)
+        guarded = source.split("static final class GuardedProperties", 1)[1].split(
+            "static final class Session", 1)[0]
+        check_key = guarded.split("private void checkKey", 1)[1].split("@Override", 1)[0]
+        self.assertIn("guard.candidateInContext()", check_key)
+        self.assertNotIn("sensitiveProperty", check_key)
+        self.assertIn("putIfAbsent(Object key, Object value)", guarded)
+        self.assertIn("remove(Object key, Object value)", guarded)
+
 
 class IntegrityRecordShape(EvidenceCase):
     """Review P2 at 63731d9f: qualify must accept the record sandbox.py verify really writes."""
@@ -2378,6 +2391,11 @@ class WorkflowContractControls(unittest.TestCase):
 
     def test_no_continue_on_error(self) -> None:
         self.assertNotIn("continue-on-error", self.text)
+
+    def test_full_supported_jdk_matrix_is_not_reduced(self) -> None:
+        self.assertIn('matrix:', self.text)
+        self.assertGreaterEqual(self.text.count('java: ["17", "21"]'), 2)
+        self.assertGreaterEqual(self.text.count('java-version: ${{ matrix.java }}'), 1)
 
     def test_verdict_is_surfaced_verbatim_and_never_hardcoded(self) -> None:
         verdict = self._step_run_block(self.text, "Derive the exact-SHA qualification verdict")
