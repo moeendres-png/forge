@@ -1115,6 +1115,17 @@ class RedVerdictDerivation(EvidenceCase):
         self.assertNotPass(evidence, qualify.FAIL)
         self.assertIn("not bound to the locked comparison base", evidence["reason"])
 
+    def test_stale_comparison_base_cannot_receive_current_test_policy_credit(self) -> None:
+        self.honest()
+        stale = "f" * 40
+        self.lock["comparison_base"]["sha"] = stale
+        self.surface["comparison_base_sha"] = stale
+        self.manifest["comparison_base_sha"] = stale
+        self.manifest["trusted_test_source_sha"] = stale
+        evidence = self.verdict()
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertIn("does not contain the current trusted", evidence["reason"])
+
     def test_failed_launch_is_fail(self) -> None:
         """TestNG exit 1 means the suite had failures."""
         self.honest()
