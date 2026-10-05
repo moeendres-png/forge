@@ -12,6 +12,7 @@ import java.util.Collection;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.PropertyPermission;
 import java.util.function.BiFunction;
 import java.util.function.Function;
@@ -19,15 +20,15 @@ import java.util.function.Function;
 /**
  * In-JVM containment for hostile candidate production bytecode.
  *
- * <p>The qualification JVM has three code domains:
- * <ol>
- *   <li>the trusted driver/listener and pinned TestNG on the system loader;</li>
- *   <li>the trusted comparison-base tests on {@link TrustedTestLoader}; and</li>
- *   <li>candidate production bytecode on {@link CandidateCodeLoader}.</li>
- * </ol>
+ * <p>The qualification JVM separates the trusted driver/listener and pinned
+ * TestNG on the system loader, trusted comparison-base tests on
+ * {@link TrustedTestLoader}, pinned production dependencies on
+ * {@link DependencyLoader}, and candidate production bytecode on
+ * {@link CandidateCodeLoader}. Candidate and dependency domains are both
+ * authority-tainted.
  *
  * <p>The candidate loader cannot resolve the witness package or TestNG authority
- * APIs.  The security manager additionally denies the candidate domain the
+ * APIs.  The security manager additionally denies untrusted authority contexts the
  * process-global operations that could bypass that loader boundary or corrupt
  * the witness.  A denied operation is sticky: even when candidate code catches
  * {@link SecurityException}, the run is marked violated and cannot earn PASS.
