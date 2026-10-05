@@ -56,4 +56,15 @@ public class CardEditionCollectionCardMockTestCase extends CardMockTestCase {
         CardEdition ed = editions.getTheLatestOfAllTheOriginalEditionsOfCardsIn(pool);
         assertEquals(ed.getCode(), "ALL");
     }
+
+    @Test
+    public void testUnknownEditionSentinelExposesCodes() {
+        // Cards without any edition entry are stored under the "???" sentinel and
+        // StaticData.getCardEdition returns CardEdition.UNKNOWN for them.
+        CardEdition unknown = FModel.getMagicDb().getCardEdition(CardEdition.UNKNOWN_CODE);
+        assertEquals(unknown, CardEdition.UNKNOWN);
+        assertEquals(unknown.getScryfallCode(), CardEdition.UNKNOWN_CODE);
+        assertEquals(unknown.getTokensCode(), "t" + CardEdition.UNKNOWN_CODE);
+        assertEquals(unknown.getCardsLangCode(), "en");
+    }
 }
