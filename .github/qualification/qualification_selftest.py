@@ -2177,6 +2177,8 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("new File(name).getCanonicalPath()", source)
         self.assertIn("resolvingPath.set(Boolean.TRUE)", source)
         self.assertIn('loader == candidate || loader == dependencies', source)
+        self.assertIn('deps.bindGuard(guard)', source)
+        self.assertIn('dependency attempted to load trusted authority class', source)
         self.assertIn('return CONTEXT_HOSTILE;', source)
         self.assertIn(
             'return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
@@ -2189,7 +2191,8 @@ class FrozenLaunchClasspath(unittest.TestCase):
         runtime = (Path(__file__).resolve().parent / "qualification_runtime_controls.py").read_text()
         for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
                       "/proc/thread-self/fd", "proc-self-mem-write",
-                      "async_confused_deputy", "jdk-async-properties-deputy",
+                      "async_confused_deputy", "dependency_domain_cannot_bridge_testng_authority",
+                      "jdk-async-properties-deputy",
                       "symlink-proc-alias", "preexisting_symlink_alias_to_procfs",
                       "sun-reflection-internals", "jdk-internal-unsafe",
                       "runtime_defined_bytecode_remains_in_hostile_candidate_domain"):
