@@ -2182,12 +2182,13 @@ class FrozenLaunchClasspath(unittest.TestCase):
         )
         self.assertIn('if (!authorityRestrictedContext())', source)
         self.assertIn('java.nio.file.LinkPermission', source)
+        self.assertIn('pkg.startsWith("sun.")', source)
         self.assertIn('new Guard(candidate, deps, system, protectedRoot)', source)
         runtime = (Path(__file__).resolve().parent / "qualification_runtime_controls.py").read_text()
         for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
                       "/proc/thread-self/fd", "proc-self-mem-write",
                       "async_confused_deputy", "jdk-async-properties-deputy",
-                      "symlink-proc-alias",
+                      "symlink-proc-alias", "sun-reflection-factory",
                       "runtime_defined_bytecode_remains_in_hostile_candidate_domain"):
             self.assertIn(alias, runtime)
         guarded = source.split("static final class GuardedProperties", 1)[1].split(
