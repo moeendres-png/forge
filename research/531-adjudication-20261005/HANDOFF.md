@@ -58,3 +58,9 @@ text parser; keep full-name/multicolor handling and every test assertion intact.
 This parser formats deck text, not mana payment/legality or Rules decisions.
 No other27 classifications are promoted. No Rules Core/cards/fixtures/workflows
 or data expectation changes. Fresh after/negative evidence and review pending.
+
+The first short-code-only repair770944 left two failures: accepted British
+`Colourless` was also passed to the American/full-name-only enum conversion.
+That diagnostic run84/9 is not final after evidence. The parser now maps that
+already accepted spelling to the same existing COLORLESS enum; no assertions
+or grammar broadened. Five-method after/negative controls must rerun on this head.
