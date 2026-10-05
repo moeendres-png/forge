@@ -263,8 +263,14 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'new javax.management.ObjectName("com.sun.management:type=HotSpotDiagnostic"));',
         "proc-self-mem":
             'java.nio.file.Files.newByteChannel(java.nio.file.Path.of("/proc/self/mem")).close();',
+        "proc-thread-self-mem":
+            'java.nio.file.Files.newByteChannel(java.nio.file.Path.of("/proc/thread-self/mem")).close();',
+        "proc-root-alias-mem":
+            'java.nio.file.Files.newByteChannel(java.nio.file.Path.of("/proc/self/root/proc/self/mem")).close();',
         "fd-discovery":
             'java.nio.file.Files.list(java.nio.file.Path.of("/proc/self/fd")).close();',
+        "proc-thread-self-fd":
+            'java.nio.file.Files.list(java.nio.file.Path.of("/proc/thread-self/fd")).close();',
         "thread-race":
             'Thread t=new Thread(() -> System.setProperty("testng.mode.dryrun","true")); t.start(); t.join();',
     }
