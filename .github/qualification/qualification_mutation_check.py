@@ -569,10 +569,17 @@ MUTATIONS = [
         "trust-jdk-deputy-beneath-active-testng-invocation",
         "witness/forge/d17/witness/Containment.java",
         '            if (invocationDepth.get().intValue() > 0) {\n'
-        '                return trustedWitness ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n'
+        '                return activeCounter ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n'
         '            }\n',
         '',
         "a candidate-supplied pure-JDK synchronous deputy could borrow a lower TestNG frame's trusted authority",
+    ),
+    Mutation(
+        "let-deep-driver-lend-active-invocation-authority",
+        "witness/forge/d17/witness/Containment.java",
+        '                return activeCounter ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n',
+        '                return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n',
+        "the permanently deep TestNG/driver stack could authorize a candidate-supplied pure-JDK synchronous deputy",
     ),
     Mutation(
         "drop-testng-invocation-barrier-hooks",
