@@ -513,6 +513,13 @@ MUTATIONS = [
         "runtime-defined candidate bytecode could bypass the intended permission boundary",
     ),
     Mutation(
+        "ignore-canonical-symlink-target",
+        "witness/forge/d17/witness/Containment.java",
+        '                        || canonicalUnix.equals("/proc") || canonicalUnix.startsWith("/proc/")) {\n',
+        '                        || false) {\n',
+        "a pre-existing symlink planted before the JVM could alias procfs behind a benign lexical path",
+    ),
+    Mutation(
         "allow-procfs-alias-or-write-bypass",
         "witness/forge/d17/witness/Containment.java",
         '                if (unix.equals("/proc") || unix.startsWith("/proc/")\n'
