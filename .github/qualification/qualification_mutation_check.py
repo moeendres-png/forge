@@ -651,6 +651,19 @@ MUTATIONS = [
         "guard-internal loader inspection would recursively re-enter RuntimePermission(getClassLoader)",
     ),
     Mutation(
+        "reenter-package-access-during-authority-loader-inspection",
+        "witness/forge/d17/witness/Containment.java",
+        '        public void checkPackageAccess(String pkg) {\n'
+        '            if (Boolean.TRUE.equals(inspectingClassLoader.get())) {\n'
+        '                // Class#getClassLoader may cause JDK class loading which re-enters\n'
+        '                // package checks. This is guard-internal authority inspection;\n'
+        '                // no candidate callback executes while the flag is set.\n'
+        '                return;\n'
+        '            }\n',
+        '        public void checkPackageAccess(String pkg) {\n',
+        "guard-internal Class#getClassLoader package checks would recursively re-enter authority inspection",
+    ),
+    Mutation(
         "trust-jdk-only-asynchronous-authority",
         "witness/forge/d17/witness/Containment.java",
         '            // A JDK-only asynchronous task has neither a hostile frame nor an\n'
