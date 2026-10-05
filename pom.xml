@@ -25,6 +25,8 @@
         <basedir.parent>./forge-gui</basedir.parent>
         <configSourceDirectory>src/main/config</configSourceDirectory>
         <maven.compiler.release>17</maven.compiler.release>
+        <!-- D21 SHADOW ONLY: empty by default; Java 17 profile below opens java.net for the red control. -->
+        <d21.redcontrol.addOpens></d21.redcontrol.addOpens>
         <!-- version code - maj.min.rev ie 2.0.00 -->
         <versionCode>2.0.15</versionCode>
         <!-- set snapshotName to blank for release -->
@@ -144,6 +146,7 @@
                             --add-opens java.base/java.util.stream=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
                             --add-opens java.desktop/javax.imageio.spi=ALL-UNNAMED
+                            \${d21.redcontrol.addOpens}
                         </argLine>
                     </configuration>
                 </plugin>
@@ -370,6 +373,16 @@
     </dependencyManagement>
 
     <profiles>
+        <!-- D21 SHADOW EXPERIMENT ONLY. Never merge this red-control profile to production. -->
+        <profile>
+            <id>d21-red-control-java17-baseline</id>
+            <activation>
+                <jdk>[17,18)</jdk>
+            </activation>
+            <properties>
+                <d21.redcontrol.addOpens>--add-opens java.base/java.net=ALL-UNNAMED</d21.redcontrol.addOpens>
+            </properties>
+        </profile>
         <!--
           The iOS module is intentionally NOT in the default <modules> reactor.
           It depends on artifacts that are generated locally by the iOS build

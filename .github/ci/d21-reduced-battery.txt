@@ -1,0 +1,15 @@
+# D21 reduced Java21 shadow battery
+# Source-lock: ca1d57d19f9c91d6107d0ce9fb22741ac856e948 / TREE ce092ee296f60dc7108e16aaa252559f4781af69
+# Mechanism-derived, not speed-derived. UNKNOWN => FULL_JAVA21_BATTERY.
+forge.d21.D21ModuleAccessRedControlTest
+forge.HeadlessStartupTest
+forge.net.NetworkPlayIntegrationTest
+forge.d24.D24ExecutionGuardTest
+forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103
+forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104
+forge.card.CardDbCardMockTestCase
+forge.card.CardDbLazyCardLoadingCardMockTestCase
+forge.card.CardDbPerformanceTests
+forge.card.CardDbWithNoImageCardDbMockTestCase
+forge.card.CardEditionCollectionCardMockTestCase
+forge.deck.DeckRecognizerTest

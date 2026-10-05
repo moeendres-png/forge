@@ -1,0 +1,73 @@
+name: D21 Java21 compatibility shadow
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - hardening/d21-jdk21-shadow-20261005
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  reduced-java21-shadow:
+    runs-on: ubuntu-latest
+    name: D21 reduced Java21 shadow
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26 # v3.7.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Java 21
+        uses: actions/setup-java@e9fbacdec3bb3b6036605a3e6f7995d66773a8c6 # v3.14.2
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install virtual framebuffer
+        run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
+
+      - name: Run mechanism-derived reduced battery
+        id: reduced
+        shell: bash
+        run: |
+          set -uo pipefail
+          export DISPLAY=":1"
+          Xvfb :1 -screen 0 800x600x8 &
+          tests="$(grep -vE '^[[:space:]]*(#|$)' .github/ci/d21-reduced-battery.txt | paste -sd, -)"
+          start="$(date +%s)"
+          set +e
+          mvn -U -B -pl forge-gui-desktop -am \
+            -Dtest="$tests" \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            test
+          rc=$?
+          set -e
+          end="$(date +%s)"
+          echo "maven_exit=$rc" >> "$GITHUB_OUTPUT"
+          echo "duration=$((end-start))" >> "$GITHUB_OUTPUT"
+
+      - name: Verify red-control sensitivity and current-outcome preservation
+        if: always()
+        shell: bash
+        run: |
+          python3 -I .github/ci/d21_shadow_result.py \
+            --repo . \
+            --maven-exit "${{ steps.reduced.outputs.maven_exit }}" \
+            --duration-seconds "${{ steps.reduced.outputs.duration }}" \
+            --source-sha "$GITHUB_SHA" \
+            --source-tree "$(git rev-parse "$GITHUB_SHA^{tree}")" \
+            --output "$RUNNER_TEMP/D21_REDUCED_RESULT.json"
+
+      - name: Upload D21 shadow evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: d21-reduced-java21-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/D21_REDUCED_RESULT.json
+            **/target/surefire-reports/TEST-*.xml
+          if-no-files-found: error
+          retention-days: 30
