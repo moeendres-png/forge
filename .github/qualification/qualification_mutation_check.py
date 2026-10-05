@@ -506,11 +506,11 @@ MUTATIONS = [
         "runtime-defined candidate bytecode could bypass the intended permission boundary",
     ),
     Mutation(
-        "allow-proc-fd-discovery",
+        "allow-procfs-alias-bypass",
         "witness/forge/d17/witness/Containment.java",
-        '(mem|maps|pagemap|fd|fdinfo)',
-        '(mem|maps|pagemap)',
-        "candidate code could inspect process memory/file-descriptor metadata",
+        '                    if (unix.equals("/proc") || unix.startsWith("/proc/")) {\n',
+        '                    if (unix.matches("^/proc/(self|[0-9]+)/(mem|maps|pagemap|fd|fdinfo)(/.*)?$")) {\n',
+        "procfs aliases such as thread-self or self/root could bypass process-memory/fd containment",
     ),
     Mutation(
         "allow-arbitrary-direct-system-properties-mutation",
