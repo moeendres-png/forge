@@ -34,3 +34,15 @@ fixture defects, retain UNKNOWN where unresolved. Then make bounded changes
 with before/after/red controls. Do not mix D22/Forge27 or D17 into this branch.
 Issue#531 remains OPEN. Full coverage and JDK reduction remain unqualified.
 PRODUCTION_PROVIDER=NOT_SELECTED; ARCHITECTURE_FREEZE=NOT_CLAIMED.
+
+## Independent-fixture finding (implementation validation pending)
+
+Isolated DeckRecognizerTest on exact50218 source executes84 but fails49, not
+the hosted full-suite12: Lang was uninitialized before CardStorageReader's
+parallel parse; Spider-UK variant parsing aborted its batch and left an incomplete
+database. The full-suite ordering had hidden the prerequisite. This is a genuine
+fixture/harness defect. CardMockTestCase now initializes normal source language
+and type data before eager parsing, with no card filtering or expectations edits.
+This is fixture construction, not Rules behavior proof. Repeat the isolated
+original84 tests before the symbol product repair; do not credit the mistakenly
+named unchanged after-run as an after-fix result (it was another49-failure baseline).
