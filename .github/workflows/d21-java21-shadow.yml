@@ -1,0 +1,163 @@
+name: D21 Java21 compatibility shadow experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - hardening/d21-java21-shadow-reduction-20261005
+
+permissions:
+  contents: read
+
+env:
+  D21_FIXTURE_SOURCE: .github/d21/D21SecurityManagerCompatibilityRedControlTest.java
+  D21_FIXTURE_TARGET: forge-gui-desktop/src/test/java/forge/d21/D21SecurityManagerCompatibilityRedControlTest.java
+
+jobs:
+  baseline-red-control-java17:
+    name: D21 baseline red control Java 17
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@e9fbacdec3bb3b6036605a3e6f7995d66773a8c6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Inject isolated D21 red control
+        run: |
+          mkdir -p "$(dirname "$D21_FIXTURE_TARGET")"
+          cp "$D21_FIXTURE_SOURCE" "$D21_FIXTURE_TARGET"
+      - name: Install Xvfb
+        run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
+      - name: Prove baseline accepts compatibility behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DISPLAY=:1
+          Xvfb :1 -screen 0 800x600x8 &
+          start=$(date +%s)
+          mvn -U -B -pl forge-gui-desktop -am             -Dtest=forge.d21.D21SecurityManagerCompatibilityRedControlTest             -Dsurefire.failIfNoSpecifiedTests=false test 2>&1 | tee "$RUNNER_TEMP/d21-java17-red-control.log"
+          end=$(date +%s)
+          echo "D21_BASELINE_RED_CONTROL=PASS" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "D21_BASELINE_SECONDS=$((end-start))" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: d21-baseline-java17-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/d21-java17-red-control.log
+            **/target/surefire-reports/TEST-*.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+  reduced-java21:
+    name: D21 reduced candidate Java 21
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@e9fbacdec3bb3b6036605a3e6f7995d66773a8c6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Install Xvfb
+        run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
+      - name: Measure no-red reduced candidate three times
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DISPLAY=:1
+          Xvfb :1 -screen 0 800x600x8 &
+          tests="forge.d24.D24ExecutionGuardTest,forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103,forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
+          : > "$RUNNER_TEMP/d21-reduced-timings.txt"
+          for i in 1 2 3; do
+            start=$(date +%s)
+            mvn -U -B -pl forge-gui-desktop -am clean test               -Dtest="$tests" -Dsurefire.failIfNoSpecifiedTests=false               2>&1 | tee "$RUNNER_TEMP/d21-reduced-$i.log"
+            end=$(date +%s)
+            echo "$((end-start))" | tee -a "$RUNNER_TEMP/d21-reduced-timings.txt"
+          done
+          awk '{sum+=$1; if(NR==1||$1<min)min=$1; if($1>max)max=$1} END {printf "D21_REDUCED_RUNS=%d\nD21_REDUCED_MEAN_SECONDS=%.2f\nD21_REDUCED_MIN_SECONDS=%d\nD21_REDUCED_MAX_SECONDS=%d\n", NR, sum/NR, min, max}'             "$RUNNER_TEMP/d21-reduced-timings.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Inject isolated D21 red control
+        run: |
+          mkdir -p "$(dirname "$D21_FIXTURE_TARGET")"
+          cp "$D21_FIXTURE_SOURCE" "$D21_FIXTURE_TARGET"
+      - name: Require reduced candidate to catch red control
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DISPLAY=:1
+          set +e
+          mvn -U -B -pl forge-gui-desktop -am             -Dtest=forge.d21.D21SecurityManagerCompatibilityRedControlTest             -Dsurefire.failIfNoSpecifiedTests=false test             2>&1 | tee "$RUNNER_TEMP/d21-reduced-red-control.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "reduced battery missed the injected JDK21 incompatibility" >&2
+            exit 1
+          fi
+          grep -R -q "D21SecurityManagerCompatibilityRedControlTest" forge-gui-desktop/target/surefire-reports
+          grep -R -q "UnsupportedOperationException" forge-gui-desktop/target/surefire-reports
+          echo "D21_REDUCED_RED_CONTROL_SENSITIVITY=PASS" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: d21-reduced-java21-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/d21-reduced-*.log
+            ${{ runner.temp }}/d21-reduced-timings.txt
+            **/target/surefire-reports/TEST-*.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+  full-java21-red-control:
+    name: D21 full Java 21 with red control
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a37ce9120846195fa4ece8f58b268e6043cb2f26
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@e9fbacdec3bb3b6036605a3e6f7995d66773a8c6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Inject isolated D21 red control
+        run: |
+          mkdir -p "$(dirname "$D21_FIXTURE_TARGET")"
+          cp "$D21_FIXTURE_SOURCE" "$D21_FIXTURE_TARGET"
+      - name: Install Xvfb
+        run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
+      - name: Require full battery to catch red control
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DISPLAY=:1
+          Xvfb :1 -screen 0 800x600x8 &
+          start=$(date +%s)
+          set +e
+          mvn -U -B clean test 2>&1 | tee "$RUNNER_TEMP/d21-full-java21.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          end=$(date +%s)
+          if [ "$rc" -eq 0 ]; then
+            echo "full battery unexpectedly passed injected JDK21 incompatibility" >&2
+            exit 1
+          fi
+          grep -R -q "D21SecurityManagerCompatibilityRedControlTest" forge-gui-desktop/target/surefire-reports
+          grep -R -q "UnsupportedOperationException" forge-gui-desktop/target/surefire-reports
+          echo "D21_FULL_RED_CONTROL_SENSITIVITY=PASS" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "D21_FULL_JAVA21_SECONDS=$((end-start))" | tee -a "$GITHUB_STEP_SUMMARY"
+          grep "Tests run:" "$RUNNER_TEMP/d21-full-java21.log" | tail -n 2 | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: d21-full-java21-red-control-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/d21-full-java21.log
+            **/target/surefire-reports/TEST-*.xml
+          if-no-files-found: error
+          retention-days: 30
