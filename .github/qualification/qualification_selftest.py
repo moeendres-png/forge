@@ -2364,6 +2364,14 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn('name.startsWith("java.lang.ClassLoader")', direct_package)
         self.assertIn('name.equals("java.security.AccessController")', direct_package)
         self.assertIn(
+            'name.equals("jdk.internal.loader.ClassLoaders$AppClassLoader")',
+            direct_package,
+        )
+        self.assertIn(
+            'name.equals("forge.d17.witness.Containment$TrustedTestLoader")',
+            direct_package,
+        )
+        self.assertIn(
             "return sawPackageCheckFrame && loader instanceof TrustedTestLoader;",
             direct_package,
         )
