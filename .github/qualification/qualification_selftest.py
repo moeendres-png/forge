@@ -2229,6 +2229,27 @@ class FrozenLaunchClasspath(unittest.TestCase):
                                                         freeze=(staging, launch_root, cache))
         self.assertEqual(again["launch_entries"], launched)
 
+    def test_candidate_classpath_includes_own_module_production_first(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-candidate-own-output-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        own = tmp / "forge-game" / "target" / "classes"
+        own.mkdir(parents=True)
+        cp = tmp / "forge-game" / "target" / "d17-cp.txt"
+        cp.write_text("/trusted/dep-a.jar:/trusted/dep-b.jar\n")
+        self.assertEqual(
+            trusted_execution.candidate_classpath(tmp, "forge-game", "target/d17-cp.txt"),
+            [str(own), "/trusted/dep-a.jar", "/trusted/dep-b.jar"],
+        )
+
+    def test_candidate_classpath_missing_own_module_output_fails_closed(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-candidate-own-missing-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cp = tmp / "forge-game" / "target" / "d17-cp.txt"
+        cp.parent.mkdir(parents=True)
+        cp.write_text("/trusted/dep.jar\n")
+        with self.assertRaises(trusted_execution.ExecutionError):
+            trusted_execution.candidate_classpath(tmp, "forge-game", "target/d17-cp.txt")
+
     def test_execute_module_never_reads_the_candidate_classpath_file(self) -> None:
         import inspect
         source = inspect.getsource(trusted_execution.execute_module)
