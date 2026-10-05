@@ -106,3 +106,9 @@ this PR repairs the historical fixture but does not terminate its broader rule
 obligation. No simulated terminal result or fake simultaneous card was added.
 Old c08/95 dual-JDK receipts are historical supporting evidence only after this
 relevant fixture/obligation change. New exact-head receipts/review are required.
+
+Control refinement: the type control must inspect FModel's already parsed fixture,
+not CardDatabaseHelper.getCard(), which could freshly parse a second database after
+the bad startup order and pass for the wrong reason. The initial379375 version's
+local green run is discarded as authority for the type-order repair. New direct
+fixture control and an after-parsing mutant require fresh-process verification.
