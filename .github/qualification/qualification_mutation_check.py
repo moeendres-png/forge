@@ -528,6 +528,13 @@ MUTATIONS = [
         "a candidate-configured JDK-only asynchronous deputy could shed hostile stack taint",
     ),
     Mutation(
+        "reopen-sun-reflection-internals",
+        "witness/forge/d17/witness/Containment.java",
+        '                    || pkg.startsWith("sun.")\n',
+        '                    || pkg.startsWith("sun.misc")\n',
+        "candidate code could reach sun.reflect.ReflectionFactory and related internal reflection helpers",
+    ),
+    Mutation(
         "allow-procfs-symlink-alias-creation",
         "witness/forge/d17/witness/Containment.java",
         '            } else if (permission.getClass().getName().equals("java.nio.file.LinkPermission")) {\n'
