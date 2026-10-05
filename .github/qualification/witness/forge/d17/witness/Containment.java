@@ -47,17 +47,16 @@ public final class Containment {
     }
 
     static final class DependencyLoader extends URLClassLoader {
-        private final ClassLoader trusted;
         private volatile Guard guard;
 
-        DependencyLoader(URL[] urls, ClassLoader trusted) {
+        DependencyLoader(URL[] urls) {
             // Deliberately do NOT parent this domain to the system loader.
             // Otherwise ClassLoader.getSystemClassLoader() can be returned to a
             // descendant without a getClassLoader permission check because the
-            // system loader is its ancestor.  The platform loader keeps JDK APIs
-            // available while TestNG is bridged explicitly below.
+            // system loader is its ancestor. The platform loader keeps only JDK
+            // APIs available; trusted TestNG/witness authority is not referenced
+            // by this loader at all.
             super(urls, ClassLoader.getPlatformClassLoader());
-            this.trusted = trusted;
         }
 
         void bindGuard(Guard value) {
@@ -568,7 +567,7 @@ public final class Containment {
                     "JDK SecurityManager compatibility mode is unavailable/not enabled");
         }
         ClassLoader system = Containment.class.getClassLoader();
-        DependencyLoader deps = new DependencyLoader(dependencies, system);
+        DependencyLoader deps = new DependencyLoader(dependencies);
         CandidateCodeLoader candidate = new CandidateCodeLoader(candidateCode, deps, system);
         TrustedTestLoader tests = new TrustedTestLoader(trustedTests, candidate, system);
         Guard guard = new Guard(candidate, deps, system, protectedRoot);
