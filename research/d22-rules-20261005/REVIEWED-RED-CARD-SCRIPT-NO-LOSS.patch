@@ -1,0 +1,13 @@
+diff --git a/forge-gui/res/cardsfolder/n/nefarious_lich.txt b/forge-gui/res/cardsfolder/n/nefarious_lich.txt
+index 5f5f7ee413..0261fbede2 100644
+--- a/forge-gui/res/cardsfolder/n/nefarious_lich.txt
++++ b/forge-gui/res/cardsfolder/n/nefarious_lich.txt
+@@ -2,7 +2,7 @@ Name:Nefarious Lich
+ ManaCost:B B B B
+ Types:Enchantment
+ R:Event$ DamageDone | ActiveZones$ Battlefield | ValidTarget$ You | ReplaceWith$ ExileCards | Description$ If damage would be dealt to you, exile that many cards from your graveyard instead. If you can't, you lose the game.
+-SVar:ExileCards:DB$ ChangeZone | Hidden$ True | Mandatory$ True | ChangeType$ Card | ChangeNum$ X | DefinedPlayer$ ReplacedTarget | Origin$ Graveyard | Destination$ Exile | ConditionCheckSVar$ CheckYard | ConditionSVarCompare$ GEX | SubAbility$ DBLose | RememberChanged$ True
++SVar:ExileCards:DB$ ChangeZone | Hidden$ True | Mandatory$ True | ChangeType$ Card | ChangeNum$ X | DefinedPlayer$ ReplacedTarget | Origin$ Graveyard | Destination$ Exile | ConditionCheckSVar$ CheckYard | ConditionSVarCompare$ GEX | SubAbility$ DBCleanup | RememberChanged$ True
+ SVar:DBLose:DB$ LosesGame | Defined$ You | ConditionCheckSVar$ CheckExile | ConditionSVarCompare$ LTX | SubAbility$ DBCleanup
+ SVar:DBCleanup:DB$ Cleanup | ClearRemembered$ True
+ SVar:CheckYard:Count$ValidGraveyard Card.YouOwn
