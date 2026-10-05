@@ -291,8 +291,14 @@ public final class Containment {
                 }
                 if (actions.contains("read")) {
                     String unix = name.replace('\\', '/');
-                    if (unix.matches("^/proc/(self|[0-9]+)/(mem|maps|pagemap|fd|fdinfo)(/.*)?$")) {
-                        deny("candidate process-memory/fd discovery read " + unix);
+                    // /proc has many equivalent aliases for the same process
+                    // authority: thread-self, self/task/<tid>, numeric pid/task,
+                    // and /proc/<pid>/root/proc/... can all route around a
+                    // filename denylist. Candidate production bytecode has no
+                    // legitimate qualification-authority reason to read procfs,
+                    // so deny the whole procfs namespace fail-closed.
+                    if (unix.equals("/proc") || unix.startsWith("/proc/")) {
+                        deny("candidate procfs read " + unix);
                     }
                 }
                 if (actions.contains("write") || actions.contains("delete")) {
