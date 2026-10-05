@@ -1294,11 +1294,22 @@ def sanitize_classpath(entries, candidate_root: Path, reactor_artifacts: dict) -
 
 
 def candidate_classpath(candidate_root: Path, module: str, cp_rel: str) -> "list[str]":
+    """Candidate module production output first, then resolved dependencies.
+
+    dependency:build-classpath intentionally omits the current project's own
+    target/classes. D17 must add it explicitly or the trusted tests would not be
+    bound to the exact candidate production for the module being qualified.
+    """
+    own = candidate_root / module / "target" / "classes"
+    if not own.is_dir():
+        raise ExecutionError(
+            "candidate production classes missing for module {} at {}".format(module, own))
     path = candidate_root / module / cp_rel
     raw = read_candidate_bytes(path)
     if raw is None:
         raise ExecutionError("candidate classpath missing for module {} (did the module build?)".format(module))
-    return [e for e in raw.decode("utf-8", "replace").strip().split(":") if e]
+    deps = [e for e in raw.decode("utf-8", "replace").strip().split(":") if e]
+    return [str(own)] + deps
 
 
 def read_candidate_bytes(path: Path):
