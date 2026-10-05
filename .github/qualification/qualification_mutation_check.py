@@ -468,8 +468,8 @@ MUTATIONS = [
     Mutation(
         "use-candidate-writable-maven-repository",
         "trusted_execution.py",
-        '"-Dmaven.repo.local=" + str(trusted_maven_repo),',
-        '"-Dmaven.repo.local=" + str(home / ".m2" / "repository"),',
+        '[args.mvn, "-o", "-B", "-q",\n             "-Dmaven.repo.local=" + str(trusted_maven_repo),',
+        '[args.mvn, "-o", "-B", "-q",\n             "-Dmaven.repo.local=" + str(home / ".m2" / "repository"),',
         "candidate code could replace Maven plugin/dependency jars before later build phases",
     ),
     Mutation(
