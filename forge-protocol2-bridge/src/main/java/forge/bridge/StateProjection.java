@@ -57,6 +57,37 @@ public final class StateProjection {
      * Required-field reader: any failure (or an injected test fault) aborts the whole
      * projection with {@link BridgeProjectionException}. No plausible defaults.
      */
+    /** Like privateField, but an unset field reads as null. */
+    private static Object privateFieldOrNull(Object owner, String name) throws ReflectiveOperationException {
+        try {
+            return privateField(owner, name);
+        } catch (NoSuchFieldException unset) {
+            if (unset.getMessage() != null && unset.getMessage().endsWith(" is null")) {
+                return null;
+            }
+            throw unset;
+        }
+    }
+
+    /** Reads a private engine field that has no public reader (read only). */
+    private static Object privateField(Object owner, String name) throws ReflectiveOperationException {
+        Class<?> type = owner.getClass();
+        while (type != null) {
+            try {
+                final java.lang.reflect.Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                final Object value = field.get(owner);
+                if (value == null) {
+                    throw new NoSuchFieldException(name + " is null");
+                }
+                return value;
+            } catch (NoSuchFieldException missing) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
+    }
+
     private static <T> T require(String field, ThrowingSupplier<T> reader) {
         if (failRequiredReadsForTests) {
             throw new BridgeProjectionException(field, "injected test fault");
@@ -193,7 +224,7 @@ public final class StateProjection {
     }
 
     /** Schema of {@link #constructedState(BridgeSession)}. */
-    public static final String CONSTRUCTED_STATE_SCHEMA = "commander-lab.generic-constructed-state/2";
+    public static final String CONSTRUCTED_STATE_SCHEMA = "commander-lab.generic-constructed-state/4";
 
     /**
      * Commander-Lab #441 decision (c): the engine's normalized constructed state,
@@ -231,6 +262,66 @@ public final class StateProjection {
         state.add("priority_player",
                 seatName(session, require("priority_player", () -> phases.getPriorityPlayer())));
         state.addProperty("stack_size", require("stack", () -> game.getStack().size()));
+        // Native rules state (schema /4), read from the engine, never inferred
+        // by the Lab: the combat in progress, queued extra turns, triggered
+        // abilities waiting to be put on the stack, and the static (continuous)
+        // effects in force. The extra-turn stack and the waiting trigger lists
+        // have no public reader in forge-game, so they are read reflectively;
+        // a failed read fails the whole projection closed.
+        final JsonObject rulesState = new JsonObject();
+        final forge.game.combat.Combat combat = phases.getCombat();
+        rulesState.addProperty("combat_groups",
+                require("combat.bands", () -> combat == null ? 0 : combat.getAttackingBands().size()));
+        rulesState.addProperty("combat_attackers",
+                require("combat.attackers", () -> combat == null ? 0 : combat.getAttackers().size()));
+        // PhaseHandler.addExtraTurn keeps one entry at the bottom of its stack
+        // that restores the normal turn order; every entry above it is an
+        // extra turn.
+        rulesState.addProperty("extra_turns", require("extra_turns", () ->
+                Math.max(0, ((java.util.Collection<?>) privateField(phases, "extraTurns")).size() - 1)));
+        // A waiting trigger event counts only by the triggered abilities it
+        // actually triggers: those already collected for it plus every active
+        // trigger that can run for it (TriggerHandler.getActiveTrigger). Opening
+        // draws leave ChangesZone events that trigger nothing.
+        rulesState.addProperty("pending_triggers", require("pending_triggers", () -> {
+            int pending = ((java.util.Collection<?>) privateField(game.getStack(),
+                    "simultaneousStackEntryList")).size();
+            for (Object waiting : (java.util.Collection<?>) privateField(game.getTriggerHandler(),
+                    "waitingTriggers")) {
+                final forge.game.trigger.TriggerWaiting event = (forge.game.trigger.TriggerWaiting) waiting;
+                if (event.getTriggers() != null) {
+                    for (Object ignored : event.getTriggers()) {
+                        pending++;
+                    }
+                }
+                pending += game.getTriggerHandler().getActiveTrigger(event.getMode(), event.getParams()).size();
+            }
+            return pending;
+        }));
+        // Static (continuous) effects in force, apart from the Commander format's
+        // own rule effect each player's command zone carries (CR 903.8: the
+        // commander may be cast from the command zone), which is reported
+        // separately as a format rule, never as a scenario effect.
+        final java.util.Set<Object> formatRuleSources = require("format_rule_sources", () -> {
+            final java.util.Set<Object> sources = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (Player player : session.registryPlayers()) {
+                final Object effect = privateFieldOrNull(player, "commanderEffect");
+                if (effect != null) {
+                    sources.add(effect);
+                }
+            }
+            return sources;
+        });
+        final int[] effectCounts = require("continuous_effects", () -> {
+            final int[] counts = new int[2];
+            for (forge.game.StaticEffect effect : game.getStaticEffects().getEffects()) {
+                counts[formatRuleSources.contains(effect.getSource()) ? 1 : 0]++;
+            }
+            return counts;
+        });
+        rulesState.addProperty("continuous_effects", effectCounts[0]);
+        rulesState.addProperty("format_rule_effects", effectCounts[1]);
+        state.add("rules_state", rulesState);
         final List<Player> enginePlayers = require("players", () -> session.registryPlayers());
         final JsonArray players = new JsonArray();
         for (Player player : enginePlayers) {
@@ -259,6 +350,37 @@ public final class StateProjection {
             entry.addProperty("library_shuffles", session.libraryShuffles(player));
             entry.addProperty("battlefield_size",
                     require("zone.Battlefield", () -> player.getCardsIn(ZoneType.Battlefield).size()));
+            // Native knowledge (schema /4): hidden cards this seat may see beyond
+            // its own hand, i.e. every library card and every other seat's hand
+            // card the engine lets it look at (Card.mayPlayerLook).
+            final JsonObject knowledge = new JsonObject();
+            knowledge.addProperty("visible_hidden_cards", require("knowledge:" + seatId, () -> {
+                int visible = 0;
+                for (Player holder : enginePlayers) {
+                    for (Card card : holder.getCardsIn(ZoneType.Library)) {
+                        if (card.mayPlayerLook(player)) {
+                            visible++;
+                        }
+                    }
+                    if (holder != player) {
+                        for (Card card : holder.getCardsIn(ZoneType.Hand)) {
+                            if (card.mayPlayerLook(player)) {
+                                visible++;
+                            }
+                        }
+                    }
+                }
+                return visible;
+            }));
+            entry.add("knowledge", knowledge);
+            // Commander damage this seat has taken (CR 903.10a).
+            entry.addProperty("commander_damage_taken", require("commander_damage:" + seatId, () -> {
+                int taken = 0;
+                for (java.util.Map.Entry<Card, Integer> damage : player.getCommanderDamage()) {
+                    taken += damage.getValue();
+                }
+                return taken;
+            }));
             final JsonArray commanders = new JsonArray();
             for (Card commander : require("commanders:" + seatId, () -> player.getCommanders())) {
                 final Card live = game.getCardState(commander, commander);
@@ -278,6 +400,27 @@ public final class StateProjection {
                 }
                 entryCommander.addProperty("prior_command_zone_cast_count",
                         require("commander.casts", () -> Math.max(0, player.getCommanderCast(card))));
+                // Native object attributes (schema /3), read from the engine's
+                // card: its controller, counters (the engine's own counter name,
+                // CounterType.getName() as the battlefield projection uses it,
+                // lower-cased: "+1/+1", "charge", "acquired taste"; never the
+                // enum constant P1P1 / ACQUIREDTASTE), face-down status, tapped state and attached
+                // cards. Nothing is inferred from the request.
+                entryCommander.add("controller",
+                        seatName(session, require("commander.controller", () -> card.getController())));
+                final JsonObject counters = new JsonObject();
+                for (com.google.common.collect.Multiset.Entry<forge.game.card.CounterType> counter
+                        : require("commander.counters", () -> card.getCounters()).entrySet()) {
+                    if (counter.getCount() > 0) {
+                        counters.addProperty(counter.getElement().getName().toLowerCase(java.util.Locale.ROOT),
+                                counter.getCount());
+                    }
+                }
+                entryCommander.add("counters", counters);
+                entryCommander.addProperty("face_down", require("commander.face_down", () -> card.isFaceDown()));
+                entryCommander.addProperty("tapped", require("commander.tapped", () -> card.isTapped()));
+                entryCommander.addProperty("attachments",
+                        require("commander.attachments", () -> card.getAttachedCards().size()));
                 commanders.add(entryCommander);
             }
             entry.add("commanders", commanders);
