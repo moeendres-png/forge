@@ -146,7 +146,7 @@
                             --add-opens java.base/java.util.stream=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
                             --add-opens java.desktop/javax.imageio.spi=ALL-UNNAMED
-                            \${d21.redcontrol.addOpens}
+                            ${d21.redcontrol.addOpens}
                         </argLine>
                     </configuration>
                 </plugin>
