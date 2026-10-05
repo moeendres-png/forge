@@ -267,6 +267,9 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'java.nio.file.Files.newByteChannel(java.nio.file.Path.of("/proc/thread-self/mem")).close();',
         "proc-root-alias-mem":
             'java.nio.file.Files.newByteChannel(java.nio.file.Path.of("/proc/self/root/proc/self/mem")).close();',
+        "proc-self-mem-write":
+            'java.nio.file.Files.newByteChannel(java.nio.file.Path.of("/proc/self/mem"), '
+            'java.nio.file.StandardOpenOption.WRITE).close();',
         "fd-discovery":
             'java.nio.file.Files.list(java.nio.file.Path.of("/proc/self/fd")).close();',
         "proc-thread-self-fd":
@@ -330,6 +333,53 @@ public class ShadowTest { @Test public void trustedWins(){ assertEquals(Shared.v
             tests, {"probe.ShadowTest": 1}, {"probe.ShadowTest#trustedWins": 1},
             candidate_code=[candidate], trusted_dependencies=[trusted])
         self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_trusted_dependency_cannot_be_used_as_async_confused_deputy(self) -> None:
+        trusted = self.compile_sources({
+            "deputy.AsyncDeputy": """package deputy;
+public class AsyncDeputy {
+  public static int attack() throws Exception {
+    final int[] result = new int[] {0};
+    Thread thread = new Thread(() -> {
+      try {
+        System.setProperty("d17.async.deputy", "pwn");
+        result[0] = 0;
+      } catch (SecurityException expected) {
+        result[0] = 1;
+      } catch (Throwable other) {
+        result[0] = 2;
+      }
+    });
+    thread.start();
+    thread.join();
+    return result[0];
+  }
+}
+"""
+        }, "async-deputy")
+        candidate = self.compile_sources({
+            "probe.DeputyAttackProduct": """package probe;
+public class DeputyAttackProduct {
+  public static int attack() {
+    try {
+      return deputy.AsyncDeputy.attack();
+    } catch (Throwable other) {
+      return 2;
+    }
+  }
+}
+"""
+        }, "deputy-attack-product", extra_cp=[trusted])
+        tests = self.trusted_attack_test(
+            "DeputyAttackProduct", expected_value=1,
+            class_name="DeputyAttackTest", extra_cp=[candidate, trusted])
+        proc = self.launch(
+            tests, {"probe.DeputyAttackTest": 1},
+            {"probe.DeputyAttackTest#attackIsRefused": 1},
+            candidate_code=[candidate], trusted_dependencies=[trusted])
+        # The deputy thread has no candidate frame. The dependency loader itself
+        # must therefore be tainted, producing the sticky containment exit.
+        self.assertEqual(proc.returncode, 13, proc.stderr)
 
 
 class FilesystemAuthorityRuntimeControls(RuntimeCase):
