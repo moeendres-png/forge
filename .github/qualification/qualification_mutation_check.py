@@ -646,7 +646,13 @@ MUTATIONS = [
     Mutation(
         "trust-jdk-only-asynchronous-authority",
         "witness/forge/d17/witness/Containment.java",
+        '            // A JDK-only asynchronous task has neither a hostile frame nor an\n'
+        '            // explicit trusted authority frame. Treat it as untrusted so a\n'
+        '            // candidate cannot shed its taint through a configured JDK deputy.\n'
         '            return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n',
+        '            // A JDK-only asynchronous task has neither a hostile frame nor an\n'
+        '            // explicit trusted authority frame. Treat it as untrusted so a\n'
+        '            // candidate cannot shed its taint through a configured JDK deputy.\n'
         '            return CONTEXT_TRUSTED_AUTHORITY;\n',
         "a candidate-configured JDK-only asynchronous deputy could shed hostile stack taint",
     ),
