@@ -457,6 +457,13 @@ MUTATIONS = [
         "candidate code could replace Maven plugin/dependency jars before later build phases",
     ),
     Mutation(
+        "let-candidate-tests-control-production-build",
+        "trusted_execution.py",
+        '             "-DskipTests", "compile", "dependency:build-classpath",\n',
+        '             "-DskipTests", "test-compile", "dependency:build-classpath",\n',
+        "candidate-owned test source could re-enter the production qualification build path",
+    ),
+    Mutation(
         "allow-candidate-annotation-processors",
         "trusted_execution.py",
         '             "-Dmaven.compiler.proc=none",\n',
