@@ -238,8 +238,10 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'Class.forName("org.testng.annotations.Listeners");',
         "witness-reflection":
             'Class.forName("forge.d17.witness.QualifiedExecutionCounter");',
-        "sun-reflection-factory":
-            'Class.forName("sun.reflect.ReflectionFactory");',
+        "sun-reflection-internals":
+            'System.getSecurityManager().checkPackageAccess("sun.reflect");',
+        "jdk-internal-unsafe":
+            'System.getSecurityManager().checkPackageAccess("jdk.internal.misc");',
         "suppress-access-reflection":
             'AttackProduct.class.getDeclaredMethod("attack").setAccessible(true);',
         "set-properties":
