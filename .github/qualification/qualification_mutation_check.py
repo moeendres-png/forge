@@ -521,9 +521,16 @@ MUTATIONS = [
         "candidate code could delegate a delayed sensitive operation to a dependency-only thread",
     ),
     Mutation(
+        "trust-jdk-only-asynchronous-authority",
+        "witness/forge/d17/witness/Containment.java",
+        '            return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n',
+        '            return CONTEXT_TRUSTED_AUTHORITY;\n',
+        "a candidate-configured JDK-only asynchronous deputy could shed hostile stack taint",
+    ),
+    Mutation(
         "allow-arbitrary-direct-system-properties-mutation",
         "witness/forge/d17/witness/Containment.java",
-        '            if (guard.candidateInContext()) {\n'
+        '            if (guard.authorityRestrictedContext()) {\n'
         '                // The Properties object is process-global trusted runtime state.\n',
         '            if (guard.candidateInContext() && sensitiveProperty(String.valueOf(key))) {\n'
         '                // The Properties object is process-global trusted runtime state.\n',
@@ -545,8 +552,8 @@ MUTATIONS = [
         "expose-mutable-properties-entryset-view",
         "witness/forge/d17/witness/Containment.java",
         '        public Set<Map.Entry<Object, Object>> entrySet() {\n'
-        '            if (guard.candidateInContext()) {\n'
-        '                guard.deny("candidate mutable Properties.entrySet view");\n'
+        '            if (guard.authorityRestrictedContext()) {\n'
+        '                guard.deny("untrusted mutable Properties.entrySet view");\n'
         '            }\n'
         '            return super.entrySet();\n'
         '        }\n',
