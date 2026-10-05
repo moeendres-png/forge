@@ -523,7 +523,7 @@ MUTATIONS = [
         "allow-procfs-alias-or-write-bypass",
         "witness/forge/d17/witness/Containment.java",
         '                if (unix.equals("/proc") || unix.startsWith("/proc/")\n'
-        '                        || targetUnix.equals("/proc") || targetUnix.startsWith("/proc/")) {\n',
+        '                        || canonicalUnix.equals("/proc") || canonicalUnix.startsWith("/proc/")) {\n',
         '                if (unix.equals("/proc/self/mem") && actions.contains("read")) {\n',
         "procfs aliases or write-only process-memory access could bypass containment",
     ),
