@@ -170,7 +170,6 @@ public final class Containment {
     static final class TrustedTestLoader extends URLClassLoader {
         private final CandidateCodeLoader candidate;
         private final ClassLoader trusted;
-        private volatile Guard guard;
 
         TrustedTestLoader(URL[] urls, CandidateCodeLoader candidate, ClassLoader trusted) {
             // CandidateCodeLoader is deliberately a delegate, not the parent.
@@ -181,29 +180,6 @@ public final class Containment {
             this.trusted = trusted;
         }
 
-        void bindGuard(Guard value) {
-            this.guard = value;
-        }
-
-        private Class<?> loadTrustedTestNg(String name) throws ClassNotFoundException {
-            Guard current = guard;
-            if (current == null) {
-                return trusted.loadClass(name);
-            }
-            // The comparison-base test loader is trusted policy authority. Its
-            // direct TestNG resolution must not be mistaken for a candidate-
-            // supplied JDK deputy merely because the trusted test body is still
-            // on stack. This scope affects only checkPackageAccess(org.testng);
-            // it grants no general permission bypass and exposes no setter to
-            // candidate/dependency domains.
-            current.enterTrustedFrameworkResolution();
-            try {
-                return trusted.loadClass(name);
-            } finally {
-                current.exitTrustedFrameworkResolution();
-            }
-        }
-
         @Override
         protected synchronized Class<?> loadClass(String name, boolean resolve)
                 throws ClassNotFoundException {
@@ -211,7 +187,7 @@ public final class Containment {
                 throw new ClassNotFoundException("D17 witness package is not test-visible");
             }
             if (name.startsWith("org.testng.")) {
-                return loadTrustedTestNg(name);
+                return trusted.loadClass(name);
             }
             if (isPlatform(name)) {
                 return super.loadClass(name, resolve);
@@ -254,8 +230,6 @@ public final class Containment {
                 ThreadLocal.withInitial(() -> Boolean.FALSE);
         private final ThreadLocal<Boolean> inspectingClassLoader =
                 ThreadLocal.withInitial(() -> Boolean.FALSE);
-        private final ThreadLocal<Integer> trustedFrameworkResolutionDepth =
-                ThreadLocal.withInitial(() -> Integer.valueOf(0));
         private final ThreadLocal<Integer> invocationDepth =
                 ThreadLocal.withInitial(() -> Integer.valueOf(0));
         private volatile String violation;
@@ -334,18 +308,31 @@ public final class Containment {
             return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
         }
 
-        private void enterTrustedFrameworkResolution() {
-            trustedFrameworkResolutionDepth.set(Integer.valueOf(
-                    trustedFrameworkResolutionDepth.get().intValue() + 1));
-        }
-
-        private void exitTrustedFrameworkResolution() {
-            int depth = trustedFrameworkResolutionDepth.get().intValue();
-            if (depth <= 1) {
-                trustedFrameworkResolutionDepth.remove();
-            } else {
-                trustedFrameworkResolutionDepth.set(Integer.valueOf(depth - 1));
+        private boolean directTrustedTestPackageAccess(String pkg) {
+            if (!pkg.startsWith("org.testng")) {
+                return false;
             }
+            boolean sawPackageCheckFrame = false;
+            for (Class<?> frame : getClassContext()) {
+                ClassLoader loader = classLoaderOf(frame);
+                if (loader == candidate || loader == dependencies) {
+                    return false;
+                }
+                if (frame == Guard.class) {
+                    continue;
+                }
+                String name = frame.getName();
+                if (name.startsWith("java.lang.ClassLoader")
+                        || name.equals("java.security.AccessController")) {
+                    sawPackageCheckFrame = true;
+                    continue;
+                }
+                // The first non-package-check principal must be the trusted
+                // comparison-base test body itself. Any other JDK frame here is
+                // treated as a deputy and cannot borrow test-policy authority.
+                return sawPackageCheckFrame && loader instanceof TrustedTestLoader;
+            }
+            return false;
         }
 
         void enterInvocation() {
@@ -510,12 +497,7 @@ public final class Containment {
                 // no candidate callback executes while the flag is set.
                 return;
             }
-            if (trustedFrameworkResolutionDepth.get().intValue() > 0
-                    && pkg.startsWith("org.testng")) {
-                // Only TrustedTestLoader can open this private scope, and only
-                // while it delegates a comparison-base test's TestNG resolution
-                // to the trusted system loader. Do not generalize this to other
-                // packages or permissions.
+            if (directTrustedTestPackageAccess(pkg)) {
                 return;
             }
             if (authorityRestrictedContext()
@@ -695,7 +677,6 @@ public final class Containment {
         Guard guard = new Guard(candidate, deps, system, protectedRoot);
         deps.bindGuard(guard);
         candidate.bindGuard(guard);
-        tests.bindGuard(guard);
         GuardedProperties guarded = new GuardedProperties(System.getProperties(), guard);
         System.setProperties(guarded);
         System.setSecurityManager(guard);
