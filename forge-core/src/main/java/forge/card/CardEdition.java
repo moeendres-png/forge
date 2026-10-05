@@ -349,6 +349,12 @@ public final class CardEdition implements Comparable<CardEdition> {
         this.name  = name;
         this.date = parseDate(date);
         this.foilType = foil;
+        // Same defaults the edition-file parser applies when the metadata omits
+        // them, so the code getters of the built-in sentinel editions (UNKNOWN,
+        // USER) do not dereference null.
+        this.scryfallCode = code;
+        this.tokensCode = "T" + code;
+        this.cardsLanguage = "en";
     }
 
     private static Date parseDate(String date) {
