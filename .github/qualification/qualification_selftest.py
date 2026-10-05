@@ -2341,6 +2341,13 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("containment.enterInvocation();", counter_source)
         self.assertIn("containment.exitInvocation();", counter_source)
         self.assertIn('if (!authorityRestrictedContext())', source)
+        self.assertIn('ThreadLocal<Boolean> inspectingClassLoader', source)
+        self.assertIn('ClassLoader loader = classLoaderOf(frame);', source)
+        inspection = source.split("private ClassLoader classLoaderOf", 1)[1].split(
+            "private int authorityContext", 1
+        )[0]
+        self.assertIn("inspectingClassLoader.set(Boolean.TRUE)", inspection)
+        self.assertIn("inspectingClassLoader.remove()", inspection)
         self.assertIn('java.nio.file.LinkPermission', source)
         self.assertIn('pkg.startsWith("sun.")', source)
         self.assertIn('new CandidateCodeLoader(candidateCode, deps)', source)
