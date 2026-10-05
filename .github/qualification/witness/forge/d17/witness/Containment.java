@@ -464,6 +464,12 @@ public final class Containment {
 
         @Override
         public void checkPackageAccess(String pkg) {
+            if (Boolean.TRUE.equals(inspectingClassLoader.get())) {
+                // Class#getClassLoader may cause JDK class loading which re-enters
+                // package checks. This is guard-internal authority inspection;
+                // no candidate callback executes while the flag is set.
+                return;
+            }
             if (authorityRestrictedContext()
                     && (pkg.startsWith("forge.d17.witness")
                     || pkg.startsWith("org.testng")
