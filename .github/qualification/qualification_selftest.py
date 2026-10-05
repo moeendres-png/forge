@@ -2165,11 +2165,16 @@ class RedLaunchClasspathAdmission(EvidenceCase):
         self.assertIn("stopped before compiling", evidence["reason"])
 
     def test_candidate_build_failure_is_still_fail(self) -> None:
-        manifest = dict(self.manifest, modules={}, error="candidate build failed (exit 1)",
+        import copy
+        manifest = copy.deepcopy(self.manifest)
+        manifest.update(modules={}, error="candidate build failed (exit 1)",
                         candidate_build={"exit_code": 1, "user": BUILD_USER})
+        manifest["trusted_test_compile_authority"]["status"] = "PENDING"
         manifest.pop("trusted_test_compilation")
         manifest.pop("launch_classpath_admission")
-        self.assertNotPass(self.verdict(manifest=manifest, authenticated=False), qualify.FAIL)
+        evidence = self.verdict(manifest=manifest, authenticated=False)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("production build failed", evidence["reason"])
 
     def test_failed_trusted_compile_is_fail(self) -> None:
         self.honest()
