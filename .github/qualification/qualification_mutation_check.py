@@ -667,7 +667,9 @@ MUTATIONS = [
         "trust-arbitrary-bootstrap-deputy-during-testng-package-check",
         "witness/forge/d17/witness/Containment.java",
         '                if (name.startsWith("java.lang.ClassLoader")\n'
-        '                        || name.equals("java.security.AccessController")) {\n'
+        '                        || name.equals("java.security.AccessController")\n'
+        '                        || name.equals("jdk.internal.loader.ClassLoaders$AppClassLoader")\n'
+        '                        || name.equals("forge.d17.witness.Containment$TrustedTestLoader")) {\n'
         '                    sawPackageCheckFrame = true;\n'
         '                    continue;\n'
         '                }\n',
