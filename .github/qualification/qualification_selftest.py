@@ -268,9 +268,17 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
         "candidate_build": {"exit_code": 0, "user": BUILD_USER,
                             "maven_repository": "/trusted/m2/repository",
                             "offline": True},
-        "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
+        "test_bytecode_origin": (
+            "trusted_compile_of_comparison_base_git_export_against_comparison_base_production"
+        ),
         "trusted_test_source_sha": base or "b" * 40,
         "candidate_test_sources_used_for_credit": False,
+        "trusted_test_compile_authority": {
+            "mode": "comparison_base_authority_plus_candidate_bytecode_equality_probe",
+            "status": "PROVEN",
+            "candidate_probe_used_for_execution": False,
+            "semantic_divergence": {},
+        },
         "hostile_bytecode_containment_required": True,
         "candidate_build_definition_divergence": [],
         "maven_repository_authority": {
@@ -299,7 +307,12 @@ def execution_manifest(candidate_sha, candidate_tree, modules=None, launch_codes
         # Written by cmd_execute before any launch: what trusted javac produced,
         # and the admission of the launch classpath.
         "trusted_test_compilation": {
-            module: {"module": module, "exit_code": 0, "compiled_required": ["pkg.C0", "pkg.C1"]}
+            module: {"module": module, "exit_code": 0,
+                     "compile_classpath_authority": "comparison_base_only",
+                     "candidate_compatibility_exit_code": 0,
+                     "candidate_semantic_match": True,
+                     "candidate_semantic_mismatches": [],
+                     "compiled_required": ["pkg.C0", "pkg.C1"]}
             for module in modules
         },
         "launch_classpath_admission": {
@@ -539,6 +552,36 @@ class PositiveExactShaPath(EvidenceCase):
         evidence = self.verdict(manifest=manifest)
         self.assertNotPass(evidence, qualify.FAIL)
         self.assertIn("test bodies", evidence["reason"])
+
+    def test_candidate_sensitive_trusted_test_compile_is_unknown(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["trusted_test_compile_authority"]["status"] = "UNKNOWN_CANDIDATE_SENSITIVE"
+        manifest["trusted_test_compile_authority"]["semantic_divergence"] = {
+            "forge-game": ["pkg/PolicyTest.class"]
+        }
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertIn("changes the bytecode", evidence["reason"])
+
+    def test_candidate_api_incompatible_with_trusted_tests_is_fail(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["trusted_test_compile_authority"]["status"] = "CANDIDATE_INCOMPATIBLE"
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.FAIL)
+        self.assertIn("cannot compile", evidence["reason"])
+
+    def test_candidate_probe_can_never_be_executed_for_credit(self) -> None:
+        import copy
+        self.honest()
+        manifest = copy.deepcopy(self.manifest)
+        manifest["trusted_test_compile_authority"]["candidate_probe_used_for_execution"] = True
+        evidence = self.verdict(manifest=manifest)
+        self.assertNotPass(evidence, qualify.UNKNOWN)
+        self.assertIn("candidate-independent", evidence["reason"])
 
     def test_test_source_selector_always_returns_comparison_base(self) -> None:
         self.assertEqual(
@@ -1860,16 +1903,59 @@ class TrustedOrchestratorControls(unittest.TestCase):
         self.assertIn('"--expected-method-count"', child)
         self.assertIn("required_method_counts.items()", child)
 
-    def test_trusted_test_compile_uses_only_frozen_candidate_inputs(self) -> None:
+    def test_trusted_test_compile_authority_excludes_candidate_semantics(self) -> None:
         import inspect
         source = inspect.getsource(trusted_execution.cmd_execute)
-        scan_at = source.index("scans[module] = scan_launch_classpath(")
-        compile_at = source.index("records[module] = trusted_compile_tests(")
-        self.assertLess(scan_at, compile_at)
-        self.assertIn('scans[module]["trusted_dependency_compile_entries"]', source)
+        self.assertIn("compile_trusted_policy_production(", source)
+        self.assertIn("trusted_policy_compile_entries(", source)
+        self.assertIn('record["compile_classpath_authority"] = "comparison_base_only"', source)
+        self.assertIn('candidate_check = staging / "candidate-test-compatibility" / module', source)
         self.assertIn('scans[module]["candidate_compile_entries"]', source)
-        compile_block = source[compile_at - 500:compile_at + 300]
-        self.assertNotIn("+ entries", compile_block)
+        self.assertIn("class_digest_differences(out, candidate_check)", source)
+        self.assertIn('"candidate_probe_used_for_execution": False', source)
+        authority_block = source.split("reference_cp = (", 1)[1].split(
+            "record = trusted_compile_tests(", 1)[0]
+        self.assertNotIn('candidate_compile_entries', authority_block)
+        self.assertNotIn('trusted_dependency_compile_entries', authority_block)
+
+    def test_candidate_compile_time_constant_rewrite_is_detected(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="d17-test-policy-semantic-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        export = tmp / "export"
+        source_root = export / "mod" / "src" / "test" / "java" / "pkg"
+        source_root.mkdir(parents=True)
+        (source_root / "PolicyTest.java").write_text(
+            "package pkg; public class PolicyTest { "
+            "public static int observed(){ return prod.Policy.VALUE; } }\n")
+        base_src = tmp / "base-src" / "prod"
+        cand_src = tmp / "candidate-src" / "prod"
+        base_src.mkdir(parents=True)
+        cand_src.mkdir(parents=True)
+        (base_src / "Policy.java").write_text(
+            "package prod; public class Policy { public static final int VALUE = 7; }\n")
+        (cand_src / "Policy.java").write_text(
+            "package prod; public class Policy { public static final int VALUE = 99; }\n")
+        base_cp, cand_cp = tmp / "base-cp", tmp / "candidate-cp"
+        base_cp.mkdir()
+        cand_cp.mkdir()
+        javac = trusted_execution.javac_of("java")
+        subprocess.run(
+            [javac, "-proc:none", "-d", str(base_cp), str(base_src / "Policy.java")],
+            check=True)
+        subprocess.run(
+            [javac, "-proc:none", "-d", str(cand_cp), str(cand_src / "Policy.java")],
+            check=True)
+        ref_out, cand_out = tmp / "ref-tests", tmp / "candidate-tests"
+        ref = trusted_execution.trusted_compile_tests(
+            export, "mod", [str(base_cp)], ref_out, "java")
+        probe = trusted_execution.trusted_compile_tests(
+            export, "mod", [str(cand_cp)], cand_out, "java")
+        self.assertEqual(ref["exit_code"], 0, ref)
+        self.assertEqual(probe["exit_code"], 0, probe)
+        self.assertEqual(
+            trusted_execution.class_digest_differences(ref_out, cand_out),
+            ["pkg/PolicyTest.class"],
+        )
 
     def test_execute_uses_full_trusted_reactor_inventory_for_candidate_outputs(self) -> None:
         import inspect
@@ -2089,6 +2175,7 @@ class RedLaunchClasspathAdmission(EvidenceCase):
         self.honest()
         manifest = copy.deepcopy(self.manifest)
         del manifest["trusted_test_compilation"]
+        manifest["trusted_test_compile_authority"]["status"] = "PENDING"
         self.assertNotPass(self.verdict(manifest=manifest), qualify.UNKNOWN)
 
 
