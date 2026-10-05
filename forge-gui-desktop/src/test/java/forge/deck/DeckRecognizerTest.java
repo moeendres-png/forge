@@ -1143,6 +1143,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
 
     @Test
     void testRecogniseCardToken() {
+        // #531: latest Power Sink print is The Zeta Set (SLZ, 2026-09-02), newer than 30A (2022-11-28).
         DeckRecognizer recognizer = new DeckRecognizer();
 
         String lineRequest = "4x Power Sink+ (TMP) 78";
@@ -1251,7 +1252,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
         assertEquals(cardToken.getQuantity(), 4);
         assertEquals(tokenCard.getName(), "Power Sink");
         assertFalse(tokenCard.isFoil());
-        assertEquals(tokenCard.getEdition(), "30A");
+        assertEquals(tokenCard.getEdition(), "SLZ");
         assertTrue(cardToken.cardRequestHasNoCode());
 
         lineRequest = "4x Power Sink+";
@@ -1263,7 +1264,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
         assertEquals(cardToken.getQuantity(), 4);
         assertEquals(tokenCard.getName(), "Power Sink");
         assertTrue(tokenCard.isFoil());
-        assertEquals(tokenCard.getEdition(), "30A");
+        assertEquals(tokenCard.getEdition(), "SLZ");
         assertTrue(cardToken.cardRequestHasNoCode());
 
         lineRequest = "Power Sink+";
@@ -1275,12 +1276,13 @@ public class DeckRecognizerTest extends CardMockTestCase {
         assertEquals(cardToken.getQuantity(), 1);
         assertEquals(tokenCard.getName(), "Power Sink");
         assertTrue(tokenCard.isFoil());
-        assertEquals(tokenCard.getEdition(), "30A");
+        assertEquals(tokenCard.getEdition(), "SLZ");
         assertTrue(cardToken.cardRequestHasNoCode());
     }
 
     @Test
     void testSingleWordCardNameMatchesCorrectly() {
+        // #531: latest Counterspell print is MagicFest 2026 (PF26, 2026-01-01), newer than DSC (2024-09-27).
         DeckRecognizer recognizer = new DeckRecognizer();
 
         String lineRequest = "2x Counterspell ICE";
@@ -1305,7 +1307,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
         tokenCard = cardToken.getCard();
         assertEquals(cardToken.getQuantity(), 2);
         assertEquals(tokenCard.getName(), "Counterspell");
-        assertEquals(tokenCard.getEdition(), "DSC");
+        assertEquals(tokenCard.getEdition(), "PF26");
         assertTrue(cardToken.cardRequestHasNoCode());
 
     }
@@ -1670,6 +1672,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
      */
     @Test
     void testChangesInArtPreference() {
+        // #531: latest Counterspell print is MagicFest 2026 (PF26, 2026-01-01), newer than DSC (2024-09-27).
         DeckRecognizer recognizer = new DeckRecognizer();
 
         // Baseline - no constraints - uses default card art
@@ -1685,7 +1688,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
         //assertEquals(cardToken.getTokenSection(), DeckSection.Main); //fix test since signature spell is allowed on commander section
         PaperCard tc = cardToken.getCard();
         assertEquals(tc.getName(), "Counterspell");
-        assertEquals(tc.getEdition(), "DSC");
+        assertEquals(tc.getEdition(), "PF26");
         assertTrue(cardToken.cardRequestHasNoCode());
 
         // Setting Original Core
@@ -1705,6 +1708,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
 
     @Test
     void testCardRequestVariesUponChangesInArtPreference() {
+        // #531: latest Power Sink print is The Zeta Set (SLZ, 2026-09-02), newer than 30A (2022-11-28).
         assertEquals(StaticData.instance().getCardArtPreference(), CardDb.CardArtPreference.LATEST_ART_ALL_EDITIONS);
         DeckRecognizer recognizer = new DeckRecognizer();
 
@@ -1717,7 +1721,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
         assertEquals(cardToken.getQuantity(), 4);
         assertEquals(tokenCard.getName(), "Power Sink");
         assertTrue(tokenCard.isFoil());
-        assertEquals(tokenCard.getEdition(), "30A");
+        assertEquals(tokenCard.getEdition(), "SLZ");
         assertTrue(cardToken.cardRequestHasNoCode());
 
         recognizer.setArtPreference(CardDb.CardArtPreference.ORIGINAL_ART_CORE_EXPANSIONS_REPRINT_ONLY);
@@ -2480,6 +2484,7 @@ public class DeckRecognizerTest extends CardMockTestCase {
     // === Deckstats Commander
     @Test
     void testRecognizeCommanderCardInDeckstatsExportFormat() {
+        // #531: latest Sliver Overlord print is Special Guests 128 (SPG, 2023-11-17), newer than SLD 10 (2019-12-02).
         DeckRecognizer recognizer = new DeckRecognizer();
 
         String deckstatsCommanderRequest = "1 Sliver Overlord #!Commander";
@@ -2492,8 +2497,8 @@ public class DeckRecognizerTest extends CardMockTestCase {
         assertNotNull(deckStatsToken.getCard());
         PaperCard soCard = deckStatsToken.getCard();
         assertEquals(soCard.getName(), "Sliver Overlord");
-        assertEquals(soCard.getEdition(), "SLD");
-        assertEquals(soCard.getCollectorNumber(), "10");
+        assertEquals(soCard.getEdition(), "SPG");
+        assertEquals(soCard.getCollectorNumber(), "128");
         assertTrue(deckStatsToken.cardRequestHasNoCode());
 
         // Check that deck section is made effective even if we're currently in Main
