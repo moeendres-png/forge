@@ -528,6 +528,15 @@ MUTATIONS = [
         "a candidate-configured JDK-only asynchronous deputy could shed hostile stack taint",
     ),
     Mutation(
+        "allow-procfs-symlink-alias-creation",
+        "witness/forge/d17/witness/Containment.java",
+        '            } else if (permission.getClass().getName().equals("java.nio.file.LinkPermission")) {\n'
+        '                deny(actor + " filesystem link permission " + name);\n',
+        '            } else if (false) {\n'
+        '                deny(actor + " filesystem link permission " + name);\n',
+        "candidate code could create a runtime symlink that aliases procfs outside the lexical /proc path",
+    ),
+    Mutation(
         "allow-arbitrary-direct-system-properties-mutation",
         "witness/forge/d17/witness/Containment.java",
         '            if (guard.authorityRestrictedContext()) {\n'
