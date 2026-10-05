@@ -591,7 +591,12 @@ public final class CardDb implements ICardDatabase, IDeckGenPool {
     public boolean setPreferredArt(String cardName, String setCode, int artIndex) {
         String cardRequestForPreferredArt = CardRequest.compose(cardName, setCode, artIndex);
         PaperCard pc = this.getCard(cardRequestForPreferredArt);
-        if (pc != null) {
+        // getCard falls back to another print when the requested one does not exist, but a
+        // preferred art must name a print that exists: never store a fallback as the preference.
+        CardEdition requestedEdition = setCode == null ? null : editions.get(setCode.toUpperCase());
+        if (pc != null && requestedEdition != null
+                && requestedEdition.getCode().equals(pc.getEdition())
+                && pc.getArtIndex() == Math.max(artIndex, IPaperCard.DEFAULT_ART_INDEX)) {
             artPrefs.put(cardName, cardRequestForPreferredArt);
             uniqueCardsByRules.put(pc.getRules(), pc);
             return true;

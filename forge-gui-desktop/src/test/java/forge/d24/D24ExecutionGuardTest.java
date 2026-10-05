@@ -23,13 +23,13 @@ import org.testng.annotations.Test;
 
 public class D24ExecutionGuardTest {
     private static final Map<String, Integer> DECLARED_TEST_METHODS = Map.ofEntries(
-            Map.entry("forge.deck.DeckRecognizerTest", 84),
+            Map.entry("forge.deck.DeckRecognizerTest", 85),
             Map.entry("forge.card.CardDbCardMockTestCase", 54),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 12),
             Map.entry("forge.card.CardDbLazyCardLoadingCardMockTestCase", 4),
             Map.entry("forge.card.CardDbPerformanceTests", 4),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103", 2),
-            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 2),
+            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 3),
             Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 1),
             // D22's actual-card evidence: losing either class would silently
             // drop the paid-activation, loss-route and Maniac-win controls.
@@ -37,13 +37,13 @@ public class D24ExecutionGuardTest {
             Map.entry("forge.gamesimulationtests.LichFixtureInitializationTest", 1));
 
     private static final Map<String, Integer> ENABLED_RUNTIME_METHODS = Map.ofEntries(
-            Map.entry("forge.deck.DeckRecognizerTest", 84),
+            Map.entry("forge.deck.DeckRecognizerTest", 85),
             Map.entry("forge.card.CardDbCardMockTestCase", 54),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 12),
             Map.entry("forge.card.CardDbLazyCardLoadingCardMockTestCase", 4),
             Map.entry("forge.card.CardDbPerformanceTests", 56),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103", 2),
-            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 2),
+            Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 3),
             Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 55),
             Map.entry("forge.gamesimulationtests.LichDamageReplacementTest", 6),
             Map.entry("forge.gamesimulationtests.LichFixtureInitializationTest", 1));
@@ -138,8 +138,12 @@ public class D24ExecutionGuardTest {
             assertNoPowerMockSuperclass(base);
         }
 
-        Assert.assertEquals(declared, 170, "D24 declared-method denominator drifted");
-        Assert.assertEquals(enabled, 168, "D24 enabled declared-method denominator drifted");
+        // #531 adds two controls: the database deck-text grammar
+        // (DeckRecognizerTest) and the UNKNOWN sentinel edition codes
+        // (CardEditionCollectionCardMockTestCase). D22 adds the seven Lich
+        // controls and re-enables the 104.3f scenario.
+        Assert.assertEquals(declared, 172, "D24 declared-method denominator drifted");
+        Assert.assertEquals(enabled, 170, "D24 enabled declared-method denominator drifted");
         Assert.assertEquals(disabled, EXPECTED_DISABLED, "disabled NOT_RUN obligations drifted");
     }
 
