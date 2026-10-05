@@ -1,0 +1,89 @@
+{
+  "source_sha": "9bb4448c7c7514dadc93dca973362f630c2604ed",
+  "tree": "892c88fe7eeb96a7ce4d35f50fc16d15eff638f8",
+  "java": "21",
+  "command": "xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=ComprehensiveRulesSection104 -Dsurefire.failIfNoSpecifiedTests=false test",
+  "exit_code": 1,
+  "xml_sha256": "e32fe85da1c8e9f122a5d97d2d10650fe14b4e0f181a7bc0529600ad39c713fc",
+  "cases": [
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_2a_player_wins_if_all_opponents_left_even_if_he_couldnt_win",
+      "seconds": "1.486",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_2b_effect_may_state_that_player_wins",
+      "seconds": "0.049",
+      "result": "FAIL",
+      "problem": "java.lang.NullPointerException: Cannot invoke \"forge.game.player.PlayerController.getCostDecisionMaker(forge.game.player.Player, forge.game.spellability.SpellAbility, boolean)\" because \"this.controller\" is null"
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3b_player_with_less_than_zero_life_loses_the_game",
+      "seconds": "0.004",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3b_player_with_less_than_zero_life_loses_the_game_only_when_a_player_receives_priority",
+      "seconds": "0.027",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3b_player_with_less_than_zero_life_loses_the_game_only_when_a_player_receives_priority_variant_with_combat",
+      "seconds": "0.051",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3b_player_with_zero_life_loses_the_game",
+      "seconds": "0.002",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3c_player_who_draws_card_with_empty_library_loses",
+      "seconds": "0.006",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3c_player_who_draws_more_cards_than_library_contains_draw_as_much_as_possible_and_loses",
+      "seconds": "0.013",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3d_player_with_more_than_ten_poison_counters_loses",
+      "seconds": "0.002",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3d_player_with_ten_poison_counters_loses",
+      "seconds": "0.001",
+      "result": "PASS",
+      "problem": null
+    },
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3e_effect_may_state_that_player_loses",
+      "seconds": "0.024",
+      "result": "FAIL",
+      "problem": "java.lang.NullPointerException: Cannot invoke \"forge.game.player.PlayerController.getCostDecisionMaker(forge.game.player.Player, forge.game.spellability.SpellAbility, boolean)\" because \"this.controller\" is null"
+    }
+  ],
+  "classification": "DIRECTLY_VERIFIED",
+  "qualification_credit": "none"
+}
