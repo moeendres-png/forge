@@ -311,6 +311,26 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
                     proc.returncode, 13,
                     "{} stdout={} stderr={}".format(route, proc.stdout, proc.stderr))
 
+    def test_preexisting_symlink_alias_to_procfs_is_denied(self) -> None:
+        alias_dir = self.tmp / "preexisting-proc-alias"
+        alias_dir.mkdir()
+        alias = alias_dir / "mem"
+        os.symlink("/proc/self/mem", alias)
+        chmod_tree_readable(alias_dir)
+        candidate = self.candidate_with_attack(
+            'java.nio.file.Files.newByteChannel(java.nio.file.Path.of(%s)).close();'
+            % json.dumps(str(alias)),
+            "PreexistingLinkAttack",
+        )
+        tests = self.trusted_attack_test(
+            "PreexistingLinkAttack", expected_value=1,
+            class_name="PreexistingLinkAttackTest", extra_cp=[candidate])
+        proc = self.launch(
+            tests, {"probe.PreexistingLinkAttackTest": 1},
+            {"probe.PreexistingLinkAttackTest#attackIsRefused": 1},
+            candidate_code=[candidate])
+        self.assertEqual(proc.returncode, 13, proc.stderr)
+
     def test_runtime_defined_bytecode_remains_in_hostile_candidate_domain(self) -> None:
         payload = self.compile_sources({
             "probe.RuntimePayload": """package probe;
