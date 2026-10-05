@@ -506,11 +506,19 @@ MUTATIONS = [
         "runtime-defined candidate bytecode could bypass the intended permission boundary",
     ),
     Mutation(
-        "allow-procfs-alias-bypass",
+        "allow-procfs-alias-or-write-bypass",
         "witness/forge/d17/witness/Containment.java",
-        '                    if (unix.equals("/proc") || unix.startsWith("/proc/")) {\n',
-        '                    if (unix.matches("^/proc/(self|[0-9]+)/(mem|maps|pagemap|fd|fdinfo)(/.*)?$")) {\n',
-        "procfs aliases such as thread-self or self/root could bypass process-memory/fd containment",
+        '                if (unix.equals("/proc") || unix.startsWith("/proc/")\n'
+        '                        || targetUnix.equals("/proc") || targetUnix.startsWith("/proc/")) {\n',
+        '                if (unix.equals("/proc/self/mem") && actions.contains("read")) {\n',
+        "procfs aliases or write-only process-memory access could bypass containment",
+    ),
+    Mutation(
+        "trust-dependency-domain-as-confused-deputy",
+        "witness/forge/d17/witness/Containment.java",
+        '                if (loader == candidate || loader == dependencies) {\n',
+        '                if (loader == candidate) {\n',
+        "candidate code could delegate a delayed sensitive operation to a dependency-only thread",
     ),
     Mutation(
         "allow-arbitrary-direct-system-properties-mutation",
