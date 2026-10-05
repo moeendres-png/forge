@@ -2194,9 +2194,14 @@ class FrozenLaunchClasspath(unittest.TestCase):
         )
         self.assertIn('if (invocationDepth.get().intValue() > 0)', source)
         self.assertIn(
-            'return trustedWitness ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
+            'return activeCounter ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
             source,
         )
+        invocation_block = source.split(
+            "if (invocationDepth.get().intValue() > 0)", 1
+        )[1].split("}", 1)[0]
+        self.assertNotIn("TrustedTestNGDriver", invocation_block)
+        self.assertNotIn("org.testng.", invocation_block)
         self.assertIn('void enterInvocation()', source)
         self.assertIn('void exitInvocation()', source)
         counter_source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17"
