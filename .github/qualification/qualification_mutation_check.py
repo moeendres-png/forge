@@ -377,6 +377,13 @@ MUTATIONS = [
         "a .gitattributes export-subst/export-ignore would change the bytes built and recompiled",
     ),
     Mutation(
+        "accept-committed-symlink-alias",
+        "sandbox.py",
+        '            raise SandboxError("symlink export path is unsupported for qualification: {}".format(rel))\n',
+        '            seen[rel] = ("120000", _git_blob_id(os.readlink(item).encode("utf-8", "surrogateescape")))\n',
+        "a committed candidate symlink could alias procfs or another forbidden target",
+    ),
+    Mutation(
         "trusted-python-imports-site",
         "../workflows/forge-candidate-qualification.yml",
         "/usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare",
