@@ -473,8 +473,8 @@ MUTATIONS = [
     Mutation(
         "integrity-record-without-account",
         "sandbox.py",
-        "        \"user\": user,\n        \"trusted_sha\": sha,",
-        "        \"trusted_sha\": sha,",
+        "        \"user\": user,\n        \"users\": users,",
+        "        \"users\": users,",
         "every real run would be FAIL: qualify could never PASS",
     ),
     Mutation(
