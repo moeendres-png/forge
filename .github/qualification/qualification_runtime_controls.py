@@ -251,6 +251,10 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'System.getProperties().keySet().remove("user.dir");',
         "properties-values-mutation":
             'System.getProperties().values().clear();',
+        "jdk-async-properties-deputy":
+            'Runnable deputy=java.beans.EventHandler.create(Runnable.class, '
+            'System.getProperties(), "clear"); '
+            'java.util.concurrent.CompletableFuture.runAsync(deputy).join();',
         "security-manager-replacement":
             'System.setSecurityManager(null);',
         "new-classloader":
