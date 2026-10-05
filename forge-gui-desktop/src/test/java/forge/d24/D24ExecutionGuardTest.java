@@ -46,6 +46,10 @@ public class D24ExecutionGuardTest {
             "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardLegacyImplementation",
             "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardNewDbImplementation");
 
+    // Executed historical method names are not evidence that their named Rules
+    // obligations are isolated. D22 reclassifies this debt, it does not clear it.
+    private static final Set<String> UNQUALIFIED_RULE_OBLIGATIONS = Set.of("CR104.3f");
+
     private static Map<String, Integer> runtimeDiscovered = zeroCounts();
     private static Map<String, Integer> runtimePassed = zeroCounts();
     private static Map<String, Integer> runtimeFailed = zeroCounts();
@@ -130,6 +134,12 @@ public class D24ExecutionGuardTest {
     }
 
     @Test
+    public void enabledHistoricalScenarioCannotClearUnqualifiedRuleDebt() {
+        Assert.assertEquals(UNQUALIFIED_RULE_OBLIGATIONS, Set.of("CR104.3f"),
+                "actual simultaneous-win/loss evidence is required before adjudicating this obligation");
+    }
+
+    @Test
     public void unsupportedPowerMockSurfaceCannotReturn() throws IOException {
         String packageToken = "org." + "powermock";
         String apiToken = "Power" + "Mockito";
@@ -200,6 +210,10 @@ public class D24ExecutionGuardTest {
 
     @AfterSuite(alwaysRun = true)
     public void verifyLiveAffectedExecution() {
+        UNQUALIFIED_RULE_OBLIGATIONS.stream().sorted().forEach(rule ->
+                System.out.println("D24_RULE_OBLIGATION id=" + rule
+                        + " status=NOT_RUN evidence_class=UNKNOWN historical_fixture=EXECUTED_NOT_ISOLATED qualification_credit=none"));
+        System.out.println("D24_RULE_COVERAGE=PARTIAL");
         if (System.getProperty("test") != null) {
             return;
         }

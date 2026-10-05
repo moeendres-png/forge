@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "rule_obligations": [
+    {
+      "id": "CR104.3f",
+      "status": "NOT_RUN",
+      "evidence_class": "UNKNOWN",
+      "historical_fixture": "EXECUTED_NOT_ISOLATED",
+      "reason": "Current120.4b/121.7 order this Lich loss before the replacement-caused draw; no demonstrated simultaneous win/loss scenario. Lab#503 remains OPEN.",
+      "qualification_credit": "none"
+    }
+  ],
+  "rules_coverage": "PARTIAL",
+  "disabled_benchmarks_remain": 2
+}

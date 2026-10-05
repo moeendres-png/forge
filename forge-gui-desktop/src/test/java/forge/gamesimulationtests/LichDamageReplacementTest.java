@@ -13,11 +13,22 @@ import forge.gamesimulationtests.util.playeractions.ChooseZoneCardAction;
 import forge.gamesimulationtests.util.playeractions.PlayerActions;
 import org.testng.Assert;
 import org.testng.annotations.Test;
+import org.testng.annotations.BeforeMethod;
+import forge.localinstance.properties.ForgeConstants;
+import forge.util.Localizer;
 
 /** Actual-card controls for the historical disabled CR104 fixture.
  * They do not claim an isolated simultaneous win/loss obligation.
  */
 public class LichDamageReplacementTest extends BaseGameSimulationTest {
+    @BeforeMethod
+    public void initializeParameterizedGamePrompts() {
+        // Only these Lich scenarios require real parameterized zone prompts.
+        // Preserve the other fixtures' existing localization contract.
+        setMock(null);
+        Localizer.getInstance().initialize("en-US", ForgeConstants.LANG_DIR);
+    }
+
     private GameStateSpecificationBuilder position(boolean mana, boolean payableDamageReplacement) {
         GameStateSpecificationBuilder state = new GameStateSpecificationBuilder()
                 .addCard(new CardSpecificationBuilder("Laboratory Maniac").controller(PlayerSpecification.PLAYER_1).battlefield())

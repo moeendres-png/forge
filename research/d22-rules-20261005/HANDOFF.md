@@ -90,3 +90,19 @@ coverage FAIL retained. Artifact11335025526, ZIPsha256
 3bf676b646088ce79a14ac13e55759f01b5a93af4a9a30fecf840550a6723baa.
 Full independent two-JDK raw-report readback is the exact next action, then review,
 fresh base/head/writer lock and bounded merge admission only if no new regressions.
+
+## Review repair (supersedes c08 interim admission)
+
+Independent exact-head review found three P2s, accepted:
+- initialize source type definitions before eagerly parsing/caching cards;
+- scope real localization to Lich controls, preserving the old poison fixtures;
+- retain unqualified104.3f semantic debt even though its historical fixture runs.
+
+New construction-only multiword-type control uses actual The Tenth Doctor
+and requires Time Lord to be parsed intact. D24 now prints the separate
+CR104.3f NOT_RUN/UNKNOWN obligation and PARTIAL Rules coverage in all runs.
+RULE_OBLIGATIONS.json preserves the same distinction. Lab#503 remains OPEN;
+this PR repairs the historical fixture but does not terminate its broader rule
+obligation. No simulated terminal result or fake simultaneous card was added.
+Old c08/95 dual-JDK receipts are historical supporting evidence only after this
+relevant fixture/obligation change. New exact-head receipts/review are required.
