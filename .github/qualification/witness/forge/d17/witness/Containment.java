@@ -244,6 +244,7 @@ public final class Containment {
                 if (name.equals("setSecurityManager")
                         || name.equals("createSecurityManager")
                         || name.equals("createClassLoader")
+                        || name.equals("defineClass")
                         || name.equals("getClassLoader")
                         || name.equals("setContextClassLoader")
                         || name.equals("enableContextClassLoaderOverride")
@@ -290,8 +291,8 @@ public final class Containment {
                 }
                 if (actions.contains("read")) {
                     String unix = name.replace('\\', '/');
-                    if (unix.matches("^/proc/(self|[0-9]+)/(mem|maps|pagemap)(/.*)?$")) {
-                        deny("candidate process-memory read " + unix);
+                    if (unix.matches("^/proc/(self|[0-9]+)/(mem|maps|pagemap|fd|fdinfo)(/.*)?$")) {
+                        deny("candidate process-memory/fd discovery read " + unix);
                     }
                 }
                 if (actions.contains("write") || actions.contains("delete")) {
@@ -336,7 +337,11 @@ public final class Containment {
         }
 
         private void checkKey(Object key) {
-            if (guard.candidateInContext() && sensitiveProperty(String.valueOf(key))) {
+            if (guard.candidateInContext()) {
+                // The Properties object is process-global trusted runtime state.
+                // Candidate production code has no authority to mutate *any*
+                // entry, even one not currently consumed by TestNG: otherwise a
+                // future provider/loader/library property could become a bypass.
                 guard.deny("candidate direct Properties mutation " + key);
             }
         }
@@ -351,6 +356,18 @@ public final class Containment {
         public synchronized Object remove(Object key) {
             checkKey(key);
             return super.remove(key);
+        }
+
+        @Override
+        public synchronized boolean remove(Object key, Object value) {
+            checkKey(key);
+            return super.remove(key, value);
+        }
+
+        @Override
+        public synchronized Object putIfAbsent(Object key, Object value) {
+            checkKey(key);
+            return super.putIfAbsent(key, value);
         }
 
         @Override
