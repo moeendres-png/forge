@@ -1,5 +1,5 @@
 name: Forge D17 qualification gate selftest
-# NON-AUTHORITATIVE runtime diagnostic trigger; never merge this branch.
+# NON-AUTHORITATIVE runtime diagnostic trigger v2; never merge this branch.
 
 # The exact-SHA qualification itself runs on pull_request_target, from the
 # definition on master, so a change to the gate cannot qualify itself. This
