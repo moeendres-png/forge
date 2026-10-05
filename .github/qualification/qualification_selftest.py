@@ -2348,6 +2348,23 @@ class FrozenLaunchClasspath(unittest.TestCase):
         )[0]
         self.assertIn("inspectingClassLoader.set(Boolean.TRUE)", inspection)
         self.assertIn("inspectingClassLoader.remove()", inspection)
+        # Each frame walk must carry its own pins. The same guard lines also
+        # occur in directTrustedTestPackageAccess, so a whole-file assertion
+        # would stay green while the general authorityContext walk is weakened.
+        authority = source.split("private int authorityContext()", 1)[1].split(
+            "private boolean directTrustedTestPackageAccess(String pkg)", 1
+        )[0]
+        self.assertIn("ClassLoader loader = classLoaderOf(frame);", authority)
+        self.assertIn("if (loader == candidate || loader == dependencies) {", authority)
+        self.assertNotIn("if (loader == candidate) {", authority)
+        self.assertNotIn("if (loader == dependencies) {", authority)
+        # Only the scoped classLoaderOf helper may call Class#getClassLoader
+        # inside the Guard; any other call re-enters checkPermission unguarded.
+        guard_body = source.split("static final class Guard extends SecurityManager", 1)[1].split(
+            "static final class GuardedProperties", 1
+        )[0]
+        self.assertEqual(guard_body.count(".getClassLoader()"), 1, guard_body)
+        self.assertEqual(inspection.count(".getClassLoader()"), 1, inspection)
         package_access = source.split(
             "public void checkPackageAccess(String pkg)", 1
         )[1].split("static final class GuardedProperties", 1)[0]
@@ -2359,6 +2376,7 @@ class FrozenLaunchClasspath(unittest.TestCase):
             "private boolean directTrustedTestPackageAccess(String pkg)", 1
         )[1].split("void enterInvocation()", 1)[0]
         self.assertIn('if (!pkg.startsWith("org.testng"))', direct_package)
+        self.assertIn("ClassLoader loader = classLoaderOf(frame);", direct_package)
         self.assertIn('if (loader == candidate || loader == dependencies)', direct_package)
         self.assertIn('if (frame == Guard.class)', direct_package)
         self.assertIn('name.startsWith("java.lang.ClassLoader")', direct_package)

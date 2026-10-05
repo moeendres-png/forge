@@ -544,6 +544,55 @@ public class DeputyAttackProduct {
         # The deputy thread has no candidate frame. The dependency loader itself
         # must therefore be tainted, producing the sticky containment exit.
         self.assertEqual(proc.returncode, 13, proc.stderr)
+        # Exit 13 alone is not enough: the JDK-only asynchronous fallback would
+        # also deny this thread. The violation must be attributed to the hostile
+        # dependency domain, proving the dependency frame itself is tainted.
+        self.assertIn(
+            "D17_CONTAINMENT_VIOLATION: candidate/dependency property mutation d17.async.deputy",
+            proc.stderr)
+
+    def test_dependency_frame_is_hostile_beneath_trusted_testng_authority(self) -> None:
+        trusted = self.compile_sources({
+            "deputy.InstantiationDeputy": """package deputy;
+public class InstantiationDeputy {
+  public static int attack() {
+    try {
+      System.setProperty("d17.dependency.beneath.testng", "pwn");
+      return 0;
+    } catch (SecurityException expected) {
+      return 1;
+    } catch (Throwable other) {
+      return 2;
+    }
+  }
+}
+"""
+        }, "instantiation-deputy")
+        tests = self.compile_sources({
+            "probe.DependencyBeneathTestNgTest": """package probe;
+import static org.testng.Assert.assertEquals;
+import org.testng.annotations.Test;
+public class DependencyBeneathTestNgTest {
+  // TestNG instantiates this class outside any active test invocation. The
+  // only frames beneath the dependency call are the trusted test constructor
+  // and trusted TestNG/driver authority; no candidate frame is on the stack.
+  private final int observed = deputy.InstantiationDeputy.attack();
+  @Test public void dependencyDeputyWasRefused() { assertEquals(observed, 1); }
+}
+"""
+        }, "dependency-beneath-testng", extra_cp=[trusted])
+        proc = self.launch(
+            tests, {"probe.DependencyBeneathTestNgTest": 1},
+            {"probe.DependencyBeneathTestNgTest#dependencyDeputyWasRefused": 1},
+            trusted_dependencies=[trusted])
+        # A dependency frame must taint the context even when trusted TestNG
+        # authority frames are beneath it; otherwise the tainted dependency
+        # domain borrows TestNG authority and mutates process-global state.
+        self.assertEqual(proc.returncode, 13, proc.stderr)
+        self.assertIn(
+            "D17_CONTAINMENT_VIOLATION: candidate/dependency property mutation "
+            "d17.dependency.beneath.testng",
+            proc.stderr)
 
 
 class FilesystemAuthorityRuntimeControls(RuntimeCase):
