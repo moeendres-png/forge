@@ -1,11 +1,13 @@
 package forge.gamesimulationtests.comprehensiverules;
 
+import org.testng.Assert;
 import org.testng.annotations.Test;
 
 import forge.game.phase.PhaseType;
 import forge.gamesimulationtests.BaseGameSimulationTest;
 import forge.gamesimulationtests.util.GameWrapper;
 import forge.gamesimulationtests.util.card.CardSpecificationBuilder;
+import forge.gamesimulationtests.util.card.CardSpecificationHandler;
 import forge.gamesimulationtests.util.gamestate.GameStateSpecificationBuilder;
 import forge.gamesimulationtests.util.player.PlayerSpecification;
 import forge.gamesimulationtests.util.player.PlayerSpecificationBuilder;
@@ -177,7 +179,7 @@ public class ComprehensiveRulesSection104 extends BaseGameSimulationTest {
 		runGame( gameWrapper, PlayerSpecification.PLAYER_2, 2 );
 	}
 
-	@Test
+	@Test( description = "Historical fixture; NOT an isolated CR 104.3f simultaneous win/loss proof (see D24ExecutionGuardTest UNQUALIFIED_RULE_OBLIGATIONS)" )
 	public void test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses() {
         // Historical method name retained for evidence continuity. Under current
         // CR120.4b and121.7, Nefarious Lich's unpayable damage replacement ends
@@ -198,5 +200,14 @@ public class ComprehensiveRulesSection104 extends BaseGameSimulationTest {
 				)
 		);
 		runGame( gameWrapper, PlayerSpecification.PLAYER_2, 1 );
+		// The activation was really paid with the declared Swamp, and the loss is
+		// Nefarious Lich's own, not a draw or another route.
+		Assert.assertTrue( CardSpecificationHandler.INSTANCE.find( gameWrapper.getGame(),
+				new CardSpecificationBuilder( "Swamp" ).controller( PlayerSpecification.PLAYER_1 ).battlefield().build() ).isTapped(),
+				"the activation must be paid with the declared Swamp" );
+		forge.game.player.PlayerOutcome lich = forge.gamesimulationtests.util.player.PlayerSpecificationHandler.INSTANCE
+				.find( gameWrapper.getGame(), PlayerSpecification.PLAYER_1 ).getOutcome();
+		Assert.assertEquals( lich.lossState, forge.game.player.GameLossReason.SpellEffect );
+		Assert.assertEquals( lich.loseConditionSpell, "Nefarious Lich" );
 	}
 }
