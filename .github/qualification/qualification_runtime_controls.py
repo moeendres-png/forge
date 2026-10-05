@@ -449,6 +449,33 @@ public class DependencyLoaderAttackProduct {
             candidate_code=[candidate], trusted_dependencies=[trusted])
         self.assertEqual(proc.returncode, 13, proc.stderr)
 
+    def test_candidate_supplied_synchronous_jdk_deputy_is_denied_under_testng(self) -> None:
+        candidate = self.compile_sources({
+            "probe.SyncDeputyProduct": """package probe;
+public class SyncDeputyProduct {
+  public static Runnable makeDeputy() {
+    return java.beans.EventHandler.create(
+        Runnable.class, System.getProperties(), "clear");
+  }
+}
+"""
+        }, "sync-deputy-product")
+        tests = self.compile_sources({
+            "probe.SyncDeputyTest": """package probe;
+import org.testng.annotations.Test;
+public class SyncDeputyTest {
+  @Test public void returnedJdkDeputyCannotBorrowTestNgAuthority() {
+    SyncDeputyProduct.makeDeputy().run();
+  }
+}
+"""
+        }, "sync-deputy-test", extra_cp=[candidate])
+        proc = self.launch(
+            tests, {"probe.SyncDeputyTest": 1},
+            {"probe.SyncDeputyTest#returnedJdkDeputyCannotBorrowTestNgAuthority": 1},
+            candidate_code=[candidate])
+        self.assertEqual(proc.returncode, 13, proc.stderr)
+
     def test_trusted_dependency_cannot_be_used_as_async_confused_deputy(self) -> None:
         trusted = self.compile_sources({
             "deputy.AsyncDeputy": """package deputy;
