@@ -664,6 +664,22 @@ MUTATIONS = [
         "guard-internal Class#getClassLoader package checks would recursively re-enter authority inspection",
     ),
     Mutation(
+        "broaden-trusted-testng-resolution-to-all-packages",
+        "witness/forge/d17/witness/Containment.java",
+        '            if (trustedFrameworkResolutionDepth.get().intValue() > 0\n'
+        '                    && pkg.startsWith("org.testng")) {\n'
+        '                // Only TrustedTestLoader can open this private scope, and only\n'
+        '                // while it delegates a comparison-base test\'s TestNG resolution\n'
+        '                // to the trusted system loader. Do not generalize this to other\n'
+        '                // packages or permissions.\n'
+        '                return;\n'
+        '            }\n',
+        '            if (trustedFrameworkResolutionDepth.get().intValue() > 0) {\n'
+        '                return;\n'
+        '            }\n',
+        "trusted TestNG resolution scope could be widened to witness/internal packages",
+    ),
+    Mutation(
         "trust-jdk-only-asynchronous-authority",
         "witness/forge/d17/witness/Containment.java",
         '            // A JDK-only asynchronous task has neither a hostile frame nor an\n'
