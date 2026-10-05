@@ -177,17 +177,17 @@ public class ComprehensiveRulesSection104 extends BaseGameSimulationTest {
 		runGame( gameWrapper, PlayerSpecification.PLAYER_2, 2 );
 	}
 
-	@Test( enabled = false )//TODO fails, so disable for now.  Note that it seems to really be an issue with Forge and this rule, as commenting out the Laboratory Maniac line below (so there's just a loss, not a win), correctly triggers the loss
+	@Test
 	public void test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses() {
-		/* http://community.wizards.com/content/forum-topic/3199056
-		 * Player 1 activates the Trashing Wumpus's ability
-		 * The damage to himself makes Nefarious Lich make him exile a card from his graveyard, which he can't, so it makes him lose
-		 * However at the exact same time, the lifelink makes Nefarious Lich make him draw a card, 
-		 * 	but because his library is empty, this makes the Laboratory Maniac make him win.
-		 * This rule says that the loss should override the win.
-		 */
+        // Historical method name retained for evidence continuity. Under current
+        // CR120.4b and121.7, Nefarious Lich's unpayable damage replacement ends
+        // the game before replacement-caused draws. This scenario's required
+        // loss is correct, but it does not isolate simultaneous win/loss104.3f.
+        // LichDamageReplacementTest checks paid activation, the loss route and
+        // the contrasting real Maniac win with an exilable graveyard card.
 		GameWrapper gameWrapper = new GameWrapper(
 				new GameStateSpecificationBuilder()
+						.addCard( new CardSpecificationBuilder( "Swamp" ).controller( PlayerSpecification.PLAYER_1 ).battlefield() )
 						.addCard( new CardSpecificationBuilder( "Laboratory Maniac" ).controller( PlayerSpecification.PLAYER_1 ).battlefield() )
 						.addCard( new CardSpecificationBuilder( "Nefarious Lich" ).controller( PlayerSpecification.PLAYER_1 ).battlefield() )
 						.addCard( new CardSpecificationBuilder( "Thrashing Wumpus" ).controller( PlayerSpecification.PLAYER_1 ).battlefield() )

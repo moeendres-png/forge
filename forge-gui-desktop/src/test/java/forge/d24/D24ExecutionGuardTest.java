@@ -31,7 +31,7 @@ public class D24ExecutionGuardTest {
     private static final Map<String, Integer> ENABLED_RUNTIME_METHODS = Map.ofEntries(
             Map.entry("forge.deck.DeckRecognizerTest", 84),
             Map.entry("forge.card.CardDbCardMockTestCase", 54),
-            Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 11),
+            Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 12),
             Map.entry("forge.card.CardDbLazyCardLoadingCardMockTestCase", 4),
             Map.entry("forge.card.CardDbPerformanceTests", 56),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103", 2),
@@ -44,9 +44,7 @@ public class D24ExecutionGuardTest {
 
     private static final Set<String> EXPECTED_DISABLED = Set.of(
             "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardLegacyImplementation",
-            "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardNewDbImplementation",
-            "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
-                    + "#test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses");
+            "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardNewDbImplementation");
 
     private static Map<String, Integer> runtimeDiscovered = zeroCounts();
     private static Map<String, Integer> runtimePassed = zeroCounts();
@@ -127,7 +125,7 @@ public class D24ExecutionGuardTest {
         }
 
         Assert.assertEquals(declared, 163, "D24 declared-method denominator drifted");
-        Assert.assertEquals(enabled, 160, "D24 enabled declared-method denominator drifted");
+        Assert.assertEquals(enabled, 161, "D24 enabled declared-method denominator drifted");
         Assert.assertEquals(disabled, EXPECTED_DISABLED, "disabled NOT_RUN obligations drifted");
     }
 

@@ -714,7 +714,12 @@ public class PlayerControllerForTests extends PlayerController {
         if (delayedReveal != null) {
             reveal(delayedReveal);
         }
-        return ChangeZoneAi.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player, decider);
+        ChooseZoneCardAction action = playerActions == null ? null
+                : playerActions.getNextActionIfApplicable(decider, getGame(), ChooseZoneCardAction.class);
+        if (action == null) {
+            throw new IllegalStateException("Missing scripted zone-card choice");
+        }
+        return action.choose(destination, origin, fetchList);
     }
 
     @Override

@@ -1,0 +1,11 @@
+{
+  "source_base": "a3068ce4cb6e5bfce6cffedda00d07f326ba746e",
+  "source_delta": "Enable previously disabled104.3f only, original expectation intact",
+  "java": "21",
+  "exit": 1,
+  "tests": 12,
+  "failures": 1,
+  "reason": "GameWrapper cannot attach Lifelink: dynamic card types not loaded under mocked FModel",
+  "raw_xml_sha256": "3038656bfd5dce0648e6c3064d0d65ccfdcbc02534c14b0ccc1b09f1849009a5",
+  "qualification_credit": "none"
+}
