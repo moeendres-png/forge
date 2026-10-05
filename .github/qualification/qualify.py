@@ -330,6 +330,9 @@ def derive_verdict(
             compile_authority.get("semantic_divergence")),
     )
     build_divergence = manifest.get("candidate_build_definition_divergence")
+    candidate_build = manifest.get("candidate_build")
+    candidate_build = candidate_build if isinstance(candidate_build, dict) else {}
+    candidate_build_exit = candidate_build.get("exit_code")
     maven_authority = manifest.get("maven_repository_authority")
     build_definition_ok = (
         isinstance(build_divergence, list)
@@ -695,6 +698,13 @@ def derive_verdict(
             "candidate changes Maven build/plugin authority relative to the trusted comparison "
             "base; D17 refuses candidate-controlled build definitions: {}".format(
                 build_divergence[:20])
+        )
+    elif (isinstance(candidate_build_exit, int)
+          and not isinstance(candidate_build_exit, bool)
+          and candidate_build_exit != 0):
+        verdict, reason = FAIL, (
+            "exact candidate production build failed before trusted test execution "
+            "(exit {})".format(candidate_build_exit)
         )
     elif compile_authority_status == "CANDIDATE_INCOMPATIBLE":
         verdict, reason = FAIL, (
