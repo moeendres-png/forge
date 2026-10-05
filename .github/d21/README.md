@@ -25,11 +25,13 @@ Selection starts from failure mechanisms, not fast or representative tests.
 
 ## Mandatory red control
 
-The injected fixture models code that explicitly clears a dynamically installed SecurityManager by calling `System.setSecurityManager(null)`.
+The final injected fixture launches an isolated child JVM and calls `System.setSecurityManager(new SecurityManager())`, exercising a real dynamic SecurityManager installation rather than inspecting the runtime version.
 
 Documented JDK behavior:
-- JDK 17: with `java.security.manager` unset, dynamic SecurityManager changes are allowed.
-- JDK 21: with that property unset, `System.setSecurityManager` throws `UnsupportedOperationException` unless the JVM starts with `-Djava.security.manager=allow`.
+- JDK 17: with `java.security.manager` unset, dynamic SecurityManager installation is allowed.
+- JDK 21: with that property unset, a non-null `System.setSecurityManager(...)` call throws `UnsupportedOperationException` unless the JVM starts with `-Djava.security.manager=allow`.
+
+An earlier weaker `System.setSecurityManager(null)` probe was rejected because Java 21 can treat that no-op as successful; it receives no sensitivity credit.
 
 The fixture remains under `.github/d21`; the shadow workflow copies it into the test tree only on the ephemeral runner. No production source is changed.
 
