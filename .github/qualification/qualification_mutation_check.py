@@ -542,6 +542,20 @@ MUTATIONS = [
         "candidate code could mutate global properties through putIfAbsent",
     ),
     Mutation(
+        "expose-mutable-properties-entryset-view",
+        "witness/forge/d17/witness/Containment.java",
+        '        public Set<Map.Entry<Object, Object>> entrySet() {\n'
+        '            if (guard.candidateInContext()) {\n'
+        '                guard.deny("candidate mutable Properties.entrySet view");\n'
+        '            }\n'
+        '            return super.entrySet();\n'
+        '        }\n',
+        '        public Set<Map.Entry<Object, Object>> entrySet() {\n'
+        '            return super.entrySet();\n'
+        '        }\n',
+        "candidate code could mutate global properties through Map.Entry.setValue",
+    ),
+    Mutation(
         "reduce-candidate-qualification-to-java21-only",
         "../workflows/forge-candidate-qualification.yml",
         '        java: ["17", "21"]\n',
