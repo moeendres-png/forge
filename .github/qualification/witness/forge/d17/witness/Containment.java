@@ -1,6 +1,8 @@
 package forge.d17.witness;
 
+import java.io.File;
 import java.io.FilePermission;
+import java.io.IOException;
 import java.lang.reflect.ReflectPermission;
 import java.lang.management.ManagementPermission;
 import java.net.URL;
@@ -213,6 +215,8 @@ public final class Containment {
         private final DependencyLoader dependencies;
         private final ClassLoader trusted;
         private final Path protectedRoot;
+        private final ThreadLocal<Boolean> resolvingPath =
+                ThreadLocal.withInitial(() -> Boolean.FALSE);
         private volatile String violation;
 
         Guard(CandidateCodeLoader candidate, DependencyLoader dependencies,
@@ -259,6 +263,25 @@ public final class Containment {
                     ? "candidate/dependency" : "untrusted asynchronous context";
         }
 
+        private String canonicalFilePath(String name) {
+            if ("<<ALL FILES>>".equals(name)) {
+                return name;
+            }
+            try {
+                // Canonicalization itself performs filesystem queries that can
+                // re-enter SecurityManager. Temporarily authorize only this
+                // trusted synchronous JDK operation; no candidate callback runs
+                // inside File.getCanonicalPath().
+                resolvingPath.set(Boolean.TRUE);
+                return new File(name).getCanonicalPath().replace('\\', '/');
+            } catch (IOException | RuntimeException error) {
+                deny(authorityLabel() + " path canonicalization failed for " + name);
+                return ""; // unreachable: deny always throws
+            } finally {
+                resolvingPath.remove();
+            }
+        }
+
         void deny(String detail) {
             if (violation == null) {
                 violation = detail;
@@ -276,6 +299,9 @@ public final class Containment {
 
         @Override
         public void checkPermission(Permission permission) {
+            if (Boolean.TRUE.equals(resolvingPath.get())) {
+                return;
+            }
             if (!authorityRestrictedContext()) {
                 return;
             }
@@ -330,21 +356,15 @@ public final class Containment {
             } else if (permission instanceof FilePermission) {
                 String actions = permission.getActions();
                 String unix = name.replace('\\', '/');
-                Path target = null;
-                try {
-                    target = Path.of(name).toAbsolutePath().normalize();
-                } catch (RuntimeException badPath) {
-                    if (actions.contains("write") || actions.contains("delete")) {
-                        deny(actor + " mutation through non-normalizable path " + name);
-                    }
-                }
-                String targetUnix = target == null ? "" : target.toString().replace('\\', '/');
+                String canonicalUnix = canonicalFilePath(name);
                 // procfs exposes process memory, fd tables, task aliases and
-                // root-based aliases. Deny every operation, not only reads:
-                // /proc/self/mem can also be opened write-only.
+                // root-based aliases. Check both the lexical permission path and
+                // the canonical target so pre-existing symlinks planted by the
+                // untrusted build UID cannot route around the boundary.
                 if (unix.equals("/proc") || unix.startsWith("/proc/")
-                        || targetUnix.equals("/proc") || targetUnix.startsWith("/proc/")) {
-                    deny(actor + " procfs access " + actions + " " + unix);
+                        || canonicalUnix.equals("/proc") || canonicalUnix.startsWith("/proc/")) {
+                    deny(actor + " procfs access " + actions + " " + unix
+                            + " -> " + canonicalUnix);
                 }
                 if (actions.contains("execute")) {
                     deny(actor + " process execution " + name);
@@ -353,8 +373,9 @@ public final class Containment {
                     if ("<<ALL FILES>>".equals(name)) {
                         deny(actor + " all-files mutation permission");
                     }
-                    if (target != null && target.startsWith(protectedRoot)) {
-                        deny(actor + " mutation of protected witness path " + target);
+                    if (!"<<ALL FILES>>".equals(canonicalUnix)
+                            && Path.of(canonicalUnix).startsWith(protectedRoot)) {
+                        deny(actor + " mutation of protected witness path " + canonicalUnix);
                     }
                 }
             }
