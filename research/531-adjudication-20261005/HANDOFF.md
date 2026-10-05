@@ -46,3 +46,15 @@ and type data before eager parsing, with no card filtering or expectations edits
 This is fixture construction, not Rules behavior proof. Repeat the isolated
 original84 tests before the symbol product repair; do not credit the mistakenly
 named unchanged after-run as an after-fix result (it was another49-failure baseline).
+
+## First narrow product repair (validation pending)
+
+Five of32 methods are now supported GENUINE_DECK_RECOGNIZER_BEHAVIOR_DEFECT:
+the short lettersW/U/B/R/G/C were passed to Color.fromName, which handles full
+English names only. That null becomes the multicolor label. Original84-method
+Java21 before run reproduces12 failures; five are short/hybrid/mixed/repeated
+mana-symbol assertions. Map those six existing symbols explicitly in the deck
+text parser; keep full-name/multicolor handling and every test assertion intact.
+This parser formats deck text, not mana payment/legality or Rules decisions.
+No other27 classifications are promoted. No Rules Core/cards/fixtures/workflows
+or data expectation changes. Fresh after/negative evidence and review pending.

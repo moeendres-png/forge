@@ -1211,8 +1211,14 @@
       "invocation_classes": [
         "forge.deck.DeckRecognizerTest"
       ],
-      "classification": "UNKNOWN_PENDING_SOURCE_ADJUDICATION",
-      "evidence_class": "DIRECTLY_VERIFIED"
+      "classification": "GENUINE_DECK_RECOGNIZER_BEHAVIOR_DEFECT",
+      "evidence_class": "DIRECTLY_VERIFIED",
+      "classification_evidence_class": "CODE_DERIVED_AND_DIRECTLY_VERIFIED",
+      "source_basis": [
+        "forge-core/src/main/java/forge/deck/DeckRecognizer.java#getMagicColor",
+        "forge-core/src/main/java/forge/card/MagicColor.java#Color.fromName"
+      ],
+      "reason": "Engine-independent deck text parser passes symbol letters to a full-name-only conversion; null is rendered as multicolor. Existing unchanged assertions independently require literal single/hybrid color symbols. All five methods reproduce on both hosted JDKs and the narrow local before run. After validation pending."
     },
     {
       "declaring_class": "forge.deck.DeckRecognizerTest",
@@ -1224,8 +1230,14 @@
       "invocation_classes": [
         "forge.deck.DeckRecognizerTest"
       ],
-      "classification": "UNKNOWN_PENDING_SOURCE_ADJUDICATION",
-      "evidence_class": "DIRECTLY_VERIFIED"
+      "classification": "GENUINE_DECK_RECOGNIZER_BEHAVIOR_DEFECT",
+      "evidence_class": "DIRECTLY_VERIFIED",
+      "classification_evidence_class": "CODE_DERIVED_AND_DIRECTLY_VERIFIED",
+      "source_basis": [
+        "forge-core/src/main/java/forge/deck/DeckRecognizer.java#getMagicColor",
+        "forge-core/src/main/java/forge/card/MagicColor.java#Color.fromName"
+      ],
+      "reason": "Engine-independent deck text parser passes symbol letters to a full-name-only conversion; null is rendered as multicolor. Existing unchanged assertions independently require literal single/hybrid color symbols. All five methods reproduce on both hosted JDKs and the narrow local before run. After validation pending."
     },
     {
       "declaring_class": "forge.deck.DeckRecognizerTest",
@@ -1237,8 +1249,14 @@
       "invocation_classes": [
         "forge.deck.DeckRecognizerTest"
       ],
-      "classification": "UNKNOWN_PENDING_SOURCE_ADJUDICATION",
-      "evidence_class": "DIRECTLY_VERIFIED"
+      "classification": "GENUINE_DECK_RECOGNIZER_BEHAVIOR_DEFECT",
+      "evidence_class": "DIRECTLY_VERIFIED",
+      "classification_evidence_class": "CODE_DERIVED_AND_DIRECTLY_VERIFIED",
+      "source_basis": [
+        "forge-core/src/main/java/forge/deck/DeckRecognizer.java#getMagicColor",
+        "forge-core/src/main/java/forge/card/MagicColor.java#Color.fromName"
+      ],
+      "reason": "Engine-independent deck text parser passes symbol letters to a full-name-only conversion; null is rendered as multicolor. Existing unchanged assertions independently require literal single/hybrid color symbols. All five methods reproduce on both hosted JDKs and the narrow local before run. After validation pending."
     },
     {
       "declaring_class": "forge.deck.DeckRecognizerTest",
@@ -1276,8 +1294,14 @@
       "invocation_classes": [
         "forge.deck.DeckRecognizerTest"
       ],
-      "classification": "UNKNOWN_PENDING_SOURCE_ADJUDICATION",
-      "evidence_class": "DIRECTLY_VERIFIED"
+      "classification": "GENUINE_DECK_RECOGNIZER_BEHAVIOR_DEFECT",
+      "evidence_class": "DIRECTLY_VERIFIED",
+      "classification_evidence_class": "CODE_DERIVED_AND_DIRECTLY_VERIFIED",
+      "source_basis": [
+        "forge-core/src/main/java/forge/deck/DeckRecognizer.java#getMagicColor",
+        "forge-core/src/main/java/forge/card/MagicColor.java#Color.fromName"
+      ],
+      "reason": "Engine-independent deck text parser passes symbol letters to a full-name-only conversion; null is rendered as multicolor. Existing unchanged assertions independently require literal single/hybrid color symbols. All five methods reproduce on both hosted JDKs and the narrow local before run. After validation pending."
     },
     {
       "declaring_class": "forge.deck.DeckRecognizerTest",
@@ -1328,8 +1352,14 @@
       "invocation_classes": [
         "forge.deck.DeckRecognizerTest"
       ],
-      "classification": "UNKNOWN_PENDING_SOURCE_ADJUDICATION",
-      "evidence_class": "DIRECTLY_VERIFIED"
+      "classification": "GENUINE_DECK_RECOGNIZER_BEHAVIOR_DEFECT",
+      "evidence_class": "DIRECTLY_VERIFIED",
+      "classification_evidence_class": "CODE_DERIVED_AND_DIRECTLY_VERIFIED",
+      "source_basis": [
+        "forge-core/src/main/java/forge/deck/DeckRecognizer.java#getMagicColor",
+        "forge-core/src/main/java/forge/card/MagicColor.java#Color.fromName"
+      ],
+      "reason": "Engine-independent deck text parser passes symbol letters to a full-name-only conversion; null is rendered as multicolor. Existing unchanged assertions independently require literal single/hybrid color symbols. All five methods reproduce on both hosted JDKs and the narrow local before run. After validation pending."
     }
   ],
   "qualification_credit": "none"

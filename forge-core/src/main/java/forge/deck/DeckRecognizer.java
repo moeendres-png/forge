@@ -1011,7 +1011,18 @@ public class DeckRecognizer {
     private static MagicColor.Color getMagicColor(String colorName){
         if (colorName.toLowerCase().startsWith("multi") || colorName.equalsIgnoreCase("m"))
             return null;  // will be handled separately
-        return MagicColor.Color.fromName(colorName.toLowerCase());
+        // Mana-symbol parsing supplies short codes as well as full color names.
+        // Color.fromName accepts full names only; a short code must not turn
+        // into the null/multicolor label.
+        return switch (colorName.toLowerCase(Locale.ROOT)) {
+            case "w" -> MagicColor.Color.WHITE;
+            case "u" -> MagicColor.Color.BLUE;
+            case "b" -> MagicColor.Color.BLACK;
+            case "r" -> MagicColor.Color.RED;
+            case "g" -> MagicColor.Color.GREEN;
+            case "c" -> MagicColor.Color.COLORLESS;
+            default -> MagicColor.Color.fromName(colorName.toLowerCase(Locale.ROOT));
+        };
     }
 
     public static boolean isDeckName(final String lineAsIs) {
