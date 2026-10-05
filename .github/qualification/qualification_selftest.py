@@ -2206,9 +2206,19 @@ class FrozenLaunchClasspath(unittest.TestCase):
         check_key = guarded.split("private void checkKey", 1)[1].split("@Override", 1)[0]
         self.assertIn("guard.authorityRestrictedContext()", check_key)
         self.assertNotIn("sensitiveProperty", check_key)
-        self.assertIn("putIfAbsent(Object key, Object value)", guarded)
+        put_if_absent = guarded.split(
+            "public synchronized Object putIfAbsent(Object key, Object value)", 1
+        )[1].split("@Override", 1)[0]
+        self.assertIn("checkKey(key);", put_if_absent)
+
         self.assertIn("remove(Object key, Object value)", guarded)
-        self.assertIn("Set<Map.Entry<Object, Object>> entrySet()", guarded)
+
+        entry_set = guarded.split(
+            "public Set<Map.Entry<Object, Object>> entrySet()", 1
+        )[1].split("@Override", 1)[0]
+        self.assertIn("guard.authorityRestrictedContext()", entry_set)
+        self.assertIn('guard.deny("untrusted mutable Properties.entrySet view")', entry_set)
+
         self.assertIn("Set<Object> keySet()", guarded)
         self.assertIn("Collection<Object> values()", guarded)
 
