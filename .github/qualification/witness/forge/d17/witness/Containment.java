@@ -228,6 +228,8 @@ public final class Containment {
         private final Path protectedRoot;
         private final ThreadLocal<Boolean> resolvingPath =
                 ThreadLocal.withInitial(() -> Boolean.FALSE);
+        private final ThreadLocal<Integer> invocationDepth =
+                ThreadLocal.withInitial(() -> Integer.valueOf(0));
         private volatile String violation;
 
         Guard(CandidateCodeLoader candidate, DependencyLoader dependencies,
@@ -240,6 +242,7 @@ public final class Containment {
 
         private int authorityContext() {
             boolean trustedAuthority = false;
+            boolean trustedWitness = false;
             for (Class<?> frame : getClassContext()) {
                 ClassLoader loader = frame.getClassLoader();
                 if (loader == candidate || loader == dependencies) {
@@ -250,15 +253,40 @@ public final class Containment {
                 if (loader == trusted) {
                     String name = frame.getName();
                     if (name.equals("forge.d17.witness.TrustedTestNGDriver")
-                            || name.startsWith("org.testng.")) {
+                            || name.equals("forge.d17.witness.QualifiedExecutionCounter")) {
+                        trustedWitness = true;
+                        trustedAuthority = true;
+                    } else if (name.startsWith("org.testng.")) {
                         trustedAuthority = true;
                     }
                 }
+            }
+            // During a TestNG invocation, a malicious product may return a pure
+            // JDK callback/proxy that the trusted test invokes synchronously.
+            // Its candidate frame has vanished but TestNG remains deeper on the
+            // stack. Do not let that lower TestNG frame confer authority. Only
+            // the explicit trusted witness itself may perform sensitive work
+            // while the invocation barrier is active.
+            if (invocationDepth.get().intValue() > 0) {
+                return trustedWitness ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
             }
             // A JDK-only asynchronous task has neither a hostile frame nor an
             // explicit trusted authority frame. Treat it as untrusted so a
             // candidate cannot shed its taint through a configured JDK deputy.
             return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
+        }
+
+        void enterInvocation() {
+            invocationDepth.set(Integer.valueOf(invocationDepth.get().intValue() + 1));
+        }
+
+        void exitInvocation() {
+            int depth = invocationDepth.get().intValue();
+            if (depth <= 1) {
+                invocationDepth.remove();
+            } else {
+                invocationDepth.set(Integer.valueOf(depth - 1));
+            }
         }
 
         boolean candidateInContext() {
