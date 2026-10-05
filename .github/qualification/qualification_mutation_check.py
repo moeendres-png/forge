@@ -443,6 +443,15 @@ MUTATIONS = [
     ),
     # --- trusted Maven/build-definition authority ------------------------- #
     Mutation(
+        "misclassify-candidate-production-build-failure",
+        "qualify.py",
+        '    elif (isinstance(candidate_build_exit, int)\n'
+        '          and not isinstance(candidate_build_exit, bool)\n'
+        '          and candidate_build_exit != 0):\n',
+        '    elif False:\n',
+        "a failed exact-candidate production build would be hidden as infrastructure UNKNOWN",
+    ),
+    Mutation(
         "ignore-candidate-independent-test-compile-authority",
         "qualify.py",
         '    elif not by_name["trusted_test_compile_candidate_independent"]["satisfied"]:\n',
