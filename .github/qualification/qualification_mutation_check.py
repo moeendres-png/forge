@@ -108,6 +108,13 @@ MUTATIONS = [
         "evidence for a different candidate would qualify the locked one",
     ),
     Mutation(
+        "ignore-stale-comparison-base-test-policy",
+        "qualify.py",
+        '    elif not by_name["comparison_base_is_current_trusted_policy"]["satisfied"]:\n',
+        '    elif False:\n',
+        "a candidate missing current trusted tests could qualify against a stale merge base",
+    ),
+    Mutation(
         "ignore-required-surface-comparison-base-binding",
         "qualify.py",
         'surface_base_ok = surface.get("comparison_base_sha") == lock["comparison_base"]["sha"]',
