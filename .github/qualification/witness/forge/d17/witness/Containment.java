@@ -370,15 +370,24 @@ public final class Containment {
 
         @Override
         public void checkPermission(Permission permission) {
-            if (Boolean.TRUE.equals(resolvingPath.get())
-                    || Boolean.TRUE.equals(inspectingClassLoader.get())) {
+            if (Boolean.TRUE.equals(resolvingPath.get())) {
                 return;
+            }
+            String name = permission.getName() == null ? "" : permission.getName();
+            if (Boolean.TRUE.equals(inspectingClassLoader.get())) {
+                if (permission instanceof RuntimePermission && name.equals("getClassLoader")) {
+                    return;
+                }
+                // Guard-internal Class#getClassLoader is expected to request only
+                // RuntimePermission("getClassLoader"). Any broader reentrant
+                // permission is unexpected and must fail closed.
+                deny("unexpected permission during classloader inspection "
+                        + permission.getClass().getName() + " " + name);
             }
             if (!authorityRestrictedContext()) {
                 return;
             }
             String actor = authorityLabel();
-            String name = permission.getName() == null ? "" : permission.getName();
             if (permission instanceof RuntimePermission) {
                 if (name.equals("setSecurityManager")
                         || name.equals("createSecurityManager")
