@@ -7,6 +7,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 
+import org.testng.IConfigurationListener;
 import org.testng.IInvokedMethod;
 import org.testng.IInvokedMethodListener;
 import org.testng.ITestListener;
@@ -21,7 +22,7 @@ import org.testng.internal.RuntimeBehavior;
  * trusted parent process, running outside the candidate UID/JVM, owns the
  * qualification receipt and evidence files.
  */
-public final class QualifiedExecutionCounter implements ITestListener, IInvokedMethodListener {
+public final class QualifiedExecutionCounter implements ITestListener, IInvokedMethodListener, IConfigurationListener {
     private final Containment.Guard containment;
     private final Map<String, Integer> passCounts = new TreeMap<String, Integer>();
     private final Map<String, Integer> failureCounts = new TreeMap<String, Integer>();
@@ -63,6 +64,22 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         counts.put(key, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
     }
 
+    private static void diagnose(String kind, ITestResult result) {
+        String className = result == null || result.getTestClass() == null
+                ? "<unknown-class>" : result.getTestClass().getName();
+        String methodName = result == null || result.getMethod() == null
+                ? "<unknown-method>" : result.getMethod().getMethodName();
+        int status = result == null ? -1 : result.getStatus();
+        Throwable throwable = result == null ? null : result.getThrowable();
+        System.err.println("D17_TESTNG_DIAGNOSTIC kind=" + kind
+                + " class=" + className + " method=" + methodName
+                + " status=" + status
+                + " throwable=" + (throwable == null ? "<none>" : throwable));
+        if (throwable != null) {
+            throwable.printStackTrace(System.err);
+        }
+    }
+
     private synchronized void record(ITestResult result) {
         if (result == null || result.getInstance() == null || result.getTestContext() == null) {
             failures++;
@@ -78,6 +95,7 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         int status = result.getStatus();
         invocations++;
         if (status == ITestResult.FAILURE || (status != ITestResult.SKIP && !invoked)) {
+            diagnose("test-failure", result);
             failures++;
             bump(failureCounts, className);
         } else if (status == ITestResult.SKIP) {
@@ -111,6 +129,9 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
     @Override public void onTestSkipped(ITestResult result) { record(result); }
     @Override public void onTestFailedButWithinSuccessPercentage(ITestResult result) { record(result); }
     @Override public void onTestFailedWithTimeout(ITestResult result) { record(result); }
+    @Override public void onConfigurationFailure(ITestResult result) {
+        diagnose("configuration-failure", result);
+    }
 
     long invocations() { return invocations; }
     long failures() { return failures; }
