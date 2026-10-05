@@ -8,6 +8,7 @@ import java.net.URLClassLoader;
 import java.nio.file.Path;
 import java.security.Permission;
 import java.security.SecurityPermission;
+import java.util.Collection;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Properties;
@@ -397,6 +398,30 @@ public final class Containment {
                 guard.deny("candidate Properties.clear");
             }
             super.clear();
+        }
+
+        @Override
+        public Set<Map.Entry<Object, Object>> entrySet() {
+            if (guard.candidateInContext()) {
+                guard.deny("candidate mutable Properties.entrySet view");
+            }
+            return super.entrySet();
+        }
+
+        @Override
+        public Set<Object> keySet() {
+            if (guard.candidateInContext()) {
+                guard.deny("candidate mutable Properties.keySet view");
+            }
+            return super.keySet();
+        }
+
+        @Override
+        public Collection<Object> values() {
+            if (guard.candidateInContext()) {
+                guard.deny("candidate mutable Properties.values view");
+            }
+            return super.values();
         }
 
         @Override
