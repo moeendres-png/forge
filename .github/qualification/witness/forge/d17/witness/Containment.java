@@ -103,10 +103,9 @@ public final class Containment {
      */
     static final class CandidateCodeLoader extends URLClassLoader {
         private final DependencyLoader dependencies;
-        private final ClassLoader trusted;
         private volatile Guard guard;
 
-        CandidateCodeLoader(URL[] urls, DependencyLoader dependencies, ClassLoader trusted) {
+        CandidateCodeLoader(URL[] urls, DependencyLoader dependencies) {
             // The actual parent is platform-only.  DependencyLoader is a private
             // delegate, not an ancestor: candidate code may obtain its own
             // ClassLoader.getParent() without permission when that parent is an
@@ -114,7 +113,6 @@ public final class Containment {
             // would expose trusted TestNG authority.
             super(urls, ClassLoader.getPlatformClassLoader());
             this.dependencies = dependencies;
-            this.trusted = trusted;
         }
 
         void bindGuard(Guard value) {
@@ -568,7 +566,7 @@ public final class Containment {
         }
         ClassLoader system = Containment.class.getClassLoader();
         DependencyLoader deps = new DependencyLoader(dependencies);
-        CandidateCodeLoader candidate = new CandidateCodeLoader(candidateCode, deps, system);
+        CandidateCodeLoader candidate = new CandidateCodeLoader(candidateCode, deps);
         TrustedTestLoader tests = new TrustedTestLoader(trustedTests, candidate, system);
         Guard guard = new Guard(candidate, deps, system, protectedRoot);
         deps.bindGuard(guard);
