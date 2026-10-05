@@ -2319,6 +2319,14 @@ class FrozenLaunchClasspath(unittest.TestCase):
             'return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
             source,
         )
+        async_fallback = source.split(
+            "A JDK-only asynchronous task has neither a hostile frame nor an", 1
+        )[1].split("void enterInvocation()", 1)[0]
+        self.assertIn(
+            'return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
+            async_fallback,
+        )
+        self.assertNotIn('return CONTEXT_TRUSTED_AUTHORITY;', async_fallback)
         self.assertIn('boolean trustedTestFrame = false;', source)
         self.assertIn('if (loader instanceof TrustedTestLoader)', source)
         self.assertIn('trustedTestFrame = true;', source)
