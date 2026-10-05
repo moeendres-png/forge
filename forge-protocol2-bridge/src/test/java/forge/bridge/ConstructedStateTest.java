@@ -123,6 +123,15 @@ public class ConstructedStateTest {
         Assert.assertEquals(state.get("schema").getAsString(), StateProjection.CONSTRUCTED_STATE_SCHEMA);
         Assert.assertEquals(state.get("observation_scope").getAsString(), "orchestration_keyed_digests");
         Assert.assertEquals(state.get("stack_size").getAsInt(), 0);
+        // Native rules state (schema /4): nothing exists before the first turn.
+        final JsonObject rules = state.getAsJsonObject("rules_state");
+        for (String key : new String[] {"combat_groups", "combat_attackers", "extra_turns",
+                "pending_triggers", "continuous_effects"}) {
+            Assert.assertEquals(rules.get(key).getAsInt(), 0, key + " " + rules);
+        }
+        // Each seat's Commander rule effect (CR 903.8) is a format rule, not a
+        // scenario effect.
+        Assert.assertEquals(rules.get("format_rule_effects").getAsInt(), 4, rules.toString());
         Assert.assertEquals(state.getAsJsonArray("players").size(), 4);
         for (int seat = 1; seat <= 4; seat++) {
             final JsonObject player = player(state, "P" + seat);
@@ -141,6 +150,8 @@ public class ConstructedStateTest {
             Assert.assertEquals(player.get("exile_size").getAsInt(), 0);
             Assert.assertTrue(player.get("library_shuffles").getAsInt() >= 1,
                     "the engine shuffled this library before the opening draw (CR 103.3)");
+            Assert.assertEquals(player.getAsJsonObject("knowledge").get("visible_hidden_cards").getAsInt(), 0);
+            Assert.assertEquals(player.get("commander_damage_taken").getAsInt(), 0);
             Assert.assertEquals(player.getAsJsonArray("commanders").size(), 1);
             final JsonObject commander = player.getAsJsonArray("commanders").get(0).getAsJsonObject();
             Assert.assertEquals(commander.get("card_identity").getAsString(), ROGRAKH);
@@ -195,6 +206,29 @@ public class ConstructedStateTest {
         Assert.assertEquals(counters.get("charge").getAsInt(), 3);
         Assert.assertNull(counters.get("p1p1"));
         Assert.assertNull(counters.get("acquiredtaste"));
+    }
+
+    /** The rules state and knowledge are the engine's own: a change in the engine shows. */
+    @Test(timeOut = 240000)
+    public void theRulesStateAndKnowledgeAreReadFromTheEngine() {
+        OrchestrationKey.keyForTests(KEY);
+        final BridgeEngine engine = parkedAtFirstMulligan("cs-rules", null);
+        final BridgeSession session = engine.sessionsForTests().get("cs-rules");
+        final forge.game.player.Player p1 = session.getGame().getPlayers().get(0);
+        final forge.game.player.Player p2 = session.getGame().getPlayers().get(1);
+        session.getGame().getPhaseHandler().addExtraTurn(p1);
+        final forge.game.card.Card top = p1.getCardsIn(forge.game.zone.ZoneType.Library).get(0);
+        top.addMayLookAt(session.getGame().getNextTimestamp(), java.util.Collections.singletonList(p2));
+        final JsonObject response = request(engine, "cs-rules");
+        BridgeTestSupport.assertOk(response);
+        final JsonObject state = response.getAsJsonObject("payload").getAsJsonObject("constructed_state");
+        Assert.assertEquals(state.getAsJsonObject("rules_state").get("extra_turns").getAsInt(), 1);
+        int seen = 0;
+        for (JsonElement element : state.getAsJsonArray("players")) {
+            seen += element.getAsJsonObject().getAsJsonObject("knowledge").get("visible_hidden_cards").getAsInt();
+        }
+        Assert.assertEquals(seen, 1, "exactly one seat may look at exactly one hidden card: "
+                + state.getAsJsonArray("players"));
     }
 
     @Test(timeOut = 240000)
