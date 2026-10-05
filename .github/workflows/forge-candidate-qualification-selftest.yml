@@ -67,10 +67,9 @@ jobs:
         working-directory: .github/qualification
         run: python3 -m unittest -v qualification_selftest
 
-      - name: Mutation check (every control family must catch its mutation)
-        working-directory: .github/qualification
-        run: python3 qualification_mutation_check.py
-
+      # Run the real hostile-JVM boundary before the expensive mutation sweep.
+      # Both remain mandatory gates; this ordering only shortens diagnosis when
+      # the runtime contract itself is red.
       - name: Runtime controls (real driver, real TestNG, sandbox account)
         working-directory: .github/qualification
         env:
@@ -83,3 +82,7 @@ jobs:
           set -euo pipefail
           export D17_TRUSTED_TESTNG_DIR="$RUNNER_TEMP/d17-testng"
           python3 -m unittest -v qualification_runtime_controls
+
+      - name: Mutation check (every control family must catch its mutation)
+        working-directory: .github/qualification
+        run: python3 qualification_mutation_check.py
