@@ -228,6 +228,8 @@ public final class Containment {
         private final Path protectedRoot;
         private final ThreadLocal<Boolean> resolvingPath =
                 ThreadLocal.withInitial(() -> Boolean.FALSE);
+        private final ThreadLocal<Boolean> inspectingClassLoader =
+                ThreadLocal.withInitial(() -> Boolean.FALSE);
         private final ThreadLocal<Integer> invocationDepth =
                 ThreadLocal.withInitial(() -> Integer.valueOf(0));
         private volatile String violation;
@@ -240,12 +242,26 @@ public final class Containment {
             this.protectedRoot = protectedRoot.toAbsolutePath().normalize();
         }
 
+        private ClassLoader classLoaderOf(Class<?> frame) {
+            // Class#getClassLoader may itself ask the installed SecurityManager
+            // for RuntimePermission("getClassLoader").  Authority inspection is
+            // trusted guard-internal work and must not recursively re-enter
+            // checkPermission.  No candidate callback is executed by this JDK
+            // operation; the guard is scoped to this single lookup.
+            inspectingClassLoader.set(Boolean.TRUE);
+            try {
+                return frame.getClassLoader();
+            } finally {
+                inspectingClassLoader.remove();
+            }
+        }
+
         private int authorityContext() {
             boolean trustedAuthority = false;
             boolean activeCounter = false;
             boolean trustedTestFrame = false;
             for (Class<?> frame : getClassContext()) {
-                ClassLoader loader = frame.getClassLoader();
+                ClassLoader loader = classLoaderOf(frame);
                 if (loader == candidate || loader == dependencies) {
                     // Hostile always wins even though TestNG appears lower on the
                     // normal invocation stack.
@@ -354,7 +370,8 @@ public final class Containment {
 
         @Override
         public void checkPermission(Permission permission) {
-            if (Boolean.TRUE.equals(resolvingPath.get())) {
+            if (Boolean.TRUE.equals(resolvingPath.get())
+                    || Boolean.TRUE.equals(inspectingClassLoader.get())) {
                 return;
             }
             if (!authorityRestrictedContext()) {
