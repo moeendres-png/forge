@@ -2173,9 +2173,13 @@ class FrozenLaunchClasspath(unittest.TestCase):
                   / "Containment.java").read_text()
         self.assertIn('name.equals("defineClass")', source)
         self.assertIn('unix.equals("/proc") || unix.startsWith("/proc/")', source)
+        self.assertIn('targetUnix.equals("/proc") || targetUnix.startsWith("/proc/")', source)
+        self.assertIn('loader == candidate || loader == dependencies', source)
+        self.assertIn('new Guard(candidate, deps, protectedRoot)', source)
         runtime = (Path(__file__).resolve().parent / "qualification_runtime_controls.py").read_text()
         for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
-                      "/proc/thread-self/fd"):
+                      "/proc/thread-self/fd", "proc-self-mem-write",
+                      "async_confused_deputy"):
             self.assertIn(alias, runtime)
         guarded = source.split("static final class GuardedProperties", 1)[1].split(
             "static final class Session", 1)[0]
