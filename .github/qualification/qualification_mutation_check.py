@@ -664,20 +664,18 @@ MUTATIONS = [
         "guard-internal Class#getClassLoader package checks would recursively re-enter authority inspection",
     ),
     Mutation(
-        "broaden-trusted-testng-resolution-to-all-packages",
+        "trust-arbitrary-bootstrap-deputy-during-testng-package-check",
         "witness/forge/d17/witness/Containment.java",
-        '            if (trustedFrameworkResolutionDepth.get().intValue() > 0\n'
-        '                    && pkg.startsWith("org.testng")) {\n'
-        '                // Only TrustedTestLoader can open this private scope, and only\n'
-        '                // while it delegates a comparison-base test\'s TestNG resolution\n'
-        '                // to the trusted system loader. Do not generalize this to other\n'
-        '                // packages or permissions.\n'
-        '                return;\n'
-        '            }\n',
-        '            if (trustedFrameworkResolutionDepth.get().intValue() > 0) {\n'
-        '                return;\n'
-        '            }\n',
-        "trusted TestNG resolution scope could be widened to witness/internal packages",
+        '                if (name.startsWith("java.lang.ClassLoader")\n'
+        '                        || name.equals("java.security.AccessController")) {\n'
+        '                    sawPackageCheckFrame = true;\n'
+        '                    continue;\n'
+        '                }\n',
+        '                if (loader == null) {\n'
+        '                    sawPackageCheckFrame = true;\n'
+        '                    continue;\n'
+        '                }\n',
+        "arbitrary bootstrap/JDK deputy frames could become transparent and borrow trusted-test TestNG package authority",
     ),
     Mutation(
         "trust-jdk-only-asynchronous-authority",
