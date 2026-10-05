@@ -13,8 +13,11 @@ The trusted comparison base supplies:
 * Maven/plugin authority and the D20 known-NOT_RUN baseline.
 
 Candidate production code is compiled as an untrusted build UID, admitted and
-frozen before trusted test compilation, then executed as a distinct untrusted
-UID behind the mandatory classloader/SecurityManager containment boundary.
+frozen, then executed as a distinct untrusted UID behind the mandatory
+classloader/SecurityManager containment boundary. Trusted test bytecode is
+authoritatively compiled only against comparison-base production/dependencies.
+A separate candidate-sensitive compatibility compile receives no authority and
+must be byte-identical before any execution can receive credit.
 
 The candidate JVM is deliberately receiptless: it receives no receipt key,
 parent run ID or trusted evidence path. A trusted child counter validates exact
@@ -314,6 +317,96 @@ def compile_and_resolve(repo: Path, modules, cp_rel, label: str):
             raise ExecutionError(
                 "{} classpath missing for module {} (did the module build?)".format(label, module)
             )
+
+
+def compile_trusted_policy_production(repo: Path, modules, cp_rel: str, mvn: str,
+                                      trusted_maven_repo: Path) -> None:
+    """Build only trusted comparison-base production inputs for test compilation.
+
+    This runs from the byte-verified comparison-base export with the trusted
+    staged Maven/JDK and trusted read-only Maven repository. Candidate bytecode
+    never participates in this authoritative compilation universe.
+    """
+    selection = ["-pl", ",".join(modules), "-am"]
+    code, _, err = run(
+        [mvn, "-o", "-B", "-q",
+         "-Dmaven.repo.local=" + str(trusted_maven_repo),
+         "-Dmaven.compiler.proc=none", "-DskipTests",
+         "compile", "dependency:build-classpath",
+         "-Dmdep.outputFile=" + cp_rel, "-DincludeScope=test"] + selection,
+        repo, timeout=14400,
+    )
+    if code != 0:
+        raise ExecutionError(
+            "trusted comparison-base production compile/classpath failed: {}".format(
+                err[-1200:]))
+    for module in modules:
+        if not (repo / module / "target" / "classes").is_dir():
+            raise ExecutionError(
+                "trusted comparison-base production classes missing for {}".format(module))
+        if not (repo / module / cp_rel).is_file():
+            raise ExecutionError(
+                "trusted comparison-base dependency classpath missing for {}".format(module))
+
+
+def trusted_policy_compile_entries(comparison_root: Path, module: str, cp_rel: str,
+                                   reactor_artifacts: dict,
+                                   trusted_maven_repo: Path) -> "list[str]":
+    """Exact comparison-base production/dependency classpath for trusted javac.
+
+    Maven dependency:build-classpath may list an installed Forge sibling jar.
+    Replace every such sibling with the comparison-base reactor output so the
+    authoritative test compile is bound to one exact Git tree rather than a
+    stale installed artifact.
+    """
+    entries = [str(comparison_root / module / "target" / "classes")]
+    path = comparison_root / module / cp_rel
+    raw = path.read_text().strip() if path.is_file() else ""
+    seen = set(entries)
+    trusted_maven_repo = Path(trusted_maven_repo).resolve()
+    comparison_root = comparison_root.resolve()
+    for value in [v for v in raw.split(":") if v]:
+        real = Path(os.path.realpath(value))
+        replacement = None
+        try:
+            rel = real.relative_to(trusted_maven_repo)
+        except ValueError:
+            rel = None
+        if rel is not None and len(rel.parts) >= 2 and rel.parts[0] == "forge":
+            artifact_id = rel.parts[1]
+            sibling = reactor_artifacts.get(artifact_id)
+            if sibling:
+                replacement = comparison_root / sibling / "target" / "classes"
+                if not replacement.is_dir():
+                    raise ExecutionError(
+                        "trusted comparison-base reactor output missing for {} -> {}".format(
+                            artifact_id, sibling))
+        if replacement is not None:
+            resolved = str(replacement)
+        elif rel is not None:
+            resolved = str(real)
+        else:
+            try:
+                real.relative_to(comparison_root)
+            except ValueError:
+                raise ExecutionError(
+                    "trusted comparison-base classpath entry outside trusted universes: {}".format(
+                        real))
+            resolved = str(real)
+        if resolved not in seen:
+            entries.append(resolved)
+            seen.add(resolved)
+    return entries
+
+
+def class_digest_differences(reference_root: Path, candidate_root: Path) -> "list[str]":
+    """Classes whose candidate-sensitive compile differs from trusted authority."""
+    reference = class_file_digests(reference_root)
+    candidate = class_file_digests(candidate_root)
+    return sorted(
+        name for name in (set(reference) | set(candidate))
+        if reference.get(name) != candidate.get(name)
+    )
 
 
 def _dryrun_counts(out_dir: Path) -> "tuple[dict[str, int], dict[str, int]]":
@@ -1468,9 +1561,16 @@ def cmd_execute(args) -> int:
         "candidate_build_identity": args.sandbox_user,
         "candidate_execution_identity": args.execution_user,
         "build_execution_identity_separated": args.sandbox_user != args.execution_user,
-        "test_bytecode_origin": "trusted_compile_of_comparison_base_git_export",
+        "test_bytecode_origin": (
+            "trusted_compile_of_comparison_base_git_export_against_comparison_base_production"
+        ),
         "trusted_test_source_sha": trusted_test_source_commit(args.comparison_base, args.candidate_sha),
         "candidate_test_sources_used_for_credit": False,
+        "trusted_test_compile_authority": {
+            "mode": "comparison_base_authority_plus_candidate_bytecode_equality_probe",
+            "status": "PENDING",
+            "candidate_probe_used_for_execution": False,
+        },
         "hostile_bytecode_containment_required": True,
         "ledger_authentication_scheme": (
             "trusted parent OS-process receipt + SHA256 + integrity seal; "
@@ -1548,17 +1648,30 @@ def cmd_execute(args) -> int:
         if build.returncode != 0:
             raise ExecutionError("candidate build failed (exit {})".format(build.returncode))
 
-        # 3. Trusted compilation of the comparison-base test policy.  Candidate
-        # test source is never executed for qualification credit.
+        # 3. Trusted test-policy compilation.
+        #
+        # Authority compile: exact comparison-base test source against exact
+        # comparison-base production/dependencies only. Candidate bytecode has
+        # no semantic input into these credited test classes.
+        #
+        # Compatibility probe: compile the same trusted source against admitted,
+        # frozen candidate production. That output is NEVER executed or credited;
+        # it must be byte-identical to the authority compile. This detects
+        # candidate-driven constant inlining, overload/type binding changes, or
+        # other compile-time rewrites of trusted tests.
         export = work / "trusted-tests-export"
         sandbox.export_commit(
             trusted_repo, trusted_test_source_commit(args.comparison_base, args.candidate_sha), export
         )
+        compile_trusted_policy_production(
+            export, modules, args.cp_rel, args.mvn, trusted_maven_repo)
+
         # Runtime working-directory data comes from an immutable exact-candidate
         # Git export rather than from the candidate-writable build tree.
         run_export = work / "candidate-runtime-export"
         sandbox.export_commit(trusted_repo, args.candidate_sha, run_export)
         records, scans, frozen, dropped = {}, {}, {}, {}
+        semantic_divergence = {}
         empty_tests = staging / "admission-empty-tests"
         empty_tests.mkdir(parents=True, exist_ok=True)
         for module in modules:
@@ -1566,30 +1679,73 @@ def cmd_execute(args) -> int:
                 candidate_classpath(candidate_root, module, args.cp_rel),
                 candidate_root, reactor_artifacts)
 
-            # Admit and freeze every candidate/dependency byte before trusted
-            # javac parses it. The build UID cannot mutate RUNNER_TEMP staging.
+            # Admit and freeze every candidate/dependency byte before the
+            # non-authoritative compatibility javac parses it. The build UID
+            # cannot mutate RUNNER_TEMP staging.
             scans[module] = scan_launch_classpath(
                 empty_tests, entries, candidate_root, home / ".m2" / "repository",
                 trusted_maven_repo,
                 freeze=(staging / "classpath", bundle / "classpath", frozen))
 
             out = staging / "tests" / module
-            compile_cp = (
+            reference_cp = (
+                [str(j) for j in testng_jars]
+                + trusted_policy_compile_entries(
+                    export, module, args.cp_rel, reactor_artifacts, trusted_maven_repo)
+            )
+            record = trusted_compile_tests(
+                export, module, reference_cp, out, args.java)
+            record["compile_classpath_authority"] = "comparison_base_only"
+            record["compiled_required"] = sorted(
+                set(surface["modules"][module]["classes"]) & compiled_class_names(out))
+            records[module] = record
+            if record.get("exit_code") != 0:
+                manifest["trusted_test_compile_authority"]["status"] = (
+                    "UNKNOWN_REFERENCE_COMPILE_FAILED")
+                manifest["trusted_test_compilation"] = records
+                raise ExecutionError(
+                    "authoritative comparison-base trusted-test compilation failed for {}".format(
+                        module))
+
+            candidate_check = staging / "candidate-test-compatibility" / module
+            candidate_check_cp = (
                 [str(j) for j in testng_jars]
                 + scans[module]["trusted_dependency_compile_entries"]
                 + scans[module]["candidate_compile_entries"]
             )
-            records[module] = trusted_compile_tests(
-                export, module, compile_cp, out, args.java)
-            records[module]["compiled_required"] = sorted(
-                set(surface["modules"][module]["classes"]) & compiled_class_names(out))
+            candidate_record = trusted_compile_tests(
+                export, module, candidate_check_cp, candidate_check, args.java)
+            record["candidate_compatibility_exit_code"] = candidate_record.get("exit_code")
+            record["candidate_compatibility_stderr_tail"] = candidate_record.get("stderr_tail", "")
+            if candidate_record.get("exit_code") != 0:
+                manifest["trusted_test_compile_authority"]["status"] = (
+                    "CANDIDATE_INCOMPATIBLE")
+                manifest["trusted_test_compilation"] = records
+                raise ExecutionError(
+                    "candidate production is incompatible with trusted test source in {}".format(
+                        module))
 
-            # Trusted comparison-base test bytecode may use only the narrow
-            # TestNG test API; authority channels remain rejected.
+            differences = class_digest_differences(out, candidate_check)
+            record["candidate_semantic_match"] = not differences
+            record["candidate_semantic_mismatches"] = differences[:100]
+            if differences:
+                semantic_divergence[module] = differences[:100]
+
+            # Only the authoritative comparison-base-compiled bytecode is scanned,
+            # staged and later executed. Candidate-probe bytecode is discarded.
             _scan_class_tree(
                 "trusted-compiled tests", out, scans[module],
                 allow_testng_test_api=True)
+
         manifest["trusted_test_compilation"] = records
+        manifest["trusted_test_compile_authority"]["semantic_divergence"] = semantic_divergence
+        if semantic_divergence:
+            manifest["trusted_test_compile_authority"]["status"] = (
+                "UNKNOWN_CANDIDATE_SENSITIVE")
+            raise ExecutionError(
+                "candidate production changes trusted test compilation semantics: {}".format(
+                    sorted(semantic_divergence)))
+        manifest["trusted_test_compile_authority"]["status"] = "PROVEN"
         manifest["launch_classpath_admission"] = scans
         sandbox.stage_readonly(staging, bundle)
 
