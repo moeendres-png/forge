@@ -243,12 +243,21 @@ public final class Containment {
         private int authorityContext() {
             boolean trustedAuthority = false;
             boolean activeCounter = false;
+            boolean trustedTestFrame = false;
             for (Class<?> frame : getClassContext()) {
                 ClassLoader loader = frame.getClassLoader();
                 if (loader == candidate || loader == dependencies) {
                     // Hostile always wins even though TestNG appears lower on the
                     // normal invocation stack.
                     return CONTEXT_HOSTILE;
+                }
+                if (loader instanceof TrustedTestLoader) {
+                    // The comparison-base test body is trusted policy, but while
+                    // it is on-stack it may synchronously invoke an object that
+                    // hostile candidate code supplied (for example a pure-JDK
+                    // EventHandler). Such a deputy must not borrow the deeper
+                    // TestNG/driver frames' authority.
+                    trustedTestFrame = true;
                 }
                 if (loader == trusted) {
                     String name = frame.getName();
@@ -262,12 +271,20 @@ public final class Containment {
                 }
             }
             // TrustedTestNGDriver.main and TestNG remain deep on the stack for
-            // the whole test run. They must NOT lend authority to a pure-JDK
-            // callback returned by hostile production and invoked by a trusted
-            // test. During an active invocation only an actually executing
-            // trusted counter callback may perform sensitive authority work.
+            // the whole test run. During an active invocation an actually
+            // executing trusted counter callback is authoritative. A trusted
+            // test-body frame keeps synchronous JDK deputies restricted. Once
+            // the test body has returned, TestNG's own listener/reporting path
+            // may use its trusted framework authority even though TestNG has not
+            // yet delivered afterInvocation.
             if (invocationDepth.get().intValue() > 0) {
-                return activeCounter ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
+                if (activeCounter) {
+                    return CONTEXT_TRUSTED_AUTHORITY;
+                }
+                if (trustedTestFrame) {
+                    return CONTEXT_UNTRUSTED_ASYNC;
+                }
+                return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
             }
             // A JDK-only asynchronous task has neither a hostile frame nor an
             // explicit trusted authority frame. Treat it as untrusted so a
