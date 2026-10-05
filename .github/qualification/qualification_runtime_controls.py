@@ -398,7 +398,11 @@ public class RuntimeDefineProduct {
         tests = self.trusted_attack_test(extra_cp=[candidate])
         proc = self.launch(tests, {"probe.AttackTest": 1}, {"probe.AttackTest#attackIsRefused": 1},
                            candidate_code=[candidate])
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Candidate Class#getClassLoader is itself authority-sensitive. The
+        # sticky deny is the stronger expected outcome; do not weaken containment
+        # merely to reach the later structural parent-loader failure.
+        self.assertEqual(proc.returncode, 13, proc.stderr)
+        self.assertIn("candidate/dependency RuntimePermission getClassLoader", proc.stderr)
 
     def test_candidate_cannot_write_protected_child_output(self) -> None:
         output = self.exec_sandbox / "runtime-control-output"
