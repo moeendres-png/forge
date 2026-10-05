@@ -34,7 +34,10 @@ public class DeckRecognizerTest extends CardMockTestCase {
         for (PaperCard card : fullCardDb) {
             this.mtgUniqueCardNames.add(card.getName());
             CardEdition e = magicDb.getCardEdition(card.getEdition());
-            if (e != null) {
+            // CardEdition.UNKNOWN ("???") is the internal holder for card scripts
+            // that no edition file lists yet; it is not a set code a deck list
+            // can carry, so it is not part of the set-code grammar under test.
+            if (e != null && e != CardEdition.UNKNOWN) {
                 this.mtgUniqueSetCodes.add(e.getCode());
                 this.mtgUniqueSetCodes.add(e.getScryfallCode());
             }
@@ -871,6 +874,40 @@ public class DeckRecognizerTest extends CardMockTestCase {
         assertEquals(matcher.group(DeckRecognizer.REGRP_CARD), "Sink");
         assertNotNull(matcher.group(DeckRecognizer.REGRP_SET));
         assertEquals(matcher.group(DeckRecognizer.REGRP_SET), "Power");
+    }
+
+    // === #531: database collector numbers and names the grammar must accept
+    @Test
+    void testFullRequestsWithDatabaseCollectorNumbersAndNames() {
+        String[][] requests = {
+                {"1 Okaun, Eye of Chaos (SLD) 380\u2605\u2607", "Okaun, Eye of Chaos", "SLD", "380\u2605\u2607"},
+                {"1 Gigantosaurus (PLST) M19-185j", "Gigantosaurus", "PLST", "M19-185j"},
+                {"1 Horned Turtle (PLST) POR-57s", "Horned Turtle", "PLST", "POR-57s"},
+                {"1 Blaze (POR) 118\u2020s", "Blaze", "POR", "118\u2020s"},
+                {"1 Jaya Ballard, Task Mage (PMPS08) a1_2007", "Jaya Ballard, Task Mage", "PMPS08", "a1_2007"},
+                {"1 Continue? (TMC) 7", "Continue?", "TMC", "7"},
+        };
+        for (String[] request : requests) {
+            Matcher matcher = DeckRecognizer.CARD_SET_COLLNO_PATTERN.matcher(request[0]);
+            assertTrue(matcher.matches(), request[0]);
+            assertEquals(matcher.group(DeckRecognizer.REGRP_CARD).trim(), request[1], request[0]);
+            assertEquals(matcher.group(DeckRecognizer.REGRP_SET), request[2], request[0]);
+            assertEquals(matcher.group(DeckRecognizer.REGRP_COLLNR), request[3], request[0]);
+        }
+        // Widening the number must not swallow a following foil marker or a
+        // closing delimiter of the XMage and MTGGoldfish formats.
+        Matcher foil = DeckRecognizer.CARD_SET_COLLNO_PATTERN.matcher("1 Power Sink (TMP) 78*F*");
+        assertTrue(foil.matches());
+        assertEquals(foil.group(DeckRecognizer.REGRP_COLLNR), "78");
+        assertEquals(foil.group(DeckRecognizer.REGRP_FOIL_GFISH), "*F*");
+        Matcher xmage = DeckRecognizer.SET_COLLNO_CARD_XMAGE_PATTERN.matcher("[SLD:380\u2605\u2607] Okaun, Eye of Chaos");
+        assertTrue(xmage.matches());
+        assertEquals(xmage.group(DeckRecognizer.REGRP_COLLNR), "380\u2605\u2607");
+        Matcher goldfish = DeckRecognizer.CARD_COLLNO_SET_PATTERN.matcher("1 Gigantosaurus <M19-185j> [PLST]");
+        assertTrue(goldfish.matches());
+        assertEquals(goldfish.group(DeckRecognizer.REGRP_COLLNR), "M19-185j");
+        // A number never spans whitespace.
+        assertFalse(Pattern.compile(DeckRecognizer.REX_COLL_NUMBER).matcher("380 j").matches());
     }
 
     // === Card-Set-CollectorNumber Pattern Request

@@ -433,9 +433,20 @@ public class DeckRecognizer {
     public static final String REGRP_CARD = "cardname";
     public static final String REGRP_CARDNO = "count";
 
-    public static final String REX_CARD_NAME = String.format("(\\[)?(?<%s>[a-zA-Z0-9à-ÿÀ-Ÿ&',\\.:!\\+\\\"\\/\\-\\s]+)(\\])?", REGRP_CARD);
+    // '?' is part of real card names (e.g. "Continue?").
+    public static final String REX_CARD_NAME = String.format("(\\[)?(?<%s>[a-zA-Z0-9à-ÿÀ-Ÿ&',\\.:!\\?\\+\\\"\\/\\-\\s]+)(\\])?", REGRP_CARD);
     public static final String REX_SET_CODE = String.format("(?<%s>[a-zA-Z0-9_]{2,7})", REGRP_SET);
-    public static final String REX_COLL_NUMBER = String.format("(?<%s>\\*?[0-9A-Z]+(?:\\S[0-9A-Z]*)?)", REGRP_COLLNR);
+    // Collector numbers: the original form, or the forms the card database
+    // also stores (lower-case suffixes such as M19-185j, POR-57s or a1_2007,
+    // and up to two non-ASCII variant marks such as the Secret Lair star and
+    // lightning marks). The second form needs a digit, so a word such as a set
+    // code or part of a card name is never read as a number, and its separators
+    // are never whitespace, '*', '|' or a closing bracket, so a following foil
+    // marker or delimiter is not swallowed into the number.
+    public static final String REX_COLL_NUMBER = String.format(
+            "(?<%s>\\*?[0-9A-Z]+(?:\\S[0-9A-Z]*)?"
+                    + "|\\*?(?=[^\\s*|)\\]}>]*[0-9])[0-9A-Za-z]+(?:[^\\s*|)\\]}>][0-9A-Za-z]*){0,2})",
+            REGRP_COLLNR);
     public static final String REX_CARD_COUNT = String.format("(?<%s>[\\d]{1,2})(?<mult>x)?", REGRP_CARDNO);
     // EXTRA
     // Foil markers: (F) MTGGoldfish; *F* foil and *E* etched foil, Moxfield/MTGA style
