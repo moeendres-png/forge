@@ -398,12 +398,27 @@ MUTATIONS = [
         "prepare would probe and resolve tools on the inherited PATH",
     ),
     Mutation(
-        "compile-trusted-tests-against-candidate-writable-classpath",
+        "compile-authoritative-tests-against-candidate-production",
+        "trusted_execution.py",
+        '                + trusted_policy_compile_entries(\n'
+        '                    export, module, args.cp_rel, reactor_artifacts, trusted_maven_repo)\n',
+        '                + scans[module]["candidate_compile_entries"]\n',
+        "candidate production could alter constant inlining, overload resolution or other trusted-test bytecode",
+    ),
+    Mutation(
+        "ignore-candidate-sensitive-trusted-test-bytecode",
+        "trusted_execution.py",
+        '        if semantic_divergence:\n',
+        '        if False:\n',
+        "candidate-dependent trusted-test compilation could silently receive execution credit",
+    ),
+    Mutation(
+        "compile-candidate-compatibility-probe-against-writable-inputs",
         "trusted_execution.py",
         '                + scans[module]["trusted_dependency_compile_entries"]\n'
         '                + scans[module]["candidate_compile_entries"]\n',
         '                + entries\n',
-        "trusted javac would parse candidate-build-UID-writable inputs before the freeze boundary",
+        "the non-authoritative candidate compatibility javac could race candidate-writable inputs",
     ),
     Mutation(
         "leave-installed-forge-siblings-on-the-classpath",
@@ -420,6 +435,13 @@ MUTATIONS = [
         "candidate working-tree data could redefine named NOT_RUN coverage categories",
     ),
     # --- trusted Maven/build-definition authority ------------------------- #
+    Mutation(
+        "ignore-candidate-independent-test-compile-authority",
+        "qualify.py",
+        '    elif not by_name["trusted_test_compile_candidate_independent"]["satisfied"]:\n',
+        '    elif False:\n',
+        "candidate-sensitive or unproven trusted-test bytecode could qualify",
+    ),
     Mutation(
         "ignore-candidate-build-definition-divergence",
         "trusted_execution.py",
