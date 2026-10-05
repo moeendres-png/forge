@@ -491,6 +491,48 @@ MUTATIONS = [
         "            super(urls, dependencies);\n            this.dependencies = dependencies;\n",
         "candidate code could obtain its parent loader and load trusted TestNG authority through it",
     ),
+    Mutation(
+        "allow-runtime-class-definition-in-candidate-domain",
+        "witness/forge/d17/witness/Containment.java",
+        '                        || name.equals("defineClass")\n',
+        '',
+        "runtime-defined candidate bytecode could bypass the intended permission boundary",
+    ),
+    Mutation(
+        "allow-proc-fd-discovery",
+        "witness/forge/d17/witness/Containment.java",
+        '(mem|maps|pagemap|fd|fdinfo)',
+        '(mem|maps|pagemap)',
+        "candidate code could inspect process memory/file-descriptor metadata",
+    ),
+    Mutation(
+        "allow-arbitrary-direct-system-properties-mutation",
+        "witness/forge/d17/witness/Containment.java",
+        '            if (guard.candidateInContext()) {\n'
+        '                // The Properties object is process-global trusted runtime state.\n',
+        '            if (guard.candidateInContext() && sensitiveProperty(String.valueOf(key))) {\n'
+        '                // The Properties object is process-global trusted runtime state.\n',
+        "candidate code could mutate unlisted process-global properties",
+    ),
+    Mutation(
+        "drop-put-if-absent-property-guard",
+        "witness/forge/d17/witness/Containment.java",
+        '        public synchronized Object putIfAbsent(Object key, Object value) {\n'
+        '            checkKey(key);\n'
+        '            return super.putIfAbsent(key, value);\n'
+        '        }\n',
+        '        public synchronized Object putIfAbsent(Object key, Object value) {\n'
+        '            return super.putIfAbsent(key, value);\n'
+        '        }\n',
+        "candidate code could mutate global properties through putIfAbsent",
+    ),
+    Mutation(
+        "reduce-candidate-qualification-to-java21-only",
+        "../workflows/forge-candidate-qualification.yml",
+        '        java: ["17", "21"]\n',
+        '        java: ["21"]\n',
+        "one supported JDK would silently leave the exact-candidate trust boundary unqualified",
+    ),
     # --- dispatch and frozen launches (review e05e6f17) -------------------- #
     Mutation(
         "credit-pass-without-dispatch",
