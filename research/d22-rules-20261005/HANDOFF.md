@@ -58,3 +58,35 @@ interim status explicitly. A green workflow is not provider qualification.
 
 Global nonclaims: PRODUCTION_PROVIDER=NOT_SELECTED; ARCHITECTURE_FREEZE=NOT_CLAIMED;
 PRODUCTION_REPOSITORY=NOT_CREATED. C12/D17 remain reserved to Sol owners.
+
+## Validated local checkpoint (supersedes initial interim local status)
+
+Source95dce6de1bb3aebabfcbdba8aa30122fed8883d7/TREEe53d01264edd0fa798c6a5ec0483a582306b03a9,
+clean code, Java17 and21 each21/21 PASS, no failures/errors/skips.
+AFTER-JAVA17/21.json bind exact source/tree, full command, JDK, timestamps and raw
+XML hashes. Source-bound negative-control patches and XML are also committed:
+- RED-UNPAID-ACTIVATION:21 execute,3 fail; unpaid activation no longer throws and
+  both paid routes fail the real-Swamp-tapped check.
+- RED-AI-ZONE-FALLBACK:21 execute,2 fail; missing explicit selection no longer
+  throws, and unconsumed script fails the positive game's actions-exhausted check.
+- RED-WRONG-WINNER:21 execute,1 fail; actual Player2 defeats expected Player1.
+All mutants were restored byte-for-byte. They are expected FAIL controls, not
+passing qualification runs. An initial unpaid mutant left an unused import and
+was rejected by Checkstyle before tests; that disposable failure is intentionally
+not credited or preserved as a successful semantic control.
+
+Diagnostic limitation: normal real localization exposes two existing
+GameLogFormatter poison-event subscriber exceptions in synthetic source-less
+initial poison-counter setup (CR104 tests). Game outcomes/turns remain checked
+independently; poison event/log correctness is UNKNOWN, not qualified by this
+workstream. Production replay/event qualification is not claimed. This source-null
+construction-only log behavior must not be silently promoted to Rules behavior.
+The newly enabled Lich paths and their controls do not use synthetic poison.
+
+DraftPR: https://github.com/moeendres-png/forge/pull/27 . Hosted/review remain pending;
+current exact source95dce PR Java21 run37285286622/job111682623208 has completed:
+desktop728 execute/68FAIL/6SKIP; provenance integrity PASS, upstream/downstream
+coverage FAIL retained. Artifact11335025526, ZIPsha256
+3bf676b646088ce79a14ac13e55759f01b5a93af4a9a30fecf840550a6723baa.
+Full independent two-JDK raw-report readback is the exact next action, then review,
+fresh base/head/writer lock and bounded merge admission only if no new regressions.
