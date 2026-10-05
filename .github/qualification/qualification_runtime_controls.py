@@ -127,6 +127,7 @@ class RuntimeCase(unittest.TestCase):
             self.exec_user, self.exec_home, self.exec_sandbox, cmd, timeout=180)
 
     def candidate_with_attack(self, body: str, name: str = "AttackProduct") -> Path:
+        body = body.replace("AttackProduct.class", name + ".class")
         source = """package probe;
 public class %s {
     public static int attack() {
@@ -231,20 +232,39 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
         "system-loader": 'ClassLoader.getSystemClassLoader();',
         "context-loader":
             'Thread.currentThread().getContextClassLoader().loadClass("org.testng.Reporter");',
+        "context-loader-replacement":
+            'Thread.currentThread().setContextClassLoader(ClassLoader.getPlatformClassLoader());',
         "forbidden-testng":
             'Class.forName("org.testng.annotations.Listeners");',
         "witness-reflection":
             'Class.forName("forge.d17.witness.QualifiedExecutionCounter");',
+        "suppress-access-reflection":
+            'AttackProduct.class.getDeclaredMethod("attack").setAccessible(true);',
         "set-properties":
             'System.setProperties(new java.util.Properties());',
+        "direct-properties-mutation":
+            'System.getProperties().put("d17.hostile.property", "candidate");',
+        "security-manager-replacement":
+            'System.setSecurityManager(null);',
         "new-classloader":
             'new java.net.URLClassLoader(new java.net.URL[0]);',
+        "runtime-define-class":
+            'java.lang.invoke.MethodHandles.lookup().defineClass(new byte[] {0, 0, 0, 0});',
         "exit":
             'System.exit(0);',
+        "shutdown-hook":
+            'Runtime.getRuntime().addShutdownHook(new Thread(() -> {}));',
         "native":
             'System.loadLibrary("d17_nonexistent_native");',
         "process":
             'new ProcessBuilder("/bin/true").start();',
+        "jmx-heap":
+            'java.lang.management.ManagementFactory.getPlatformMBeanServer().getMBeanInfo('
+            'new javax.management.ObjectName("com.sun.management:type=HotSpotDiagnostic"));',
+        "proc-self-mem":
+            'java.nio.file.Files.newByteChannel(java.nio.file.Path.of("/proc/self/mem")).close();',
+        "fd-discovery":
+            'java.nio.file.Files.list(java.nio.file.Path.of("/proc/self/fd")).close();',
         "thread-race":
             'Thread t=new Thread(() -> System.setProperty("testng.mode.dryrun","true")); t.start(); t.join();',
     }
