@@ -2188,6 +2188,9 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertNotIn("sensitiveProperty", check_key)
         self.assertIn("putIfAbsent(Object key, Object value)", guarded)
         self.assertIn("remove(Object key, Object value)", guarded)
+        self.assertIn("Set<Map.Entry<Object, Object>> entrySet()", guarded)
+        self.assertIn("Set<Object> keySet()", guarded)
+        self.assertIn("Collection<Object> values()", guarded)
 
     def test_driver_cannot_ignore_testng_configuration_failure_status(self) -> None:
         source = (Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
