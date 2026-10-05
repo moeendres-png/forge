@@ -1,0 +1,13 @@
+diff --git a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/LichDamageReplacementTest.java b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/LichDamageReplacementTest.java
+index 55257733fef..9a1c7a7823b 100644
+--- a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/LichDamageReplacementTest.java
++++ b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/LichDamageReplacementTest.java
+@@ -58,7 +58,7 @@ public class LichDamageReplacementTest extends BaseGameSimulationTest {
+ 
+     @Test
+     public void unpayableDamageReplacementLosesBeforeDraw() {
+-        playAndCheckMana(false, PlayerSpecification.PLAYER_2);
++        playAndCheckMana(false, PlayerSpecification.PLAYER_1);
+     }
+ 
+     @Test

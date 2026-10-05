@@ -1,0 +1,54 @@
+{
+  "source_sha": "46680f24dd6c6f104d53297c57872a3779ac8afe",
+  "source_tree": "7bcc5871f44d2cc35907534cd52676274f6276c8",
+  "code_delta_sha256": "5d3a429b0725f7f2921727eea4019cbe0f6694a5f4d0e2ef1afae9236de5091c",
+  "code_delta_file": "REVIEWED-RED-UNPAID-ACTIVATION.patch",
+  "java": "21",
+  "java_version": "openjdk version \"21.0.12.1\" 2026-08-18\nOpenJDK Runtime Environment (build 21.0.12.1+1-1-26.04.4-Ubuntu)\nOpenJDK 64-Bit Server VM (build 21.0.12.1+1-1-26.04.4-Ubuntu, mixed mode, sharing)\n",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T09:05:55.933155+00:00",
+  "completed_at": "2026-10-05T09:06:40.073742+00:00",
+  "maven_exit": 1,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "TestSuite",
+    "time": "8.382",
+    "tests": "23",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "3"
+  },
+  "failures": [
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "activationWithoutManaIsRejected",
+      "message": "Expected IllegalStateException to be thrown, but nothing was thrown"
+    },
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "payableDamageReplacementAllowsManiacWin",
+      "message": "java.lang.AssertionError: actual engine mana payment must tap the only declared Swamp expected [true] but found [false]"
+    },
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "unpayableDamageReplacementLosesBeforeDraw",
+      "message": "java.lang.AssertionError: actual engine mana payment must tap the only declared Swamp expected [true] but found [false]"
+    }
+  ],
+  "raw_xml_sha256": "8fccd823955ee1e606fedf793e61a97f875dfa33989d71ba856722df0352c9fd",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}

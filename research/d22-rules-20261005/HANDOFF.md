@@ -41,7 +41,7 @@ No new fabricated simultaneous-win/loss card or manual terminal injection was ad
 Run from repository root with Java17 or Java21:
 
 ```sh
-xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,D24ExecutionGuardTest -Dsurefire.failIfNoSpecifiedTests=false clean test
+xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest -Dsurefire.failIfNoSpecifiedTests=false clean test
 ```
 
 The four Lich controls check unpaid activation denial, real paid mana consumption,
@@ -112,3 +112,22 @@ not CardDatabaseHelper.getCard(), which could freshly parse a second database af
 the bad startup order and pass for the wrong reason. The initial379375 version's
 local green run is discarded as authority for the type-order repair. New direct
 fixture control and an after-parsing mutant require fresh-process verification.
+
+
+## Cold-JVM review repair — supersedes 466 type-order admission
+
+P2s PRRT_kwDOUMZE3c6o99-u / PRRT_kwDOUMZE3c6o99-y are accepted.
+The normal TestNG initialization test now always launches a fresh child JVM using
+the same Java executable and test classpath. Its non-TestNG probe rejects an
+already initialized type table, then inspects the normal eagerly cached fixture.
+Parent test ordering/global caches cannot satisfy this control. Timeout, missing
+completed receipt and child failure are failures. This remains construction-only.
+
+Reproduce the full bounded battery (23 tests, including the cold-process control):
+`xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest -Dsurefire.failIfNoSpecifiedTests=false clean test`
+Reproduce the isolated control alone (1 test; it still spawns its own cold JVM):
+`xvfb-run -a mvn -B -pl forge-gui-desktop -am -Dtest=LichFixtureInitializationTest -Dsurefire.failIfNoSpecifiedTests=false clean test`
+For Java17 use JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 and prepend its bin to PATH.
+The older REVIEWED-* receipts bind exact46680f24 and are historical supporting
+evidence; revised isolation requires new positive and late-loader mutant evidence.
+The remaining semantic obligation CR104.3f stays NOT_RUN/UNKNOWN and #503 OPEN.

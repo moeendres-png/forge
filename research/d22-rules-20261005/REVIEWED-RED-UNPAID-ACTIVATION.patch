@@ -1,0 +1,25 @@
+diff --git a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/playeractions/ActivateAbilityAction.java b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/playeractions/ActivateAbilityAction.java
+index d1fd0f5f7ed..6f35a1bac65 100644
+--- a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/playeractions/ActivateAbilityAction.java
++++ b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/playeractions/ActivateAbilityAction.java
+@@ -5,7 +5,6 @@ import java.util.List;
+ import forge.game.Game;
+ import forge.game.card.Card;
+ import forge.game.player.Player;
+-import forge.game.player.PlaySpellAbility;
+ import forge.game.spellability.SpellAbility;
+ import forge.gamesimulationtests.util.card.CardSpecification;
+ import forge.gamesimulationtests.util.card.CardSpecificationHandler;
+@@ -33,11 +32,6 @@ public class ActivateAbilityAction extends BasePlayerAction {
+ 
+ 		SpellAbility ability = abilities.get( 0 );
+ 		ability.setActivatingPlayer(player);
+-		if (!ability.canPlay()) {
+-			throw new IllegalStateException("Scripted activation is not legal: " + actualCardWithAbility);
+-		}
+-		if (!new PlaySpellAbility(player.getController(), ability).playAbility(true, false, false)) {
+-			throw new IllegalStateException("Scripted activation costs were not paid: " + actualCardWithAbility);
+-		}
++		game.getStack().add(ability);
+ 	}
+ }
