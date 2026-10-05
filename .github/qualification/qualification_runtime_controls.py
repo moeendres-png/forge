@@ -255,8 +255,6 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'System.setSecurityManager(null);',
         "new-classloader":
             'new java.net.URLClassLoader(new java.net.URL[0]);',
-        "runtime-define-class":
-            'java.lang.invoke.MethodHandles.lookup().defineClass(new byte[] {0, 0, 0, 0});',
         "exit":
             'System.exit(0);',
         "shutdown-hook":
@@ -299,6 +297,48 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
                 self.assertEqual(
                     proc.returncode, 13,
                     "{} stdout={} stderr={}".format(route, proc.stdout, proc.stderr))
+
+    def test_runtime_defined_bytecode_remains_in_hostile_candidate_domain(self) -> None:
+        payload = self.compile_sources({
+            "probe.RuntimePayload": """package probe;
+public class RuntimePayload {
+  public static int attack() {
+    try {
+      System.setProperty("d17.runtime.defined", "pwn");
+      return 0;
+    } catch (SecurityException expected) {
+      return 1;
+    }
+  }
+}
+"""
+        }, "runtime-payload")
+        payload_class = payload / "probe" / "RuntimePayload.class"
+        candidate = self.compile_sources({
+            "probe.RuntimeDefineProduct": """package probe;
+public class RuntimeDefineProduct {
+  public static int attack() {
+    try {
+      byte[] bytes = java.nio.file.Files.readAllBytes(java.nio.file.Path.of(%s));
+      Class<?> defined = java.lang.invoke.MethodHandles.lookup().defineClass(bytes);
+      return ((Integer) defined.getMethod("attack").invoke(null)).intValue();
+    } catch (SecurityException expected) {
+      return 1;
+    } catch (Throwable other) {
+      return 2;
+    }
+  }
+}
+""" % json.dumps(str(payload_class))
+        }, "runtime-define-product")
+        tests = self.trusted_attack_test(
+            "RuntimeDefineProduct", expected_value=1,
+            class_name="RuntimeDefineTest", extra_cp=[candidate])
+        proc = self.launch(
+            tests, {"probe.RuntimeDefineTest": 1},
+            {"probe.RuntimeDefineTest#attackIsRefused": 1},
+            candidate_code=[candidate])
+        self.assertEqual(proc.returncode, 13, proc.stderr)
 
     def test_parent_loader_is_structurally_cut_off_from_testng(self) -> None:
         candidate = self.candidate_with_attack(
