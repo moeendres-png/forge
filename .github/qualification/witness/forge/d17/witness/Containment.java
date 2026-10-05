@@ -242,7 +242,7 @@ public final class Containment {
 
         private int authorityContext() {
             boolean trustedAuthority = false;
-            boolean trustedWitness = false;
+            boolean activeCounter = false;
             for (Class<?> frame : getClassContext()) {
                 ClassLoader loader = frame.getClassLoader();
                 if (loader == candidate || loader == dependencies) {
@@ -252,23 +252,22 @@ public final class Containment {
                 }
                 if (loader == trusted) {
                     String name = frame.getName();
-                    if (name.equals("forge.d17.witness.TrustedTestNGDriver")
-                            || name.equals("forge.d17.witness.QualifiedExecutionCounter")) {
-                        trustedWitness = true;
+                    if (name.equals("forge.d17.witness.QualifiedExecutionCounter")) {
+                        activeCounter = true;
                         trustedAuthority = true;
-                    } else if (name.startsWith("org.testng.")) {
+                    } else if (name.equals("forge.d17.witness.TrustedTestNGDriver")
+                            || name.startsWith("org.testng.")) {
                         trustedAuthority = true;
                     }
                 }
             }
-            // During a TestNG invocation, a malicious product may return a pure
-            // JDK callback/proxy that the trusted test invokes synchronously.
-            // Its candidate frame has vanished but TestNG remains deeper on the
-            // stack. Do not let that lower TestNG frame confer authority. Only
-            // the explicit trusted witness itself may perform sensitive work
-            // while the invocation barrier is active.
+            // TrustedTestNGDriver.main and TestNG remain deep on the stack for
+            // the whole test run. They must NOT lend authority to a pure-JDK
+            // callback returned by hostile production and invoked by a trusted
+            // test. During an active invocation only an actually executing
+            // trusted counter callback may perform sensitive authority work.
             if (invocationDepth.get().intValue() > 0) {
-                return trustedWitness ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
+                return activeCounter ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;
             }
             // A JDK-only asynchronous task has neither a hostile frame nor an
             // explicit trusted authority frame. Treat it as untrusted so a
