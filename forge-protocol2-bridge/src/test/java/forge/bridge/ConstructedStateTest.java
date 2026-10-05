@@ -160,6 +160,43 @@ public class ConstructedStateTest {
         Assert.assertFalse(text.contains("Mountain"), "no hidden card name may appear: " + text);
     }
 
+    /**
+     * Counters are keyed by the engine's own counter name (CounterType.getName(),
+     * as the battlefield projection emits it), lower-cased, never by the enum
+     * constant: P1P1 is "+1/+1", ACQUIREDTASTE "acquired taste", CHARGE "charge".
+     */
+    @Test(timeOut = 240000)
+    public void aCommandersCountersAreKeyedByTheirNativeNames() {
+        OrchestrationKey.keyForTests(KEY);
+        final BridgeEngine engine = parkedAtFirstMulligan("cs-counters", null);
+        final BridgeSession session = engine.sessionsForTests().get("cs-counters");
+        final forge.game.player.Player p1 = session.getGame().getPlayers().get(0);
+        final forge.game.card.Card commander = p1.getCommanders().get(0);
+        commander.setCounters(forge.game.card.CounterEnumType.P1P1, 2);
+        commander.setCounters(forge.game.card.CounterEnumType.ACQUIREDTASTE, 1);
+        commander.setCounters(forge.game.card.CounterEnumType.CHARGE, 3);
+        final JsonObject response = request(engine, "cs-counters");
+        BridgeTestSupport.assertOk(response);
+        final JsonObject state = response.getAsJsonObject("payload").getAsJsonObject("constructed_state");
+        // Exactly the one commander that was given counters carries them.
+        JsonObject counters = null;
+        for (JsonElement element : state.getAsJsonArray("players")) {
+            final JsonObject seen = element.getAsJsonObject().getAsJsonArray("commanders").get(0)
+                    .getAsJsonObject().getAsJsonObject("counters");
+            if (seen.size() > 0) {
+                Assert.assertNull(counters, "only one commander was given counters");
+                counters = seen;
+            }
+        }
+        Assert.assertNotNull(counters);
+        Assert.assertEquals(counters.size(), 3, counters.toString());
+        Assert.assertEquals(counters.get("+1/+1").getAsInt(), 2);
+        Assert.assertEquals(counters.get("acquired taste").getAsInt(), 1);
+        Assert.assertEquals(counters.get("charge").getAsInt(), 3);
+        Assert.assertNull(counters.get("p1p1"));
+        Assert.assertNull(counters.get("acquiredtaste"));
+    }
+
     @Test(timeOut = 240000)
     public void aSubstituteCardChangesTheDigestAndAnotherKeyCannotTestAGuess() throws Exception {
         OrchestrationKey.keyForTests(KEY);

@@ -279,8 +279,10 @@ public final class StateProjection {
                 entryCommander.addProperty("prior_command_zone_cast_count",
                         require("commander.casts", () -> Math.max(0, player.getCommanderCast(card))));
                 // Native object attributes (schema /3), read from the engine's
-                // card: its controller, counters (lower-case counter names, the
-                // Lab's naming), face-down status, tapped state and attached
+                // card: its controller, counters (the engine's own counter name,
+                // CounterType.getName() as the battlefield projection uses it,
+                // lower-cased: "+1/+1", "charge", "acquired taste"; never the
+                // enum constant P1P1 / ACQUIREDTASTE), face-down status, tapped state and attached
                 // cards. Nothing is inferred from the request.
                 entryCommander.add("controller",
                         seatName(session, require("commander.controller", () -> card.getController())));
@@ -288,7 +290,7 @@ public final class StateProjection {
                 for (com.google.common.collect.Multiset.Entry<forge.game.card.CounterType> counter
                         : require("commander.counters", () -> card.getCounters()).entrySet()) {
                     if (counter.getCount() > 0) {
-                        counters.addProperty(counter.getElement().toString().toLowerCase(java.util.Locale.ROOT),
+                        counters.addProperty(counter.getElement().getName().toLowerCase(java.util.Locale.ROOT),
                                 counter.getCount());
                     }
                 }
