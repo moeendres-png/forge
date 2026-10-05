@@ -48,6 +48,7 @@ public final class Containment {
 
     static final class DependencyLoader extends URLClassLoader {
         private final ClassLoader trusted;
+        private volatile Guard guard;
 
         DependencyLoader(URL[] urls, ClassLoader trusted) {
             // Deliberately do NOT parent this domain to the system loader.
@@ -59,11 +60,24 @@ public final class Containment {
             this.trusted = trusted;
         }
 
+        void bindGuard(Guard value) {
+            this.guard = value;
+        }
+
+        private void denyAuthority(String detail) {
+            Guard current = guard;
+            if (current != null) {
+                current.deny(detail);
+            }
+        }
+
         @Override
         protected synchronized Class<?> loadClass(String name, boolean resolve)
                 throws ClassNotFoundException {
             if (name.startsWith("forge.d17.witness.") || name.startsWith("org.testng.")) {
-                return trusted.loadClass(name);
+                denyAuthority("dependency attempted to load trusted authority class " + name);
+                throw new ClassNotFoundException(
+                        "D17 trusted authority package is not dependency-visible: " + name);
             }
             if (isPlatform(name)) {
                 return super.loadClass(name, resolve);
@@ -558,6 +572,7 @@ public final class Containment {
         CandidateCodeLoader candidate = new CandidateCodeLoader(candidateCode, deps, system);
         TrustedTestLoader tests = new TrustedTestLoader(trustedTests, candidate, system);
         Guard guard = new Guard(candidate, deps, system, protectedRoot);
+        deps.bindGuard(guard);
         candidate.bindGuard(guard);
         GuardedProperties guarded = new GuardedProperties(System.getProperties(), guard);
         System.setProperties(guarded);
