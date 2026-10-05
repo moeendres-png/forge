@@ -321,11 +321,14 @@ jobs:
             "$EVIDENCE_DIR/SANDBOX_PREPARE.json" \
             "$RUNNER_TEMP"/d17-testng/*.jar
 
-      # The trusted parent compiles a receiptless child harness, builds candidate
-      # production code as the build UID, and compiles TEST BODIES ONLY FROM THE
-      # TRUSTED COMPARISON BASE. Candidate bytecode runs behind containment as a
-      # second UID. The child receives no receipt nonce/key/evidence handle; the
-      # parent creates credited evidence only after observing the child OS exit.
+      # The trusted parent compiles a receiptless child harness and builds
+      # candidate production as the build UID. Trusted test bytecode is compiled
+      # from comparison-base source against comparison-base production only.
+      # Candidate production participates only in a separate bytecode-equality
+      # compatibility compile whose output is never executed or credited.
+      # Candidate bytecode then runs behind containment as a second UID. The child
+      # receives no receipt nonce/key/evidence handle; the parent creates credited
+      # evidence only after observing the child OS exit.
       - name: Run trusted witnessed execution as the sandbox account
         id: execute
         shell: /usr/bin/bash --noprofile --norc {0}
