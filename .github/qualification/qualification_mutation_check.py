@@ -122,11 +122,11 @@ MUTATIONS = [
         "a crashed or truncated trusted test launch would qualify",
     ),
     Mutation(
-        "treat-a-testng-skip-exit-code-as-a-broken-launch",
+        "trust-raw-child-exit-two-as-a-clean-launch",
         "qualify.py",
-        "TESTNG_LAUNCH_COMPLETED_CODES = (0, 2)",
         "TESTNG_LAUNCH_COMPLETED_CODES = (0,)",
-        "a suite completing with declared skips would be rejected as broken",
+        "TESTNG_LAUNCH_COMPLETED_CODES = (0, 2)",
+        "candidate-controlled child exit 2 could be mistaken for trusted parent skip evidence",
     ),
     Mutation(
         "ignore-the-trusted-per-class-denominator",
