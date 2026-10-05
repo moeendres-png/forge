@@ -90,6 +90,9 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
 
     @Override
     public void beforeInvocation(IInvokedMethod method, ITestResult result) {
+        if (method != null) {
+            containment.enterInvocation();
+        }
         if (method != null && method.isTestMethod() && result != null && !runtimeAltered()) {
             synchronized (this) {
                 dispatched.add(result);
@@ -97,7 +100,12 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         }
     }
 
-    @Override public void afterInvocation(IInvokedMethod method, ITestResult result) { }
+    @Override
+    public void afterInvocation(IInvokedMethod method, ITestResult result) {
+        if (method != null) {
+            containment.exitInvocation();
+        }
+    }
     @Override public void onTestSuccess(ITestResult result) { record(result); }
     @Override public void onTestFailure(ITestResult result) { record(result); }
     @Override public void onTestSkipped(ITestResult result) { record(result); }
