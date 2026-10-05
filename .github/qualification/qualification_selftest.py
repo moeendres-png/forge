@@ -1917,6 +1917,16 @@ class TrustedOrchestratorControls(unittest.TestCase):
             "record = trusted_compile_tests(", 1)[0]
         self.assertNotIn('candidate_compile_entries', authority_block)
         self.assertNotIn('trusted_dependency_compile_entries', authority_block)
+        candidate_probe_block = source.split("candidate_check_cp = (", 1)[1].split(
+            "candidate_record = trusted_compile_tests(", 1)[0]
+        self.assertIn('scans[module]["candidate_compile_entries"]', candidate_probe_block)
+        self.assertIn('scans[module]["trusted_dependency_compile_entries"]', candidate_probe_block)
+        self.assertNotIn("+ entries", candidate_probe_block)
+        self.assertIn("if semantic_divergence:", source)
+        self.assertIn(
+            'manifest["trusted_test_compile_authority"]["status"] = "PROVEN"',
+            source,
+        )
 
     def test_candidate_compile_time_constant_rewrite_is_detected(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="d17-test-policy-semantic-"))
