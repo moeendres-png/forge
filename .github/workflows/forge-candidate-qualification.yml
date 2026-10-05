@@ -62,7 +62,6 @@ env:
   # therefore visible in review.  No Rules or card-behavior test class is
   # excluded here.
   QUALIFY_OUT_OF_BAND_CLASSES: "forge.net.NetworkPlayIntegrationTest"
-  QUALIFY_JAVA: "21"
   # Trust domain. Candidate Maven/plugin code and hostile candidate production
   # bytecode never execute as the trusted runner and never share an untrusted
   # UID with each other. Qualification test bodies are compiled from the trusted
@@ -195,10 +194,14 @@ jobs:
   # or committed by the candidate is read for any qualification signal.
   # ------------------------------------------------------------------------ #
   candidate-qualification:
-    name: Trusted witnessed execution of the exact candidate
+    name: Trusted witnessed execution of the exact candidate (Java ${{ matrix.java }})
     needs: candidate-identity
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["17", "21"]
     permissions:
       contents: read
     steps:
@@ -240,7 +243,7 @@ jobs:
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
-          java-version: ${{ env.QUALIFY_JAVA }}
+          java-version: ${{ matrix.java }}
           cache: maven
 
       # Before any candidate code runs: resolve the pinned TestNG closure (its
@@ -405,12 +408,12 @@ jobs:
 
       # The evidence directory is trusted-owned and was probed unwritable by the
       # sandbox account: required-surface.json, execution-manifest.json, the
-      # HMAC-verified ledger copies, the sandbox record and INTEGRITY.json.
+      # external-parent receipt copies, the sandbox record and INTEGRITY.json.
       - name: Upload trusted execution evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: d17-trusted-execution
+          name: d17-trusted-execution-java-${{ matrix.java }}
           path: |
             ${{ runner.temp }}/d17-evidence/required-surface.json
             ${{ runner.temp }}/d17-evidence/execution-manifest.json
@@ -424,11 +427,15 @@ jobs:
   # Job 3 - trusted verdict derivation.
   # ------------------------------------------------------------------------ #
   qualification-evidence:
-    name: Exact candidate qualification verdict (trusted)
+    name: Exact candidate qualification verdict (trusted, Java ${{ matrix.java }})
     needs: [candidate-identity, candidate-qualification]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["17", "21"]
     permissions:
       contents: read
     steps:
@@ -448,7 +455,7 @@ jobs:
       - name: Download trusted execution evidence
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005964372cb63d33 # v4.1.8
         with:
-          name: d17-trusted-execution
+          name: d17-trusted-execution-java-${{ matrix.java }}
           path: ${{ runner.temp }}/d17-evidence
 
       - name: Derive the exact-SHA qualification verdict
@@ -479,7 +486,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: forge-candidate-qualification-${{ needs.candidate-identity.outputs.candidate_sha }}
+          name: forge-candidate-qualification-${{ needs.candidate-identity.outputs.candidate_sha }}-java-${{ matrix.java }}
           path: ${{ runner.temp }}/evidence/FORGE_CANDIDATE_QUALIFICATION.json
           if-no-files-found: error
           retention-days: 90
@@ -494,7 +501,7 @@ jobs:
           EXIT_CODE: ${{ steps.verdict.outputs.exit_code }}
         run: |
           set -uo pipefail
-          echo "### Forge exact-SHA candidate qualification" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Forge exact-SHA candidate qualification — Java ${{ matrix.java }}" >> "$GITHUB_STEP_SUMMARY"
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json, os
           path = os.environ["RUNNER_TEMP"] + "/evidence/FORGE_CANDIDATE_QUALIFICATION.json"
