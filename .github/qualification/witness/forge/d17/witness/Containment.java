@@ -364,7 +364,7 @@ public final class Containment {
             if (authorityRestrictedContext()
                     && (pkg.startsWith("forge.d17.witness")
                     || pkg.startsWith("org.testng")
-                    || pkg.startsWith("sun.misc")
+                    || pkg.startsWith("sun.")
                     || pkg.startsWith("jdk.internal"))) {
                 deny(authorityLabel() + " package access " + pkg);
             }
