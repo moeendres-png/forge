@@ -46,7 +46,7 @@ provenance.** That revision was rejected at review and replaced.
 | Execution is externally receipted, not candidate-reported | A receiptless trusted child counter validates exact per-class dispatch counts and failures/skips inside containment. The external trusted parent observes only the child OS exit and writes the credited receipt. Candidate reports are never consulted. |
 | Candidate code never runs as the validator | Candidate Maven/plugin execution runs as `d17build`; hostile candidate production bytecode in the qualification JVM runs as the distinct `d17exec` account. Neither is a trusted identity. Qualification test bodies come only from the trusted comparison base; candidate-owned test bodies are never executed for credit. Both identities are reaped and included in final integrity checks. |
 | Trusted bytecode and toolchains are out of reach | Before any candidate code runs, the receiptless child driver/counter and containment guard are compiled against the digest-pinned TestNG 7.10.2 closure. They are staged root-owned and read-only under `/var/lib/d17-trusted`, together with the JDK and Maven used by later trusted steps. |
-| The executed test bytecode is trusted policy | Test sources are exported from the **trusted comparison-base commit**, never from the candidate role, and compiled by trusted code with `-proc:none` only **after** Candidate production/dependency bytes are admitted and frozen into runner-owned staging. Candidate `target/test-classes` is never executed for credit. The manifest binds `trusted_test_source_sha` to the comparison-base source lock. |
+| The executed test bytecode is trusted policy | Test sources are exported from the **trusted comparison-base commit**, never from the candidate role. The authoritative test bytecode is compiled with trusted `javac -proc:none` only against comparison-base production plus trusted dependencies. Candidate production is compiled separately only as a non-authoritative compatibility probe; its test output is never executed or credited and must be byte-identical to the authoritative compile. Constant inlining, overload/type-binding or any other candidate-sensitive test-bytecode difference is `UNKNOWN`; candidate API compile failure is `FAIL`. Candidate `target/test-classes` is never executed for credit. The manifest binds both source and compile authority to the comparison base. |
 | Hostile bytecode is separated from receipt authority | The system classpath contains only the trusted receiptless child harness and digest-pinned TestNG. Trusted comparison-base tests and candidate production bytecode use separate child loaders. The Candidate loader has only the JDK platform loader as its real parent; the trusted dependency bridge is private. Candidate production may resolve **no TestNG class at all**. A mandatory Java-17/21 SecurityManager guard denies system/context-loader authority, witness/TestNG package access, access-check suppression, SecurityManager replacement, process/native execution, shutdown hooks, JMX authority, all procfs access, protected child-output mutation and process-global property mutation. Runtime class-definition permission is denied where the JDK requests it, and an exact real-bytecode control proves that any class successfully defined through `MethodHandles.Lookup#defineClass` remains in the hostile Candidate loader domain and therefore remains subject to the same sticky guard. The private dependency loader is also hostile-tainted and cannot resolve TestNG or witness authority at all, preventing both delayed dependency-only confused deputies and generic dependency-classloader bridges into trusted authority. A hostile Candidate/Dependency frame wins even when a trusted TestNG frame is lower on the stack; a JDK-only asynchronous context with no explicit trusted driver/TestNG authority defaults to restricted, so configured deputies cannot shed the hostile stack. Mutable `Properties` views, runtime filesystem link creation, all `sun.*`/`jdk.internal.*` package access, and all procfs operations are included in that boundary and have real hostile-route controls. Committed symlinks are rejected during exact-blob export (current trusted Forge has none). Every runtime file permission is also checked against its canonical target, so a symlink planted earlier by untrusted build code cannot route `d17exec` into procfs or a protected witness path. Crucially, no receipt key/run ID/evidence handle exists in the candidate JVM; the external parent alone creates credited evidence. If containment is unavailable, verdict is UNKNOWN. |
 | Candidate listeners cannot change what runs or counts | TestNG's default listeners are off, and its service-loader discovery sees only the trusted jars, so a candidate `META-INF/services/org.testng.ITestNGListener` is never loaded. |
 | Integrity is verified, not assumed | `sandbox.py verify` re-derives every trusted file from Git, re-checks the evidence seals and checks that no candidate process is alive. `qualify.py` turns a violation into `FAIL` and a missing or foreign `INTEGRITY.json` into `UNKNOWN`. |
@@ -66,9 +66,14 @@ Before any hostile production bytecode runs, `trusted_execution.py` freezes and
 classifies the launch inputs in `launch_classpath_admission`:
 
 - **Trusted comparison-base tests** are exported from the locked comparison-base
-  Git commit and compiled by trusted `javac -proc:none`. Candidate test source,
-  candidate `target/test-classes`, TestNG service resources and candidate test
-  reports carry no credit.
+  Git commit. Their authoritative bytecode is compiled by trusted
+  `javac -proc:none` against only comparison-base reactor production outputs and
+  trusted Maven dependencies. The same trusted source is separately compiled
+  against admitted/frozen candidate production solely as an equality probe. That
+  probe is never launched or credited; every produced test class must be
+  byte-identical to the authority compile before execution may proceed. Candidate
+  test source, candidate `target/test-classes`, TestNG service resources and
+  candidate test reports carry no credit.
 - **Candidate production bytecode** comes only from a build whose Maven authority
   matches the trusted comparison base. Any candidate change to `pom.xml`,
   nested POMs, `.mvn/**` or the Maven wrapper makes the qualification
@@ -82,7 +87,9 @@ classifies the launch inputs in `launch_classpath_admission`:
   output cannot shadow a trusted dependency in the execution classloader; the
   dependency domain is logically parent-first but is **not** the Candidate
   loader's actual parent. Candidate production and trusted dependencies are
-  admitted/frozen before trusted `javac` is allowed to parse them.
+  admitted/frozen before the **non-authoritative compatibility javac** may parse
+  them. The authoritative trusted-test javac never receives candidate production
+  or candidate-owned dependency paths.
 - **The JVM system classpath contains no candidate bytecode.** It contains only
   the trusted receiptless child harness and digest-pinned TestNG closure. Trusted tests and
   candidate production code are loaded through distinct child-loader domains.
