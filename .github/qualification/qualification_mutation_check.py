@@ -528,6 +528,18 @@ MUTATIONS = [
         "procfs aliases or write-only process-memory access could bypass containment",
     ),
     Mutation(
+        "retain-trusted-loader-handle-in-candidate-domain",
+        "witness/forge/d17/witness/Containment.java",
+        '    static final class CandidateCodeLoader extends URLClassLoader {\n'
+        '        private final DependencyLoader dependencies;\n'
+        '        private volatile Guard guard;\n',
+        '    static final class CandidateCodeLoader extends URLClassLoader {\n'
+        '        private final DependencyLoader dependencies;\n'
+        '        private final ClassLoader trusted = Containment.class.getClassLoader();\n'
+        '        private volatile Guard guard;\n',
+        "the hostile candidate loader would retain a direct trusted system-loader authority handle",
+    ),
+    Mutation(
         "retain-trusted-loader-handle-in-dependency-domain",
         "witness/forge/d17/witness/Containment.java",
         '    static final class DependencyLoader extends URLClassLoader {\n'
