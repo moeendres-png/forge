@@ -2305,6 +2305,7 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("resolvingPath.set(Boolean.TRUE)", source)
         self.assertIn('loader == candidate || loader == dependencies', source)
         self.assertIn('deps.bindGuard(guard)', source)
+        self.assertIn('tests.bindGuard(guard)', source)
         self.assertIn('dependency attempted to load trusted authority class', source)
         dependency_loader = source.split("static final class DependencyLoader", 1)[1].split(
             "static final class CandidateCodeLoader", 1)[0]
@@ -2342,6 +2343,7 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn("containment.exitInvocation();", counter_source)
         self.assertIn('if (!authorityRestrictedContext())', source)
         self.assertIn('ThreadLocal<Boolean> inspectingClassLoader', source)
+        self.assertIn('ThreadLocal<Integer> trustedFrameworkResolutionDepth', source)
         self.assertIn('ClassLoader loader = classLoaderOf(frame);', source)
         inspection = source.split("private ClassLoader classLoaderOf", 1)[1].split(
             "private int authorityContext", 1
@@ -2354,6 +2356,18 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn(
             "if (Boolean.TRUE.equals(inspectingClassLoader.get()))", package_access
         )
+        self.assertIn(
+            'if (trustedFrameworkResolutionDepth.get().intValue() > 0\n'
+            '                    && pkg.startsWith("org.testng"))',
+            package_access,
+        )
+        trusted_loader = source.split(
+            "static final class TrustedTestLoader", 1
+        )[1].split("static final class Guard", 1)[0]
+        self.assertIn("private volatile Guard guard;", trusted_loader)
+        self.assertIn("current.enterTrustedFrameworkResolution();", trusted_loader)
+        self.assertIn("current.exitTrustedFrameworkResolution();", trusted_loader)
+        self.assertIn('return loadTrustedTestNg(name);', trusted_loader)
         self.assertIn('java.nio.file.LinkPermission', source)
         self.assertIn('pkg.startsWith("sun.")', source)
         self.assertIn('new CandidateCodeLoader(candidateCode, deps)', source)
