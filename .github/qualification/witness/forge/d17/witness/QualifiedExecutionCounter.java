@@ -100,6 +100,13 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
                 + " runtimeAltered=" + (alteredReason == null ? "none" : alteredReason)
                 + " throwableClass=" + (throwable == null ? "<none>" : throwable.getClass().getName())
                 + " throwableMessage=" + (throwable == null ? "<none>" : bounded(throwable.getMessage())));
+        if (throwable != null) {
+            StackTraceElement[] trace = throwable.getStackTrace();
+            int limit = Math.min(trace.length, 24);
+            for (int i = 0; i < limit; i++) {
+                System.err.println("D17_TESTNG_TRACE[" + i + "]=" + trace[i]);
+            }
+        }
     }
 
     private synchronized void record(ITestResult result) {
