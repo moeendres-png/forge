@@ -43,20 +43,33 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         this.pinned = System.getProperties();
     }
 
-    private boolean runtimeAltered() {
-        if (containment == null || !containment.intact()) {
-            return true;
+    private String runtimeAlteredReason() {
+        if (containment == null) {
+            return "containment-null";
+        }
+        if (!containment.intact()) {
+            return "containment-not-intact";
         }
         Properties current = System.getProperties();
-        if (pinned == null || current != pinned || RuntimeBehavior.isDryRun()) {
-            return true;
+        if (pinned == null) {
+            return "properties-not-pinned";
+        }
+        if (current != pinned) {
+            return "properties-object-replaced";
+        }
+        if (RuntimeBehavior.isDryRun()) {
+            return "testng-dry-run";
         }
         for (String name : current.stringPropertyNames()) {
             if (name.startsWith("testng.")) {
-                return true;
+                return "testng-property:" + name;
             }
         }
-        return false;
+        return null;
+    }
+
+    private boolean runtimeAltered() {
+        return runtimeAlteredReason() != null;
     }
 
     private static void bump(Map<String, Integer> counts, String key) {
@@ -64,7 +77,16 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         counts.put(key, Integer.valueOf(current == null ? 1 : current.intValue() + 1));
     }
 
-    private static void diagnose(String kind, ITestResult result) {
+    private static String bounded(String value) {
+        if (value == null) {
+            return "<null>";
+        }
+        value = value.replace('\n', ' ').replace('\r', ' ');
+        return value.length() <= 240 ? value : value.substring(0, 240);
+    }
+
+    private void diagnose(String kind, ITestResult result,
+            boolean dispatchedObserved, String alteredReason) {
         String className = result == null || result.getTestClass() == null
                 ? "<unknown-class>" : result.getTestClass().getName();
         String methodName = result == null || result.getMethod() == null
@@ -74,10 +96,10 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         System.err.println("D17_TESTNG_DIAGNOSTIC kind=" + kind
                 + " class=" + className + " method=" + methodName
                 + " status=" + status
-                + " throwable=" + (throwable == null ? "<none>" : throwable));
-        if (throwable != null) {
-            throwable.printStackTrace(System.err);
-        }
+                + " dispatched=" + dispatchedObserved
+                + " runtimeAltered=" + (alteredReason == null ? "none" : alteredReason)
+                + " throwableClass=" + (throwable == null ? "<none>" : throwable.getClass().getName())
+                + " throwableMessage=" + (throwable == null ? "<none>" : bounded(throwable.getMessage())));
     }
 
     private synchronized void record(ITestResult result) {
@@ -91,11 +113,13 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
         String methodName = result.getMethod() == null
                 ? "<unknown>" : result.getMethod().getMethodName();
         bump(methodCounts, className + "#" + methodName);
-        boolean invoked = dispatched.remove(result) && !runtimeAltered();
+        boolean dispatchedObserved = dispatched.remove(result);
+        String alteredReason = runtimeAlteredReason();
+        boolean invoked = dispatchedObserved && alteredReason == null;
         int status = result.getStatus();
         invocations++;
         if (status == ITestResult.FAILURE || (status != ITestResult.SKIP && !invoked)) {
-            diagnose("test-failure", result);
+            diagnose("test-failure", result, dispatchedObserved, alteredReason);
             failures++;
             bump(failureCounts, className);
         } else if (status == ITestResult.SKIP) {
@@ -130,7 +154,7 @@ public final class QualifiedExecutionCounter implements ITestListener, IInvokedM
     @Override public void onTestFailedButWithinSuccessPercentage(ITestResult result) { record(result); }
     @Override public void onTestFailedWithTimeout(ITestResult result) { record(result); }
     @Override public void onConfigurationFailure(ITestResult result) {
-        diagnose("configuration-failure", result);
+        diagnose("configuration-failure", result, false, runtimeAlteredReason());
     }
 
     long invocations() { return invocations; }
