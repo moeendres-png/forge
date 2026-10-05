@@ -1633,7 +1633,7 @@ def cmd_execute(args) -> int:
             [args.mvn, "-o", "-B", "-q",
              "-Dmaven.repo.local=" + str(trusted_maven_repo),
              "-Dmaven.compiler.proc=none",
-             "-DskipTests", "test-compile", "dependency:build-classpath",
+             "-DskipTests", "compile", "dependency:build-classpath",
              "-Dmdep.outputFile=" + args.cp_rel, "-DincludeScope=test",
              "-pl", ",".join(modules), "-am"],
             timeout=14400,
