@@ -1,0 +1,907 @@
+#!/usr/bin/env python3
+"""Prove the exact-SHA qualification controls are non-vacuous by mutation.
+
+A red/positive control suite that cannot detect a broken implementation proves
+nothing. This harness takes each safety property of the qualification, mutates the
+product code to violate exactly that property in a scratch copy, and requires the
+control suite to go RED.
+
+Design constraints
+------------------
+* Nothing in the repository checkout is modified. Each mutation is applied to a
+  throwaway copy under a temporary directory.
+* A mutation counts as *detected* only when the control suite fails. A surviving
+  mutation exits nonzero, because a survivor is a hole in the controls.
+* Mutants are textual and minimal so a failure is attributable to one property.
+
+Usage: ``python3 qualification_mutation_check.py``
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+PRODUCT = ("source_lock.py", "qualify.py", "trusted_execution.py", "sandbox.py", "qualification_selftest.py", "qualification_runtime_controls.py")
+
+#: Workflow files the workflow-contract controls read. They are staged next to the
+#: product copy so those controls are exercised rather than erroring out.
+WORKFLOWS = ("forge-candidate-qualification.yml", "test-build.yaml")
+
+#: Real-JVM control module. A mutation that names runtime killers must also be
+#: caught by those full-path controls (real driver, real TestNG, sandbox UID),
+#: not only by the structural selftest pins.
+RUNTIME_MODULE = "qualification_runtime_controls"
+
+
+class Mutation:
+    """One deliberate violation of one qualification safety property."""
+
+    def __init__(self, name: str, filename: str, old: str, new: str, expected: str,
+                 runtime: "tuple[str, ...]" = ()) -> None:
+        self.name = name
+        self.filename = filename
+        self.old = old
+        self.new = new
+        self.expected = expected
+        self.runtime = tuple(runtime)
+
+    def apply(self, root: Path) -> None:
+        path = root / self.filename
+        text = path.read_text()
+        if self.old not in text:
+            raise AssertionError(
+                "mutation {!r} does not match {}; the product code changed".format(
+                    self.name, self.filename
+                )
+            )
+        path.write_text(text.replace(self.old, self.new, 1))
+
+
+MUTATIONS = [
+    # --- candidate identity ------------------------------------------------ #
+    Mutation(
+        "accept-github-synthetic-merge-ref-as-candidate",
+        "source_lock.py",
+        'FETCH_REF = re.compile(r"^refs/(pull/[1-9][0-9]*/head|heads/[A-Za-z0-9._/-]+)$")',
+        'FETCH_REF = re.compile(r"^refs/pull/[1-9][0-9]*/(head|merge)$")',
+        "a synthetic merge ref would become an acceptable candidate identity",
+    ),
+    Mutation(
+        "do-not-verify-fetched-head-equals-declared-candidate",
+        "source_lock.py",
+        "        if fetched != candidate_sha:",
+        "        if False:",
+        "a ref resolving to a different SHA would be silently accepted",
+    ),
+    Mutation(
+        "accept-abbreviated-candidate-sha",
+        "source_lock.py",
+        'HEX40 = re.compile(r"^[0-9a-f]{40}$")',
+        'HEX40 = re.compile(r"^[0-9a-f]{7,40}$")',
+        "a non-exact candidate identity would resolve",
+    ),
+    Mutation(
+        "allow-qualification-to-run-off-the-default-branch",
+        "source_lock.py",
+        '    if branch != TRUSTED_DEFAULT_BRANCH:',
+        "    if False:",
+        "the candidate's own copy of the definition could become authority",
+    ),
+    Mutation(
+        "stop-asserting-verdict-is-not-read-from-candidate",
+        "source_lock.py",
+        "        if lock.get(assertion) is not False:",
+        "        if False:",
+        "a lock claiming a candidate-derived verdict would validate",
+    ),
+    Mutation(
+        "stop-asserting-synthetic-merge-was-not-consulted",
+        "source_lock.py",
+        '    if lock["comparison_base"]["synthetic_merge_computed"] is not False:',
+        "    if False:",
+        "a lock claiming synthetic-merge consultation would validate",
+    ),
+    # --- trusted execution provenance -------------------------------------- #
+    Mutation(
+        "ignore-candidate-identity-binding-in-verifier",
+        "qualify.py",
+        'identity_ok = bound_sha == lock["candidate"]["sha"] and bound_tree == lock["candidate"]["tree"]',
+        "identity_ok = True",
+        "evidence for a different candidate would qualify the locked one",
+    ),
+    Mutation(
+        "ignore-stale-comparison-base-test-policy",
+        "qualify.py",
+        '    elif not by_name["comparison_base_is_current_trusted_policy"]["satisfied"]:\n',
+        '    elif False:\n',
+        "a candidate missing current trusted tests could qualify against a stale merge base",
+    ),
+    Mutation(
+        "ignore-required-surface-comparison-base-binding",
+        "qualify.py",
+        'surface_base_ok = surface.get("comparison_base_sha") == lock["comparison_base"]["sha"]',
+        "surface_base_ok = True",
+        "a required surface from an unrelated base would be trusted",
+    ),
+    Mutation(
+        "ignore-an-incomplete-trusted-launch",
+        "qualify.py",
+        "    launches_ok = bool(launch_codes) and not incomplete",
+        "    launches_ok = True",
+        "a crashed or truncated trusted test launch would qualify",
+    ),
+    Mutation(
+        "trust-raw-child-exit-two-as-a-clean-launch",
+        "qualify.py",
+        "TESTNG_LAUNCH_COMPLETED_CODES = (0,)",
+        "TESTNG_LAUNCH_COMPLETED_CODES = (0, 2)",
+        "candidate-controlled child exit 2 could be mistaken for trusted parent skip evidence",
+    ),
+    Mutation(
+        "ignore-the-trusted-per-class-denominator",
+        "qualify.py",
+        "            if alive.get(name, 0) < max(1, int(floors.get(name, 1)))",
+        "            if alive.get(name, 0) < 1",
+        "a candidate could partially suppress a required test class",
+    ),
+    Mutation(
+        "ignore-required-class-liveness",
+        "qualify.py",
+        "        not dead_classes,",
+        "        True,",
+        "required test classes never observed executing would qualify",
+    ),
+    Mutation(
+        "ignore-trusted-invocation-floor",
+        "qualify.py",
+        "        observed_total >= required_total,",
+        "        True,",
+        "a candidate could cut the qualified test volume and still qualify",
+    ),
+    Mutation(
+        "ignore-observed-failures",
+        "qualify.py",
+        '    signal("no_failed_cases", failures == 0, "{} failure(s)".format(failures))',
+        '    signal("no_failed_cases", True, "{} failure(s)".format(failures))',
+        "failing candidate tests would qualify",
+    ),
+    Mutation(
+        "ignore-undeclared-skips",
+        "qualify.py",
+        "        not undeclared,",
+        "        True,",
+        "skipped coverage inside the qualified surface would qualify",
+    ),
+    Mutation(
+        "treat-absent-and-malformed-witness-ledgers-the-same",
+        "qualify.py",
+        "        sorted(present_modules) == expected_modules,",
+        "        True,",
+        "a missing witness ledger would read as ambiguous rather than as never-run",
+    ),
+    Mutation(
+        "accept-witness-without-the-trusted-run-nonce",
+        "qualify.py",
+        '    if header.get("nonce") != nonce:',
+        "    if False:",
+        "stale or replayed witness evidence would validate",
+    ),
+    Mutation(
+        "accept-a-witness-with-gaps-in-its-sequence",
+        "qualify.py",
+        "        if seq != index:",
+        "        if False:",
+        "a truncated or spliced witness ledger would validate",
+    ),
+    Mutation(
+        "accept-a-witness-summary-that-contradicts-its-records",
+        "qualify.py",
+        "    if summary.get(\"tests\") != recomputed_total:",
+        "    if False:",
+        "a hand-edited witness summary would validate",
+    ),
+    Mutation(
+        "accept-invocations-without-a-testng-context",
+        "qualify.py",
+        '        if not isinstance(record.get("context"), str) or not record["context"]:',
+        "        if False:",
+        "records that were not genuine TestNG dispatches would count",
+    ),
+    # --- evidence-class separation and exit codes ------------------------- #
+    Mutation(
+        "expose-a-nonzero-verdict-class-as-success",
+        "qualify.py",
+        "EXIT_CODES = {PASS: 0, FAIL: 1, PARTIAL: 2, NOT_RUN: 3, UNKNOWN: 4}",
+        "EXIT_CODES = {PASS: 0, FAIL: 0, PARTIAL: 0, NOT_RUN: 0, UNKNOWN: 0}",
+        "a non-PASS class would exit 0 and read as a green check",
+    ),
+    Mutation(
+        "promote-rules-qualification-credit-from-ci-green",
+        "qualify.py",
+        '            "status": _NOT_CLAIMED,',
+        '            "status": "PASS",',
+        "a green CI qualification would be reported as Rules qualification",
+    ),
+    Mutation(
+        "attribute-pr-mergeability-as-qualification-evidence",
+        "qualify.py",
+        '            "status": _NOT_APPLICABLE,',
+        '            "status": "MERGEABLE",',
+        "PR mergeability would be reported as qualification evidence",
+    ),
+    Mutation(
+        "understate-the-trusted-required-surface-by-pattern",
+        "trusted_execution.py",
+        'TEST_INCLUDE_PATTERNS = ("Test*.java", "*Test.java", "*Tests.java", "*TestCase.java")',
+        'TEST_INCLUDE_PATTERNS = ("*Test.java",)',
+        "the trusted denominator would silently shrink and let tests be deleted",
+    ),
+    Mutation(
+        "ignore-module-surefire-explicit-includes",
+        "trusted_execution.py",
+        "    if explicit:\n        return explicit\n",
+        "    if explicit:\n        return list(TEST_INCLUDE_PATTERNS)\n",
+        "D24-restored non-default test classes would be omitted from execution",
+    ),
+    Mutation(
+        "use-candidate-test-source-as-qualification-authority",
+        "trusted_execution.py",
+        "    return comparison_base\n\n\ndef cmd_execute",
+        "    return candidate_sha\n\n\ndef cmd_execute",
+        "candidate-owned test deletion or weakening would become qualification authority",
+    ),
+    Mutation(
+        "ignore-hostile-bytecode-containment",
+        "qualify.py",
+        '    elif not by_name["hostile_candidate_bytecode_contained"]["satisfied"]:',
+        '    elif False:',
+        "hostile candidate bytecode could violate the witness authority and still qualify",
+    ),
+    Mutation(
+        "ignore-generic-source-not-run-obligations",
+        "qualify.py",
+        "        and not source_obligations_not_run\n",
+        "        and True\n",
+        "a newly undiscovered trusted-source @Test class could disappear behind the executable denominator",
+    ),
+    Mutation(
+        "ignore-method-level-disabled-test-debt",
+        "qualify.py",
+        "        and not other_disabled_methods\n",
+        "        and True\n",
+        "explicitly disabled test methods could disappear behind class-level execution",
+    ),
+    Mutation(
+        "promote-known-not-run-coverage-to-pass",
+        "qualify.py",
+        '    elif not by_name["whole_reactor_coverage_complete"]["satisfied"]:',
+        '    elif False:',
+        "D24/disabled NOT_RUN obligations would be hidden behind executable-surface PASS",
+    ),
+    Mutation(
+        "ignore-an-integrity-violation",
+        "qualify.py",
+        '    if integrity_status == "VIOLATION":',
+        '    if False:',
+        "candidate code that rewrote trusted state could still reach PASS",
+    ),
+    Mutation(
+        "credit-an-unauthenticated-ledger",
+        "qualify.py",
+        '        if entry.get("ledger_authentication") != LEDGER_AUTHENTICATED:',
+        '        if False:',
+        "a ledger the orchestrator never authenticated would be credit",
+    ),
+    Mutation(
+        "ignore-testng-configuration-failure-status",
+        "witness/forge/d17/witness/TrustedTestNGDriver.java",
+        "        if (counter.failures() > 0 || (testng.getStatus() & 1) != 0) {\n",
+        "        if (counter.failures() > 0) {\n",
+        "configuration failures outside test-method callbacks could receive credit",
+    ),
+    Mutation(
+        "drop-trusted-method-denominator-from-child",
+        "trusted_execution.py",
+        '    for key, count in sorted(required_method_counts.items()):\n'
+        '        cmd += ["--expected-method-count", "{}={}".format(key, int(count))]\n',
+        '',
+        "one test invocation could replace another within the same class without detection",
+    ),
+    Mutation(
+        "decode-error-exits-as-declared-skips",
+        "trusted_execution.py",
+        "    if 31 <= code <= 69 and len(allowed_skip_classes) == 1:\n",
+        "    if 20 <= code <= 220 and len(allowed_skip_classes) == 1:\n",
+        "containment/driver/signal exits could be misread as declared-skip completion",
+    ),
+    Mutation(
+        "ignore-external-parent-receipt-authority",
+        "qualify.py",
+        '    elif not by_name["external_parent_receipt_authority"]["satisfied"]:',
+        '    elif False:',
+        "a same-JVM/candidate-owned receipt authority could qualify",
+    ),
+    Mutation(
+        "ignore-module-parent-receipt-binding",
+        "qualify.py",
+        '    elif not by_name["module_receipts_bound_to_external_parent"]["satisfied"]:',
+        '    elif False:',
+        "a replayed or foreign module receipt could qualify",
+    ),
+    Mutation(
+        "pass-receipt-nonce-into-candidate-jvm",
+        "trusted_execution.py",
+        '        "--module", module,\n        "--protected-root", str(launch_dir),',
+        '        "--module", module, "--nonce", receipt_run_id,\n        "--protected-root", str(launch_dir),',
+        "the candidate JVM would receive parent receipt authentication state",
+    ),
+    Mutation(
+        "write-credited-receipt-inside-candidate-output",
+        "trusted_execution.py",
+        '    trusted_copy = evidence_witness / (module + ".witness.jsonl")',
+        '    trusted_copy = launch_dir / (module + ".witness.jsonl")',
+        "candidate-execution UID could overwrite credited receipt evidence",
+    ),
+    Mutation(
+        "accept-candidate-code-run-as-a-trusted-identity",
+        "qualify.py",
+        'TRUSTED_IDENTITIES = ("root", "runner")',
+        'TRUSTED_IDENTITIES = ()',
+        "candidate build/execution code run as a trusted runner identity would be credit",
+    ),
+    Mutation(
+        "ignore-build-execution-identity-separation",
+        "qualify.py",
+        '    elif not by_name["build_and_execution_identities_separated"]["satisfied"]:',
+        '    elif False:',
+        "a delayed candidate build process could share the witness JVM UID and attack it out of process",
+    ),
+    Mutation(
+        "accept-an-unpinned-trusted-testng",
+        "trusted_execution.py",
+        '        if sha256_file(path) != TRUSTED_TESTNG_PINS[path.name]:',
+        '        if False:',
+        "a substituted TestNG would compile and run the trusted witness",
+    ),
+    Mutation(
+        "drop-the-trusted-witness-from-the-classpath-head",
+        "trusted_execution.py",
+        '    return ":".join([str(witness_classes)] + list(entries))',
+        '    return ":".join(list(entries))',
+        "a candidate class could shadow the trusted listener",
+    ),
+    # --- export integrity and trusted interpreter (ported from C12) --------- #
+    Mutation(
+        "export-without-blob-verification",
+        "sandbox.py",
+        "    verify_export(repo, sha, dest)\n",
+        "    pass\n",
+        "a .gitattributes export-subst/export-ignore would change the bytes built and recompiled",
+    ),
+    Mutation(
+        "accept-committed-symlink-alias",
+        "sandbox.py",
+        '            raise SandboxError("symlink export path is unsupported for qualification: {}".format(rel))\n',
+        '            seen[rel] = ("120000", _git_blob_id(os.readlink(item).encode("utf-8", "surrogateescape")))\n',
+        "a committed candidate symlink could alias procfs or another forbidden target",
+    ),
+    Mutation(
+        "trusted-python-imports-site",
+        "../workflows/forge-candidate-qualification.yml",
+        "/usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare",
+        "/usr/bin/python3 -I -B .github/qualification/sandbox.py prepare",
+        "a .pth file on the runner would run inside trusted prepare",
+    ),
+    Mutation(
+        "prepare-probes-inherited-path",
+        "../workflows/forge-candidate-qualification.yml",
+        '          export PATH="$D17_TRUSTED_PATH"\n          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare',
+        '          /usr/bin/python3 -I -S -B .github/qualification/sandbox.py prepare',
+        "prepare would probe and resolve tools on the inherited PATH",
+    ),
+    Mutation(
+        "compile-authoritative-tests-against-candidate-production",
+        "trusted_execution.py",
+        '                + trusted_policy_compile_entries(\n'
+        '                    export, module, args.cp_rel, reactor_artifacts, trusted_maven_repo)\n',
+        '                + scans[module]["candidate_compile_entries"]\n',
+        "candidate production could alter constant inlining, overload resolution or other trusted-test bytecode",
+    ),
+    Mutation(
+        "ignore-candidate-sensitive-trusted-test-bytecode",
+        "trusted_execution.py",
+        '        if semantic_divergence:\n',
+        '        if False:\n',
+        "candidate-dependent trusted-test compilation could silently receive execution credit",
+    ),
+    Mutation(
+        "compile-candidate-compatibility-probe-against-writable-inputs",
+        "trusted_execution.py",
+        '                + scans[module]["trusted_dependency_compile_entries"]\n'
+        '                + scans[module]["candidate_compile_entries"]\n',
+        '                + entries\n',
+        "the non-authoritative candidate compatibility javac could race candidate-writable inputs",
+    ),
+    Mutation(
+        "omit-current-module-candidate-production",
+        "trusted_execution.py",
+        '    return [str(own)] + deps\n',
+        '    return deps\n',
+        "the current module could run without its own exact-candidate production bytecode",
+    ),
+    Mutation(
+        "leave-installed-forge-siblings-on-the-classpath",
+        "trusted_execution.py",
+        "        if marker in normalized:\n",
+        "        if False:\n",
+        "installed stale Forge sibling jars would replace exact candidate reactor bytecode",
+    ),
+    Mutation(
+        "read-d20-known-not-run-from-working-tree",
+        "trusted_execution.py",
+        '        raw = _git_blob_bytes(repo, "{}:{}".format(base, D20_KNOWN_NOT_RUN_PATH))\n',
+        '        raw = (repo / D20_KNOWN_NOT_RUN_PATH).read_bytes()\n',
+        "candidate working-tree data could redefine named NOT_RUN coverage categories",
+    ),
+    # --- trusted Maven/build-definition authority ------------------------- #
+    Mutation(
+        "misclassify-candidate-production-build-failure",
+        "qualify.py",
+        '    elif (isinstance(candidate_build_exit, int)\n'
+        '          and not isinstance(candidate_build_exit, bool)\n'
+        '          and candidate_build_exit != 0):\n',
+        '    elif False:\n',
+        "a failed exact-candidate production build would be hidden as infrastructure UNKNOWN",
+    ),
+    Mutation(
+        "ignore-candidate-independent-test-compile-authority",
+        "qualify.py",
+        '    elif not by_name["trusted_test_compile_candidate_independent"]["satisfied"]:\n',
+        '    elif False:\n',
+        "candidate-sensitive or unproven trusted-test bytecode could qualify",
+    ),
+    Mutation(
+        "ignore-candidate-build-definition-divergence",
+        "trusted_execution.py",
+        "        divergence = build_definition_divergence(\n            trusted_repo, args.comparison_base, args.candidate_sha)\n",
+        "        divergence = []\n",
+        "candidate-controlled POM/plugin changes would be allowed to define the bytecode under test",
+    ),
+    Mutation(
+        "use-candidate-writable-maven-repository",
+        "trusted_execution.py",
+        '[args.mvn, "-o", "-B", "-q",\n             "-Dmaven.repo.local=" + str(trusted_maven_repo),',
+        '[args.mvn, "-o", "-B", "-q",\n             "-Dmaven.repo.local=" + str(home / ".m2" / "repository"),',
+        "candidate code could replace Maven plugin/dependency jars before later build phases",
+    ),
+    Mutation(
+        "let-candidate-tests-control-production-build",
+        "trusted_execution.py",
+        '             "-DskipTests", "compile", "dependency:build-classpath",\n',
+        '             "-DskipTests", "test-compile", "dependency:build-classpath",\n',
+        "candidate-owned test source could re-enter the production qualification build path",
+    ),
+    Mutation(
+        "allow-candidate-annotation-processors",
+        "trusted_execution.py",
+        '             "-Dmaven.compiler.proc=none",\n',
+        '',
+        "candidate source could execute as an annotation processor and synthesize downstream bytecode",
+    ),
+    Mutation(
+        "allow-network-resolution-in-candidate-build",
+        "trusted_execution.py",
+        '            [args.mvn, "-o", "-B", "-q",',
+        '            [args.mvn, "-B", "-q",',
+        "candidate Maven execution could resolve untrusted code instead of the pre-resolved trusted repository",
+    ),
+    # --- launch classpath admission and verdict bindings (review 63731d9f) - #
+    Mutation(
+        "ignore-rejected-launch-classpath",
+        "qualify.py",
+        "    elif rejected:\n",
+        "    elif False:\n",
+        "a @Listeners class or a rewritten dependency jar would no longer block PASS",
+    ),
+    Mutation(
+        "admit-testng-listener-annotation",
+        "trusted_execution.py",
+        "NoInjection|Ignore)|Assert|",
+        "NoInjection|Ignore|Listeners)|Assert|",
+        "@Listeners would be admitted next to the witness",
+    ),
+    Mutation(
+        "accept-tampered-dependency-jar",
+        "trusted_execution.py",
+        "                result[\"tampered_jars\"].append(str(rel_path))",
+        "                pass",
+        "a dependency jar the candidate account rewrote would be admitted",
+    ),
+    Mutation(
+        "ignore-failed-trusted-compile",
+        "qualify.py",
+        "        elif isinstance(code, bool) or code != 0:",
+        "        elif False:",
+        "a required class trusted javac did not produce could load from candidate bytecode",
+    ),
+    Mutation(
+        "integrity-record-without-account",
+        "sandbox.py",
+        "        \"user\": user,\n        \"users\": users,",
+        "        \"users\": users,",
+        "every real run would be FAIL: qualify could never PASS",
+    ),
+    Mutation(
+        "verify-against-own-head",
+        "../workflows/forge-candidate-qualification.yml",
+        '--trusted-sha "$AUTHORITY_SHA"',
+        '--trusted-sha "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"',
+        "trusted-file re-derivation would compare the checkout with itself",
+    ),
+    Mutation(
+        "allow-testng-listener-in-candidate-loader",
+        "witness/forge/d17/witness/Containment.java",
+        '            if (name.startsWith("org.testng.")) {\n',
+        '            if (name.startsWith("org.testng.") && !name.equals("org.testng.annotations.Listeners")) {\n',
+        "computed-name candidate bytecode could resolve @Listeners authority",
+    ),
+    Mutation(
+        "expose-trusted-dependency-bridge-as-candidate-parent",
+        "witness/forge/d17/witness/Containment.java",
+        "            super(urls, ClassLoader.getPlatformClassLoader());\n            this.dependencies = dependencies;\n",
+        "            super(urls, dependencies);\n            this.dependencies = dependencies;\n",
+        "candidate code could obtain its parent loader and load trusted TestNG authority through it",
+    ),
+    Mutation(
+        "allow-runtime-class-definition-in-candidate-domain",
+        "witness/forge/d17/witness/Containment.java",
+        '                        || name.equals("defineClass")\n',
+        '',
+        "runtime-defined candidate bytecode could bypass the intended permission boundary",
+    ),
+    Mutation(
+        "ignore-canonical-symlink-target",
+        "witness/forge/d17/witness/Containment.java",
+        '                        || canonicalUnix.equals("/proc") || canonicalUnix.startsWith("/proc/")) {\n',
+        '                        || false) {\n',
+        "a pre-existing symlink planted before the JVM could alias procfs behind a benign lexical path",
+    ),
+    Mutation(
+        "allow-procfs-alias-or-write-bypass",
+        "witness/forge/d17/witness/Containment.java",
+        '                if (unix.equals("/proc") || unix.startsWith("/proc/")\n'
+        '                        || canonicalUnix.equals("/proc") || canonicalUnix.startsWith("/proc/")) {\n',
+        '                if (unix.equals("/proc/self/mem") && actions.contains("read")) {\n',
+        "procfs aliases or write-only process-memory access could bypass containment",
+    ),
+    Mutation(
+        "retain-trusted-loader-handle-in-candidate-domain",
+        "witness/forge/d17/witness/Containment.java",
+        '    static final class CandidateCodeLoader extends URLClassLoader {\n'
+        '        private final DependencyLoader dependencies;\n'
+        '        private volatile Guard guard;\n',
+        '    static final class CandidateCodeLoader extends URLClassLoader {\n'
+        '        private final DependencyLoader dependencies;\n'
+        '        private final ClassLoader trusted = Containment.class.getClassLoader();\n'
+        '        private volatile Guard guard;\n',
+        "the hostile candidate loader would retain a direct trusted system-loader authority handle",
+    ),
+    Mutation(
+        "retain-trusted-loader-handle-in-dependency-domain",
+        "witness/forge/d17/witness/Containment.java",
+        '    static final class DependencyLoader extends URLClassLoader {\n'
+        '        private volatile Guard guard;\n',
+        '    static final class DependencyLoader extends URLClassLoader {\n'
+        '        private final ClassLoader trusted = Containment.class.getClassLoader();\n'
+        '        private volatile Guard guard;\n',
+        "the hostile-tainted dependency loader would retain a direct trusted system-loader authority handle",
+    ),
+    Mutation(
+        "bridge-testng-through-dependency-loader",
+        "witness/forge/d17/witness/Containment.java",
+        '                denyAuthority("dependency attempted to load trusted authority class " + name);\n'
+        '                throw new ClassNotFoundException(\n'
+        '                        "D17 trusted authority package is not dependency-visible: " + name);\n',
+        '                return Class.forName(name);\n',
+        "candidate code could route TestNG authority through a generic dependency classloader deputy",
+    ),
+    Mutation(
+        "trust-dependency-domain-as-confused-deputy",
+        "witness/forge/d17/witness/Containment.java",
+        '                if (loader == candidate || loader == dependencies) {\n',
+        '                if (loader == candidate) {\n',
+        "candidate code could delegate a delayed sensitive operation to a dependency-only thread",
+        runtime=(
+            "HostileBytecodeContainmentRuntimeControls."
+            "test_trusted_dependency_cannot_be_used_as_async_confused_deputy",
+            "HostileBytecodeContainmentRuntimeControls."
+            "test_dependency_frame_is_hostile_beneath_trusted_testng_authority",
+        ),
+    ),
+    Mutation(
+        "trust-jdk-deputy-beneath-active-testng-invocation",
+        "witness/forge/d17/witness/Containment.java",
+        '            if (invocationDepth.get().intValue() > 0) {\n'
+        '                if (activeCounter) {\n'
+        '                    return CONTEXT_TRUSTED_AUTHORITY;\n'
+        '                }\n'
+        '                if (trustedTestFrame) {\n'
+        '                    return CONTEXT_UNTRUSTED_ASYNC;\n'
+        '                }\n'
+        '                return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n'
+        '            }\n',
+        '',
+        "a candidate-supplied pure-JDK synchronous deputy could borrow a lower TestNG frame's trusted authority",
+    ),
+    Mutation(
+        "let-deep-driver-lend-active-invocation-authority",
+        "witness/forge/d17/witness/Containment.java",
+        '                if (trustedTestFrame) {\n'
+        '                    return CONTEXT_UNTRUSTED_ASYNC;\n'
+        '                }\n',
+        '',
+        "the permanently deep TestNG/driver stack could authorize a candidate-supplied pure-JDK synchronous deputy",
+    ),
+    Mutation(
+        "drop-testng-invocation-barrier-hooks",
+        "witness/forge/d17/witness/QualifiedExecutionCounter.java",
+        '        if (method != null) {\n'
+        '            containment.enterInvocation();\n'
+        '        }\n',
+        '',
+        "trusted TestNG invocation would not activate the synchronous-deputy containment barrier",
+    ),
+    Mutation(
+        "reenter-security-manager-during-authority-loader-inspection",
+        "witness/forge/d17/witness/Containment.java",
+        '                ClassLoader loader = classLoaderOf(frame);\n',
+        '                ClassLoader loader = frame.getClassLoader();\n',
+        "guard-internal loader inspection would recursively re-enter RuntimePermission(getClassLoader)",
+        runtime=(
+            "ParentReceiptRuntimeControls."
+            "test_honest_candidate_code_completes_without_receipt_credentials",
+            "HostileBytecodeContainmentRuntimeControls."
+            "test_parent_loader_is_structurally_cut_off_from_testng",
+        ),
+    ),
+    Mutation(
+        "reenter-package-access-during-authority-loader-inspection",
+        "witness/forge/d17/witness/Containment.java",
+        '        public void checkPackageAccess(String pkg) {\n'
+        '            if (Boolean.TRUE.equals(inspectingClassLoader.get())) {\n'
+        '                // Class#getClassLoader may cause JDK class loading which re-enters\n'
+        '                // package checks. This is guard-internal authority inspection;\n'
+        '                // no candidate callback executes while the flag is set.\n'
+        '                return;\n'
+        '            }\n',
+        '        public void checkPackageAccess(String pkg) {\n',
+        "guard-internal Class#getClassLoader package checks would recursively re-enter authority inspection",
+    ),
+    Mutation(
+        "trust-arbitrary-bootstrap-deputy-during-testng-package-check",
+        "witness/forge/d17/witness/Containment.java",
+        '                if (name.startsWith("java.lang.ClassLoader")\n'
+        '                        || name.equals("java.security.AccessController")\n'
+        '                        || name.equals("jdk.internal.loader.ClassLoaders$AppClassLoader")\n'
+        '                        || name.equals("forge.d17.witness.Containment$TrustedTestLoader")) {\n'
+        '                    sawPackageCheckFrame = true;\n'
+        '                    continue;\n'
+        '                }\n',
+        '                if (loader == null) {\n'
+        '                    sawPackageCheckFrame = true;\n'
+        '                    continue;\n'
+        '                }\n',
+        "arbitrary bootstrap/JDK deputy frames could become transparent and borrow trusted-test TestNG package authority",
+    ),
+    Mutation(
+        "trust-jdk-only-asynchronous-authority",
+        "witness/forge/d17/witness/Containment.java",
+        '            // A JDK-only asynchronous task has neither a hostile frame nor an\n'
+        '            // explicit trusted authority frame. Treat it as untrusted so a\n'
+        '            // candidate cannot shed its taint through a configured JDK deputy.\n'
+        '            return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;\n',
+        '            // A JDK-only asynchronous task has neither a hostile frame nor an\n'
+        '            // explicit trusted authority frame. Treat it as untrusted so a\n'
+        '            // candidate cannot shed its taint through a configured JDK deputy.\n'
+        '            return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_TRUSTED_AUTHORITY;\n',
+        "a candidate-configured JDK-only asynchronous deputy could shed hostile stack taint",
+    ),
+    Mutation(
+        "reopen-sun-reflection-internals",
+        "witness/forge/d17/witness/Containment.java",
+        '                    || pkg.startsWith("sun.")\n',
+        '                    || pkg.startsWith("sun.misc")\n',
+        "candidate code could reach sun.reflect.ReflectionFactory and related internal reflection helpers",
+    ),
+    Mutation(
+        "allow-procfs-symlink-alias-creation",
+        "witness/forge/d17/witness/Containment.java",
+        '            } else if (permission.getClass().getName().equals("java.nio.file.LinkPermission")) {\n'
+        '                deny(actor + " filesystem link permission " + name);\n',
+        '            } else if (false) {\n'
+        '                deny(actor + " filesystem link permission " + name);\n',
+        "candidate code could create a runtime symlink that aliases procfs outside the lexical /proc path",
+    ),
+    Mutation(
+        "allow-arbitrary-direct-system-properties-mutation",
+        "witness/forge/d17/witness/Containment.java",
+        '            if (guard.authorityRestrictedContext()) {\n'
+        '                // The Properties object is process-global trusted runtime state.\n',
+        '            if (guard.candidateInContext() && sensitiveProperty(String.valueOf(key))) {\n'
+        '                // The Properties object is process-global trusted runtime state.\n',
+        "candidate code could mutate unlisted process-global properties",
+    ),
+    Mutation(
+        "drop-put-if-absent-property-guard",
+        "witness/forge/d17/witness/Containment.java",
+        '        public synchronized Object putIfAbsent(Object key, Object value) {\n'
+        '            checkKey(key);\n'
+        '            return super.putIfAbsent(key, value);\n'
+        '        }\n',
+        '        public synchronized Object putIfAbsent(Object key, Object value) {\n'
+        '            return super.putIfAbsent(key, value);\n'
+        '        }\n',
+        "candidate code could mutate global properties through putIfAbsent",
+    ),
+    Mutation(
+        "expose-mutable-properties-entryset-view",
+        "witness/forge/d17/witness/Containment.java",
+        '        public Set<Map.Entry<Object, Object>> entrySet() {\n'
+        '            if (guard.authorityRestrictedContext()) {\n'
+        '                guard.deny("untrusted mutable Properties.entrySet view");\n'
+        '            }\n'
+        '            return super.entrySet();\n'
+        '        }\n',
+        '        public Set<Map.Entry<Object, Object>> entrySet() {\n'
+        '            return super.entrySet();\n'
+        '        }\n',
+        "candidate code could mutate global properties through Map.Entry.setValue",
+    ),
+    Mutation(
+        "reduce-candidate-qualification-to-java21-only",
+        "../workflows/forge-candidate-qualification.yml",
+        '        java: ["17", "21"]\n',
+        '        java: ["21"]\n',
+        "one supported JDK would silently leave the exact-candidate trust boundary unqualified",
+    ),
+    # --- dispatch and frozen launches (review e05e6f17) -------------------- #
+    Mutation(
+        "credit-pass-without-dispatch",
+        "qualify.py",
+        '        if status == "PASS" and record.get("invoked") is not True:',
+        "        if False:",
+        "a TestNG dry-run success would be credited as an executed PASS",
+    ),
+    Mutation(
+        "put-candidate-bytecode-on-system-classpath",
+        "trusted_execution.py",
+        '    full_cp = assemble_classpath(bundle / "witness", staged_testng)\n',
+        '    full_cp = assemble_classpath(bundle / "witness", staged_testng + list(candidate_code_entries))\n',
+        "candidate production bytecode would share the trusted system-loader authority domain",
+    ),
+]
+
+
+def stage(root: Path) -> Path:
+    """Materialize a runnable copy of the real qualification layout under ``root``."""
+    qualification = root / ".github" / "qualification"
+    workflows = root / ".github" / "workflows"
+    qualification.mkdir(parents=True, exist_ok=True)
+    workflows.mkdir(parents=True, exist_ok=True)
+    for name in PRODUCT:
+        shutil.copy2(HERE / name, qualification / name)
+    shutil.copytree(HERE / "witness", qualification / "witness", dirs_exist_ok=True)
+    for name in WORKFLOWS:
+        shutil.copy2(HERE.parent / "workflows" / name, workflows / name)
+    return qualification
+
+
+def run_controls(root: Path) -> "tuple[int, str]":
+    proc = subprocess.run(
+        [sys.executable, str(root / "qualification_selftest.py")],
+        cwd=str(root), capture_output=True, text=True, check=False,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def run_runtime_controls(root: Path, tests: "tuple[str, ...]") -> "tuple[int, str]":
+    """Run named real-JVM controls against the staged copy, toolchain required.
+
+    D17_REQUIRE_TOOLCHAIN=1 turns a missing JDK, TestNG closure or sandbox into
+    an error rather than a skip, so an unavailable runtime can never read as a
+    green baseline or as a killed mutant.
+    """
+    env = dict(os.environ)
+    env["D17_REQUIRE_TOOLCHAIN"] = "1"
+    proc = subprocess.run(
+        [sys.executable, "-m", "unittest", "-v"]
+        + ["{}.{}".format(RUNTIME_MODULE, test) for test in tests],
+        cwd=str(root), env=env, capture_output=True, text=True, check=False,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def failing_tests(output: str) -> "set[str]":
+    names = set()
+    for line in output.splitlines():
+        line = line.strip()
+        for marker in ("FAIL: ", "ERROR: "):
+            if line.startswith(marker):
+                names.add(line[len(marker):].split(" ")[0])
+    return names
+
+
+def main() -> int:
+    scratch = Path(tempfile.mkdtemp(prefix="forge-d17-mutation-"))
+    survived = []
+    undetected = []
+    runtime_survived = []
+    try:
+        baseline_root = stage(scratch / "baseline")
+        code, output = run_controls(baseline_root)
+        if code != 0:
+            sys.stderr.write("baseline control suite is not green:\n{}\n".format(output[-4000:]))
+            return 1
+        print("baseline           : GREEN ({} controls)".format(output.count(" ... ")))
+        runtime_tests = tuple(sorted({test for mutation in MUTATIONS for test in mutation.runtime}))
+        if runtime_tests:
+            code, output = run_runtime_controls(baseline_root, runtime_tests)
+            ran = output.count(" ... ok")
+            if code != 0 or ran != len(runtime_tests):
+                sys.stderr.write("baseline runtime controls are not green ({}/{} ok):\n{}\n".format(
+                    ran, len(runtime_tests), output[-4000:]))
+                return 1
+            print("baseline runtime   : GREEN ({} full-path controls)".format(ran))
+
+        for index, mutation in enumerate(MUTATIONS):
+            root = stage(scratch / "mutant-{}".format(index))
+            mutation.apply(root)
+            code, output = run_controls(root)
+            if code == 0:
+                survived.append(mutation.name)
+                print("SURVIVED           : {}".format(mutation.name))
+            else:
+                detected = failing_tests(output)
+                print("detected ({:>2} red) : {}  [{}]".format(
+                    len(detected), mutation.name, mutation.expected))
+                if not detected:
+                    undetected.append(mutation.name)
+            if mutation.runtime:
+                # Independent of the structural result: the named full-path
+                # controls must themselves go red on the mutated guard.
+                code, output = run_runtime_controls(root, mutation.runtime)
+                red = failing_tests(output)
+                if code == 0 or not red:
+                    runtime_survived.append(mutation.name)
+                    print("RUNTIME-SURVIVED   : {}".format(mutation.name))
+                else:
+                    print("runtime  ({:>2} red) : {}".format(len(red), mutation.name))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    print("")
+    print("mutations          : {}".format(len(MUTATIONS)))
+    print("detected           : {}".format(len(MUTATIONS) - len(survived)))
+    print("survived           : {}".format(len(survived)))
+    print("runtime survived   : {}".format(len(runtime_survived)))
+    if survived or undetected or runtime_survived:
+        for name in survived:
+            print("  SURVIVED  {}".format(name))
+        for name in undetected:
+            print("  NO-RED    {}".format(name))
+        for name in runtime_survived:
+            print("  RUNTIME-SURVIVED  {}".format(name))
+        return 1
+    print("")
+    print("all mutations detected: the controls are non-vacuous")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

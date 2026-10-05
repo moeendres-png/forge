@@ -1,0 +1,1857 @@
+#!/usr/bin/env python3
+"""Trusted orchestration of exact-SHA candidate qualification execution.
+
+Trust boundary
+--------------
+This module runs from the trusted default-branch checkout. It owns the required
+surface, build admission, external receipt authority and final execution
+manifest. Candidate-authored reports and test bodies carry no credit.
+
+The trusted comparison base supplies:
+* the Surefire discovery policy and TestNG dry-run denominator;
+* the qualification test bodies;
+* Maven/plugin authority and the D20 known-NOT_RUN baseline.
+
+Candidate production code is compiled as an untrusted build UID, admitted and
+frozen, then executed as a distinct untrusted UID behind the mandatory
+classloader/SecurityManager containment boundary. Trusted test bytecode is
+authoritatively compiled only against comparison-base production/dependencies.
+A separate candidate-sensitive compatibility compile receives no authority and
+must be byte-identical before any execution can receive credit.
+
+The candidate JVM is deliberately receiptless: it receives no receipt key,
+parent run ID or trusted evidence path. A trusted child counter validates exact
+per-class dispatch counts, failures and skip classes and returns only a bounded
+OS exit status. The external trusted parent interprets that status fail-closed
+and, only after successful completion, writes the credited parent receipt under
+the runner-owned evidence directory. Receipts are bound to a parent-only run ID,
+SHA-256 digests and the final trusted-state integrity seal.
+
+D20/#501 owns general persisted JUnit/timing provenance and retention. D17 owns
+only the minimum trusted exact-SHA execution receipts required to prevent
+candidate build artifacts, plugins, tests or hostile production bytecode from
+manufacturing qualification credit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import stat
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+REQUIRED_SURFACE_SCHEMA = "forge.candidate-qualification.required-surface/2"
+EXECUTION_MANIFEST_SCHEMA = "forge.candidate-qualification.execution-manifest/2"
+WITNESS_SCHEMA = "forge.d17.parent-os-receipt/1"
+
+#: Trusted JVM flags, taken from the trusted comparison base rather than from the
+#: candidate POM so that a candidate cannot remove them to change behaviour.
+DEFAULT_TRUSTED_ARGLINE = [
+    "--add-opens", "java.base/java.lang=ALL-UNNAMED",
+    "--add-opens", "java.base/java.time=ALL-UNNAMED",
+    "--add-opens", "java.base/java.text=ALL-UNNAMED",
+    "--add-opens", "java.base/java.util=ALL-UNNAMED",
+    "--add-opens", "java.base/java.util.regex=ALL-UNNAMED",
+    "--add-opens", "java.base/java.util.stream=ALL-UNNAMED",
+    "--add-opens", "java.base/java.lang.reflect=ALL-UNNAMED",
+    "--add-opens", "java.desktop/javax.imageio.spi=ALL-UNNAMED",
+]
+
+#: Surefire's default test include patterns, reproduced here so the trusted
+#: required surface matches what Forge's existing gate would have discovered.
+#: These are globs, matched with real glob semantics.
+TEST_INCLUDE_PATTERNS = ("Test*.java", "*Test.java", "*Tests.java", "*TestCase.java")
+
+#: D20 is now canonical for named known-NOT_RUN categories. D17 still
+#: independently derives a generic source-level @Test gap, so this baseline can
+#: never grant PASS by omission.
+D20_KNOWN_NOT_RUN_PATH = ".github/ci/known-not-run.json"
+D20_KNOWN_NOT_RUN_SCHEMA = "forge.known-not-run/2"
+
+D22_DISABLED_CLASS = "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
+D22_DISABLED_METHOD = "test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses"
+
+COUNTER_CLASS = "forge.d17.witness.QualifiedExecutionCounter"
+COUNTER_SOURCE = "witness/forge/d17/witness/QualifiedExecutionCounter.java"
+
+
+class ExecutionError(Exception):
+    """The trusted execution could not be completed. Always fail closed."""
+
+
+def log(message: str) -> None:
+    sys.stdout.write("d17-exec: {}\n".format(message))
+    sys.stdout.flush()
+
+
+def run(argv, cwd, timeout=None, env=None):
+    """Run a subprocess and capture its result without raising."""
+    merged = dict(os.environ)
+    if env:
+        merged.update(env)
+    try:
+        proc = subprocess.run(
+            argv, cwd=str(cwd), capture_output=True, text=True,
+            check=False, timeout=timeout, env=merged,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout after {}s".format(timeout)
+    except OSError as exc:
+        return 127, "", str(exc)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def git(repo: Path, *args: str) -> str:
+    proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True,
+                          text=True, check=False)
+    if proc.returncode != 0:
+        raise ExecutionError("git {} failed: {}".format(" ".join(args), proc.stderr.strip()))
+    return proc.stdout.strip()
+
+
+# --------------------------------------------------------------------------- #
+# Required surface: what the trusted comparison base would execute
+# --------------------------------------------------------------------------- #
+
+
+def build_definition_divergence(repo: Path, comparison_base: str, candidate_sha: str) -> "list[str]":
+    """Return candidate changes that can alter Maven/plugin execution authority.
+
+    D17 qualifies production source under the trusted comparison-base build
+    definition. A candidate may not change a POM, Maven core-extension/config
+    file or wrapper and still receive qualification credit: doing so would let a
+    candidate-controlled plugin/build definition manufacture the bytecode under
+    test.
+    """
+    changed = git(repo, "diff", "--name-only", comparison_base, candidate_sha).splitlines()
+    return sorted(path for path in changed if (
+        path == "pom.xml"
+        or path.endswith("/pom.xml")
+        or path == "mvnw"
+        or path == "mvnw.cmd"
+        or path.startswith(".mvn/")
+    ))
+
+
+def trusted_reactor_modules(repo: Path, base: str) -> "list[str]":
+    """Recursively enumerate Maven reactor module paths from trusted Git POMs."""
+    found = set()
+    visiting = set()
+
+    def children(pom_path: str, module_dir: str) -> None:
+        if pom_path in visiting:
+            raise ExecutionError("recursive Maven module declaration at {}".format(pom_path))
+        visiting.add(pom_path)
+        try:
+            source = git(repo, "show", "{}:{}".format(base, pom_path))
+            root = ET.fromstring(source)
+        except (ExecutionError, ET.ParseError) as exc:
+            raise ExecutionError("cannot parse trusted reactor POM {}: {}".format(pom_path, exc))
+        modules_nodes = [
+            node for node in list(root) if node.tag.rsplit("}", 1)[-1] == "modules"
+        ]
+        for modules_node in modules_nodes:
+            for child in list(modules_node):
+                if child.tag.rsplit("}", 1)[-1] != "module":
+                    continue
+                raw = (child.text or "").strip().replace("\\", "/")
+                if not raw:
+                    continue
+                rel = os.path.normpath(os.path.join(module_dir, raw)).replace("\\", "/")
+                if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+                    raise ExecutionError("trusted reactor module escapes repository: {}".format(raw))
+                if rel in found:
+                    continue
+                found.add(rel)
+                nested_pom = rel + "/pom.xml"
+                try:
+                    git(repo, "cat-file", "-e", "{}:{}".format(base, nested_pom))
+                except ExecutionError:
+                    raise ExecutionError("trusted reactor module has no POM: {}".format(rel))
+                children(nested_pom, rel)
+        visiting.remove(pom_path)
+
+    children("pom.xml", "")
+    return sorted(found)
+
+
+def _surefire_includes_from_pom(source: str) -> "list[str]":
+    try:
+        root = ET.fromstring(source)
+    except ET.ParseError as exc:
+        raise ExecutionError("trusted POM is malformed: {}".format(exc))
+
+    def local(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1]
+
+    found = []
+    for plugin in root.iter():
+        if local(plugin.tag) != "plugin":
+            continue
+        artifact = None
+        configuration = None
+        for child in list(plugin):
+            if local(child.tag) == "artifactId":
+                artifact = (child.text or "").strip()
+            elif local(child.tag) == "configuration":
+                configuration = child
+        if artifact != "maven-surefire-plugin" or configuration is None:
+            continue
+        for node in list(configuration):
+            if local(node.tag) != "includes":
+                continue
+            for include in list(node):
+                if local(include.tag) == "include" and (include.text or "").strip():
+                    found.append((include.text or "").strip().replace("\\", "/"))
+    return found
+
+
+def surefire_include_patterns(repo: Path, module: str, base: str) -> "list[str]":
+    """Trusted effective include policy for the current Forge POM structure.
+
+    Root pluginManagement provides the default Surefire configuration. A module
+    that explicitly declares Surefire <includes> owns the test discovery policy
+    for that module; otherwise Maven's default filename patterns apply.
+    """
+    module_pom = git(repo, "show", "{}:{}/pom.xml".format(base, module))
+    explicit = _surefire_includes_from_pom(module_pom)
+    if explicit:
+        return explicit
+    root_pom = git(repo, "show", "{}:pom.xml".format(base))
+    inherited = _surefire_includes_from_pom(root_pom)
+    return inherited or list(TEST_INCLUDE_PATTERNS)
+
+
+def trusted_reactor_artifacts(repo: Path, base: str) -> dict:
+    """Map trusted reactor artifactId -> module path for sibling replacement."""
+    artifacts = {}
+    for module in trusted_reactor_modules(repo, base):
+        source = git(repo, "show", "{}:{}/pom.xml".format(base, module))
+        try:
+            root = ET.fromstring(source)
+        except ET.ParseError as exc:
+            raise ExecutionError("cannot parse trusted module POM {}: {}".format(module, exc))
+        artifact_id = None
+        for child in list(root):
+            if child.tag.rsplit("}", 1)[-1] == "artifactId":
+                artifact_id = (child.text or "").strip()
+                break
+        if not artifact_id:
+            raise ExecutionError("trusted reactor module has no artifactId: {}".format(module))
+        if artifact_id in artifacts and artifacts[artifact_id] != module:
+            raise ExecutionError(
+                "duplicate trusted reactor artifactId {}: {}, {}".format(
+                    artifact_id, artifacts[artifact_id], module))
+        artifacts[artifact_id] = module
+    return artifacts
+
+
+def required_classes_for_module(repo: Path, module: str, base: str) -> "list[str]":
+    """Baseline required test classes, read from trusted Git/POM data only."""
+    listing = git(repo, "ls-tree", "-r", "--name-only", base, "--",
+                  "{}/src/test/java".format(module))
+    patterns = surefire_include_patterns(repo, module, base)
+    prefix = module + "/src/test/java/"
+    classes = []
+    for path in sorted(listing.splitlines()):
+        if not path.startswith(prefix) or not path.endswith(".java"):
+            continue
+        rel = path[len(prefix):]
+        name = rel.rsplit("/", 1)[-1]
+        matches = any(
+            fnmatch.fnmatch(rel, pattern) if "/" in pattern
+            else fnmatch.fnmatch(name, pattern)
+            for pattern in patterns
+        )
+        if not matches:
+            continue
+        classes.append(rel[:-len(".java")].replace("/", "."))
+    return classes
+
+
+def module_classpath(module_dir: Path, relative_cp: str) -> "list[str]":
+    """Classpath entries for a module: its own outputs then its dependencies."""
+    entries = [str(module_dir / "target" / "test-classes"), str(module_dir / "target" / "classes")]
+    deps = (module_dir / relative_cp).read_text().strip() if (module_dir / relative_cp).is_file() else ""
+    entries.extend([entry for entry in deps.split(":") if entry])
+    return entries
+
+
+def resolve_testng_jar(entries: "list[str]") -> str:
+    for entry in entries:
+        if os.path.basename(entry).startswith("testng-") and entry.endswith(".jar"):
+            return entry
+    raise ExecutionError("TestNG is not present on the resolved test classpath")
+
+
+def compile_and_resolve(repo: Path, modules, cp_rel, label: str):
+    """Compile the reactor and resolve each module's test classpath.
+
+    Invoked from the reactor root because Forge uses CI-friendly ``${revision}``
+    versions, which a single-module build cannot resolve.  ``cp_rel`` is relative
+    so each module writes its own file under its own ``target/``.
+    """
+    # -am is required: Forge uses CI-friendly ${revision} versions, so a module
+    # cannot resolve its siblings unless they are in the reactor.
+    selection = ["-pl", ",".join(modules), "-am"]
+    code, _, err = run(["mvn", "-B", "-q", "-DskipTests", "test-compile"] + selection,
+                       repo, timeout=14400)
+    if code != 0:
+        raise ExecutionError("{} test-compile failed: {}".format(label, err[-800:]))
+    code, _, err = run(["mvn", "-B", "-q", "dependency:build-classpath",
+                        "-Dmdep.outputFile=" + cp_rel, "-DincludeScope=test"] + selection,
+                       repo, timeout=14400)
+    if code != 0:
+        raise ExecutionError("{} classpath resolution failed: {}".format(label, err[-800:]))
+    for module in modules:
+        if not (repo / module / cp_rel).is_file():
+            raise ExecutionError(
+                "{} classpath missing for module {} (did the module build?)".format(label, module)
+            )
+
+
+def compile_trusted_policy_production(repo: Path, modules, cp_rel: str, mvn: str,
+                                      trusted_maven_repo: Path) -> None:
+    """Build only trusted comparison-base production inputs for test compilation.
+
+    This runs from the byte-verified comparison-base export with the trusted
+    staged Maven/JDK and trusted read-only Maven repository. Candidate bytecode
+    never participates in this authoritative compilation universe.
+    """
+    selection = ["-pl", ",".join(modules), "-am"]
+    code, _, err = run(
+        [mvn, "-o", "-B", "-q",
+         "-Dmaven.repo.local=" + str(trusted_maven_repo),
+         "-Dmaven.compiler.proc=none", "-DskipTests",
+         "compile", "dependency:build-classpath",
+         "-Dmdep.outputFile=" + cp_rel, "-DincludeScope=test"] + selection,
+        repo, timeout=14400,
+    )
+    if code != 0:
+        raise ExecutionError(
+            "trusted comparison-base production compile/classpath failed: {}".format(
+                err[-1200:]))
+    for module in modules:
+        if not (repo / module / "target" / "classes").is_dir():
+            raise ExecutionError(
+                "trusted comparison-base production classes missing for {}".format(module))
+        if not (repo / module / cp_rel).is_file():
+            raise ExecutionError(
+                "trusted comparison-base dependency classpath missing for {}".format(module))
+
+
+def trusted_policy_compile_entries(comparison_root: Path, module: str, cp_rel: str,
+                                   reactor_artifacts: dict,
+                                   trusted_maven_repo: Path) -> "list[str]":
+    """Exact comparison-base production/dependency classpath for trusted javac.
+
+    Maven dependency:build-classpath may list an installed Forge sibling jar.
+    Replace every such sibling with the comparison-base reactor output so the
+    authoritative test compile is bound to one exact Git tree rather than a
+    stale installed artifact.
+    """
+    entries = [str(comparison_root / module / "target" / "classes")]
+    path = comparison_root / module / cp_rel
+    raw = path.read_text().strip() if path.is_file() else ""
+    seen = set(entries)
+    trusted_maven_repo = Path(trusted_maven_repo).resolve()
+    comparison_root = comparison_root.resolve()
+    for value in [v for v in raw.split(":") if v]:
+        real = Path(os.path.realpath(value))
+        replacement = None
+        try:
+            rel = real.relative_to(trusted_maven_repo)
+        except ValueError:
+            rel = None
+        if rel is not None and len(rel.parts) >= 2 and rel.parts[0] == "forge":
+            artifact_id = rel.parts[1]
+            sibling = reactor_artifacts.get(artifact_id)
+            if sibling:
+                replacement = comparison_root / sibling / "target" / "classes"
+                if not replacement.is_dir():
+                    raise ExecutionError(
+                        "trusted comparison-base reactor output missing for {} -> {}".format(
+                            artifact_id, sibling))
+        if replacement is not None:
+            resolved = str(replacement)
+        elif rel is not None:
+            resolved = str(real)
+        else:
+            try:
+                real.relative_to(comparison_root)
+            except ValueError:
+                raise ExecutionError(
+                    "trusted comparison-base classpath entry outside trusted universes: {}".format(
+                        real))
+            resolved = str(real)
+        if resolved not in seen:
+            entries.append(resolved)
+            seen.add(resolved)
+    return entries
+
+
+def class_digest_differences(reference_root: Path, candidate_root: Path) -> "list[str]":
+    """Classes whose candidate-sensitive compile differs from trusted authority."""
+    reference = class_file_digests(reference_root)
+    candidate = class_file_digests(candidate_root)
+    return sorted(
+        name for name in (set(reference) | set(candidate))
+        if reference.get(name) != candidate.get(name)
+    )
+
+
+def _dryrun_counts(out_dir: Path) -> "tuple[dict[str, int], dict[str, int]]":
+    """Per-class and per-method invocation counts from trusted TestNG dry-run."""
+    results = out_dir / "testng-results.xml"
+    if not results.is_file():
+        raise ExecutionError("dry run produced no testng-results.xml in {}".format(out_dir))
+    try:
+        root = ET.parse(str(results)).getroot()
+    except ET.ParseError as exc:
+        raise ExecutionError("dry-run results are malformed: {}".format(exc))
+    class_counts: "dict[str, int]" = {}
+    method_counts: "dict[str, int]" = {}
+    for element in root.iter("class"):
+        class_name = element.get("name")
+        if not class_name:
+            continue
+        for method in element.iter("test-method"):
+            if method.get("is-config") == "true":
+                continue
+            method_name = method.get("name")
+            if not method_name:
+                raise ExecutionError(
+                    "dry-run test method in {} has no name".format(class_name))
+            class_counts[class_name] = class_counts.get(class_name, 0) + 1
+            key = class_name + "#" + method_name
+            method_counts[key] = method_counts.get(key, 0) + 1
+    return class_counts, method_counts
+
+
+def dryrun_module(repo: Path, module: str, classes, java: str, argline, xvfbrun, cp_rel):
+    """Run TestNG ``-dryrun`` over a byte-verified comparison-base export.
+
+    TestNG's dry run executes no test bodies but resolves the full suite, so its
+    totals are exactly the number of invocations the trusted lineage's own tests
+    would produce. That is the trusted denominator: it comes from the trusted
+    comparison base, so a candidate cannot shrink it.
+    """
+    module_dir = repo / module
+    if not classes:
+        return {"module": module, "classes": [], "required_total": 0,
+                "required_passed": 0, "required_skipped": 0, "required_failed": 0}
+
+    entries = module_classpath(module_dir, cp_rel)
+    resolve_testng_jar(entries)
+    out_dir = module_dir / "target" / "d17-dryrun"
+    shutil.rmtree(out_dir, ignore_errors=True)
+    cmd = [java] + list(argline) + ["-cp", ":".join(entries), "org.testng.TestNG",
+                                  "-d", str(out_dir), "-dryrun",
+                                  "-testclass", ",".join(classes)]
+    code, stdout, stderr = run(xvfbrun + cmd, module_dir, timeout=7200)
+    totals = _parse_testng_totals(stdout + stderr)
+    if totals is None:
+        raise ExecutionError("could not read TestNG dry-run totals for {}".format(module))
+    class_counts, method_counts = _dryrun_counts(out_dir)
+    if sum(class_counts.values()) != totals["total"] or sum(method_counts.values()) != totals["total"]:
+        raise ExecutionError(
+            "dry-run XML/console denominator mismatch for {}: total={} class_sum={} method_sum={}".format(
+                module, totals["total"], sum(class_counts.values()), sum(method_counts.values())
+            )
+        )
+    executable = sorted(class_counts)
+    return {
+        "module": module,
+        "classes": executable,
+        "candidate_classes_considered": len(classes),
+        "class_counts": class_counts,
+        "method_counts": method_counts,
+        "required_total": totals["total"],
+        "required_passed": totals["passed"],
+        "required_failed": totals["failed"],
+        "required_skipped": totals["skipped"],
+    }
+
+
+_TOTAL_RE = re.compile(
+    r"Total tests run:\s*(\d+),\s*Passes:\s*(\d+),\s*Failures:\s*(\d+),\s*Skips:\s*(\d+)"
+)
+
+
+def _parse_testng_totals(text: str):
+    match = None
+    for match in _TOTAL_RE.finditer(text):
+        pass
+    if match is None:
+        return None
+    return {
+        "total": int(match.group(1)),
+        "passed": int(match.group(2)),
+        "failed": int(match.group(3)),
+        "skipped": int(match.group(4)),
+    }
+
+
+def _source_test_classes(repo: Path, base: str, modules) -> set:
+    found = set()
+    for module in modules:
+        listing = git(repo, "ls-tree", "-r", "--name-only", base, "--",
+                      "{}/src/test/java".format(module))
+        prefix = module + "/src/test/java/"
+        for path in listing.splitlines():
+            if path.startswith(prefix) and path.endswith(".java"):
+                found.add(path[len(prefix):-len(".java")].replace("/", "."))
+    return found
+
+
+def _git_blob_bytes(repo: Path, spec: str) -> bytes:
+    proc = subprocess.run(
+        ["git", "show", spec], cwd=str(repo), capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise ExecutionError(
+            "git show {} failed: {}".format(
+                spec, proc.stderr.decode("utf-8", "replace").strip()))
+    return proc.stdout
+
+
+def _source_path_for_class(repo: Path, base: str, modules, class_name: str) -> "str | None":
+    suffix = class_name.replace(".", "/") + ".java"
+    for module in modules:
+        path = "{}/src/test/java/{}".format(module, suffix)
+        proc = subprocess.run(
+            ["git", "cat-file", "-e", "{}:{}".format(base, path)],
+            cwd=str(repo), capture_output=True, check=False)
+        if proc.returncode == 0:
+            return path
+    return None
+
+
+def _d20_known_not_run(repo: Path, base: str) -> dict:
+    try:
+        raw = _git_blob_bytes(repo, "{}:{}".format(base, D20_KNOWN_NOT_RUN_PATH))
+        data = json.loads(raw.decode("utf-8"))
+    except (ExecutionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ExecutionError("trusted D20 known-NOT_RUN baseline unavailable: {}".format(exc))
+    if data.get("schema") != D20_KNOWN_NOT_RUN_SCHEMA:
+        raise ExecutionError(
+            "trusted D20 known-NOT_RUN schema is {!r}, expected {!r}".format(
+                data.get("schema"), D20_KNOWN_NOT_RUN_SCHEMA))
+    for key in ("source_test_classes_not_observed", "framework_blockers"):
+        if not isinstance(data.get(key), list) or not all(
+                isinstance(item, str) and item for item in data[key]):
+            raise ExecutionError("trusted D20 baseline has invalid {}".format(key))
+    disabled = data.get("intentionally_disabled_source_classes")
+    if not isinstance(disabled, dict) or not all(
+            isinstance(name, str) and isinstance(digest, str)
+            and re.fullmatch(r"[0-9a-f]{64}", digest)
+            for name, digest in disabled.items()):
+        raise ExecutionError("trusted D20 baseline has invalid disabled-source hashes")
+    return data
+
+
+def _source_for_class(repo: Path, base: str, modules, class_name: str) -> "str | None":
+    suffix = class_name.replace(".", "/") + ".java"
+    for module in modules:
+        path = "{}/src/test/java/{}".format(module, suffix)
+        try:
+            return git(repo, "show", "{}:{}".format(base, path))
+        except ExecutionError:
+            continue
+    return None
+
+
+def _java_code_only(source: str) -> str:
+    """Blank comments and string/char literals while preserving code/newlines.
+
+    Source-level TestNG annotation inventory is evidence, so comment examples or
+    string literals containing @Test must not create synthetic obligations.
+    """
+    out = []
+    i, state = 0, "code"
+    while i < len(source):
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                out.extend("  "); i += 2; state = "line"; continue
+            if ch == "/" and nxt == "*":
+                out.extend("  "); i += 2; state = "block"; continue
+            if source.startswith('"""', i):
+                out.extend("   "); i += 3; state = "textblock"; continue
+            if ch == '"':
+                out.append(" "); i += 1; state = "string"; continue
+            if ch == "'":
+                out.append(" "); i += 1; state = "char"; continue
+            out.append(ch); i += 1; continue
+        if state == "line":
+            if ch == "\n":
+                out.append("\n"); state = "code"
+            else:
+                out.append(" ")
+            i += 1; continue
+        if state == "block":
+            if ch == "*" and nxt == "/":
+                out.extend("  "); i += 2; state = "code"; continue
+            out.append("\n" if ch == "\n" else " "); i += 1; continue
+        if state == "textblock":
+            if source.startswith('"""', i):
+                out.extend("   "); i += 3; state = "code"; continue
+            out.append("\n" if ch == "\n" else " "); i += 1; continue
+        if state in ("string", "char"):
+            quote = '"' if state == "string" else "'"
+            if ch == "\\":
+                out.append(" ")
+                if i + 1 < len(source):
+                    out.append("\n" if source[i + 1] == "\n" else " ")
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if ch == quote:
+                out.append(" "); i += 1; state = "code"; continue
+            out.append("\n" if ch == "\n" else " "); i += 1
+    return "".join(out)
+
+
+def _testng_annotation_inventory(repo: Path, base: str, modules, classes) -> dict:
+    """Transparent source-level obligations for TestNG test source.
+
+    This is not substituted for real execution. It records trusted-source @Test
+    annotations so silently undiscovered test classes cannot disappear behind
+    the executable dry-run denominator.
+    """
+    inventory = {}
+    for class_name in sorted(classes):
+        source = _source_for_class(repo, base, modules, class_name)
+        if source is None:
+            inventory[class_name] = {"source_present": False}
+            continue
+        code = _java_code_only(source)
+        simple_testng_test = bool(re.search(
+            r"\bimport\s+org\.testng\.annotations\.(?:Test|\*)\s*;", code))
+        pattern = (
+            r"@(?:org\.testng\.annotations\.Test|Test)\b(?:\s*\((.*?)\))?"
+            if simple_testng_test else
+            r"@org\.testng\.annotations\.Test\b(?:\s*\((.*?)\))?"
+        )
+        annotations = list(re.finditer(pattern, code, re.S))
+        disabled = 0
+        disabled_members = []
+        for match in annotations:
+            args = match.group(1) or ""
+            if not re.search(r"\benabled\s*=\s*false\b", args):
+                continue
+            disabled += 1
+            # Bind a disabled method annotation to the following Java method
+            # declaration when possible. Class-level or unusual annotations stay
+            # explicit as <class-or-unknown>; they are never converted to credit.
+            tail = code[match.end(): match.end() + 1200]
+            method = re.search(
+                r"(?:@[A-Za-z_$][\w$]*(?:\s*\([^)]*\))?\s*)*"
+                r"(?:public|protected|private)\s+"
+                r"(?:(?:static|final|synchronized|native|abstract|strictfp)\s+)*"
+                r"[A-Za-z_$][\w$<>,.?\[\] ]*\s+"
+                r"([A-Za-z_$][\w$]*)\s*\(",
+                tail, re.S)
+            disabled_members.append(
+                class_name + "#" + (
+                    method.group(1) if method else "<class-or-unknown>"
+                )
+            )
+        inventory[class_name] = {
+            "source_present": True,
+            "test_annotations": len(annotations),
+            "explicitly_disabled_annotations": disabled,
+            "disabled_members": disabled_members,
+            "enabled_source_methods": len(annotations) - disabled,
+        }
+    return inventory
+
+
+def _d22_disabled_method_present(repo: Path, base: str, modules) -> bool:
+    suffix = D22_DISABLED_CLASS.replace(".", "/") + ".java"
+    for module in modules:
+        path = "{}/src/test/java/{}".format(module, suffix)
+        try:
+            source = git(repo, "show", "{}:{}".format(base, path))
+        except ExecutionError:
+            continue
+        code = _java_code_only(source)
+        marker = re.compile(
+            r"@Test\s*\(\s*enabled\s*=\s*false\s*\).*?\b{}\s*\(".format(
+                re.escape(D22_DISABLED_METHOD)), re.S)
+        return bool(marker.search(code))
+    return False
+
+
+def build_required_surface(trusted_repo: Path, base: str, modules, java, argline, xvfbrun, cp_rel) -> dict:
+    import sandbox
+
+    # The class inventory and the bytecode TestNG dry-runs must have one source
+    # authority.  Building in the workflow-authority checkout while enumerating
+    # class names from an older merge base would silently mix two policies.
+    # ExportIntegrity proves this temporary tree equals the locked comparison
+    # base's Git blobs before its trusted Maven/plugins run.
+    export_parent = Path(tempfile.mkdtemp(prefix="d17-comparison-base-"))
+    comparison_root = export_parent / "repo"
+    try:
+        sandbox.export_commit(trusted_repo, base, comparison_root)
+        log("comparison base: compile and resolve classpaths from verified export")
+        compile_and_resolve(comparison_root, modules, cp_rel, "comparison base")
+        surface = {
+            "schema": REQUIRED_SURFACE_SCHEMA,
+            "comparison_base_sha": base,
+            "comparison_base_tree": git(trusted_repo, "rev-parse", "{}^{{tree}}".format(base)),
+            "trusted_argline": list(argline),
+            "denominator_source": "TestNG -dryrun over a byte-verified trusted comparison-base export",
+            "denominator_build_origin": "verified_git_export_of_comparison_base",
+            "modules": {},
+        }
+        for module in modules:
+            log("required surface: dry-run {}".format(module))
+            classes = required_classes_for_module(trusted_repo, module, base)
+            surface["modules"][module] = dryrun_module(
+                comparison_root, module, classes, java, argline, xvfbrun, cp_rel
+            )
+            log("  required_total={} required_skipped={} required_classes={}".format(
+                surface["modules"][module]["required_total"],
+                surface["modules"][module]["required_skipped"],
+                len(surface["modules"][module]["classes"]),
+            ))
+    finally:
+        shutil.rmtree(export_parent, ignore_errors=True)
+
+    executable = {
+        name for entry in surface["modules"].values() for name in entry.get("classes", [])
+    }
+    source_classes = _source_test_classes(trusted_repo, base, modules)
+    d20 = _d20_known_not_run(trusted_repo, base)
+
+    framework_not_run = sorted(
+        name for name in d20["source_test_classes_not_observed"]
+        if name in source_classes and name not in executable
+    )
+    framework_blockers = sorted(
+        name for name in d20["framework_blockers"] if name in source_classes
+    )
+
+    disabled_hashes = d20["intentionally_disabled_source_classes"]
+    explicit_disabled = []
+    d20_baseline_drift = []
+    for name, expected_hash in sorted(disabled_hashes.items()):
+        path = _source_path_for_class(trusted_repo, base, modules, name)
+        if path is None:
+            d20_baseline_drift.append({
+                "class": name, "problem": "disabled baseline source missing"})
+            continue
+        actual_hash = hashlib.sha256(
+            _git_blob_bytes(trusted_repo, "{}:{}".format(base, path))).hexdigest()
+        if actual_hash != expected_hash:
+            d20_baseline_drift.append({
+                "class": name, "problem": "disabled source hash drift",
+                "expected_sha256": expected_hash, "actual_sha256": actual_hash,
+            })
+        if name in executable:
+            d20_baseline_drift.append({
+                "class": name, "problem": "disabled baseline class is now executable"})
+        else:
+            explicit_disabled.append(name)
+
+    all_source_inventory = _testng_annotation_inventory(
+        trusted_repo, base, modules, source_classes)
+    all_disabled_members = sorted({
+        member
+        for item in all_source_inventory.values() if isinstance(item, dict)
+        for member in item.get("disabled_members", [])
+    })
+    d22_key = D22_DISABLED_CLASS + "#" + D22_DISABLED_METHOD
+    d22_disabled = [d22_key] if d22_key in all_disabled_members else []
+    if _d22_disabled_method_present(trusted_repo, base, modules) and not d22_disabled:
+        # Parser disagreement is evidence ambiguity, never a silent PASS.
+        d20_baseline_drift.append({
+            "class": D22_DISABLED_CLASS,
+            "problem": "D22 disabled-method parser disagreement",
+        })
+    explicit_disabled_set = set(explicit_disabled)
+    other_explicit_disabled_methods = sorted(
+        member for member in all_disabled_members
+        if member != d22_key
+        and member.split("#", 1)[0] not in explicit_disabled_set
+    )
+    source_test_obligations_not_executed = sorted(
+        name for name, item in all_source_inventory.items()
+        if isinstance(item, dict)
+        and int(item.get("test_annotations", 0)) > 0
+        and name not in executable
+    )
+    d24_inventory = {
+        name: all_source_inventory.get(name, {"source_present": False})
+        for name in (framework_not_run + framework_blockers)
+    }
+    surface["coverage_gaps"] = {
+        "d24_framework_not_run_classes": framework_not_run,
+        "d24_framework_blocker_bases": framework_blockers,
+        "d20_known_not_run_schema": d20.get("schema"),
+        "d20_baseline_drift": d20_baseline_drift,
+        "source_test_obligation_classes_not_executed": source_test_obligations_not_executed,
+        "source_test_annotation_inventory": {
+            name: all_source_inventory[name]
+            for name in source_test_obligations_not_executed
+        },
+        "d24_framework_not_run_source_inventory": d24_inventory,
+        "d24_enabled_source_methods_not_run": sum(
+            int(item.get("enabled_source_methods", 0))
+            for item in d24_inventory.values() if isinstance(item, dict)
+        ),
+        "explicitly_disabled_source_classes": explicit_disabled,
+        "other_explicit_disabled_test_methods": other_explicit_disabled_methods,
+        "d22_disabled_rules_tests": d22_disabled,
+        "classification": "NOT_RUN_OR_DISABLED_NOT_PASS",
+    }
+    surface["whole_reactor_coverage_complete"] = not (
+        source_test_obligations_not_executed
+        or framework_not_run or explicit_disabled
+        or other_explicit_disabled_methods or d22_disabled
+        or d20_baseline_drift
+    )
+    return surface
+
+
+# --------------------------------------------------------------------------- #
+# Candidate compilation and trusted execution
+# --------------------------------------------------------------------------- #
+
+#: The TestNG the trusted driver and listener are compiled against and launched
+#: with, pinned by file digest. Resolved by a trusted step before any candidate
+#: code runs; a candidate's own TestNG on the classpath comes later and never
+#: loads first.
+TRUSTED_TESTNG_PINS = {
+    "testng-7.10.2.jar": "225fd56447f2e5e439db3b483a79cd9f294fad9f357f8352b12ee6a3411ebb15",
+    "jcommander-1.82.jar": "deeac157c8de6822878d85d0c7bc8467a19cc8484d37788f7804f039dde280b1",
+    "jquery-3.7.1.jar": "262016dd3a559df87aefbe392804e9bf620787c9204c0ab8522d4c231ea65097",
+    "slf4j-api-1.7.36.jar": "d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0",
+}
+DRIVER_CLASS = "forge.d17.witness.TrustedTestNGDriver"
+LEDGER_AUTHENTICATED = "TRUSTED_PARENT_OS_RECEIPT"
+CONTAINMENT_ENFORCED = "SECURITY_MANAGER_ENFORCED"
+#: Forge's own reactor artifacts, as installed in a Maven repository. A sibling
+#: resolved from an installed jar is not the candidate's code; the candidate's
+#: reactor output replaces it.
+STALE_SIBLING_MARKERS = ("/.m2/repository/forge/",)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_trusted_testng(jars) -> "list[Path]":
+    """Exactly the pinned TestNG closure, each file matching its pinned digest."""
+    found = {}
+    for jar in jars:
+        path = Path(jar)
+        if path.name not in TRUSTED_TESTNG_PINS:
+            raise ExecutionError("unpinned trusted TestNG input {}".format(path.name))
+        if sha256_file(path) != TRUSTED_TESTNG_PINS[path.name]:
+            raise ExecutionError("trusted TestNG input {} does not match its pinned digest".format(path.name))
+        found[path.name] = path
+    missing = sorted(set(TRUSTED_TESTNG_PINS) - set(found))
+    if missing:
+        raise ExecutionError("trusted TestNG closure incomplete: {}".format(",".join(missing)))
+    return [found[name] for name in sorted(found)]
+
+
+def javac_of(java: str) -> str:
+    if java.endswith("/bin/java"):
+        return java[: -len("java")] + "javac"
+    home = os.environ.get("JAVA_HOME", "")
+    candidate = Path(home) / "bin" / "javac" if home else None
+    if candidate and candidate.is_file():
+        return str(candidate)
+    found = shutil.which("javac", path="/usr/sbin:/usr/bin:/sbin:/bin")
+    if not found:
+        raise ExecutionError("javac not found in JAVA_HOME or system directories")
+    return found
+
+
+def compile_witness(trusted_repo: Path, classes_dir: Path, java: str, testng_jar: str):
+    """Compile only the receiptless child harness from trusted source."""
+    if classes_dir.exists():
+        shutil.rmtree(classes_dir)
+    classes_dir.mkdir(parents=True)
+    witness_root = Path(__file__).resolve().parent / "witness" / "forge" / "d17" / "witness"
+    sources = [
+        str(witness_root / "Containment.java"),
+        str(witness_root / "QualifiedExecutionCounter.java"),
+        str(witness_root / "TrustedTestNGDriver.java"),
+    ]
+    if not all(Path(source).is_file() for source in sources):
+        raise ExecutionError("trusted child harness source is missing")
+    code, _, err = run([javac_of(java), "-proc:none", "-nowarn", "-cp", testng_jar, "-d", str(classes_dir)]
+                       + sources, trusted_repo, timeout=900)
+    if code != 0:
+        raise ExecutionError("trusted witness compilation failed: {}".format(err[-800:]))
+    return classes_dir
+
+
+def assemble_classpath(witness_classes, entries) -> str:
+    """Assemble a launch classpath with the trusted driver and listener first.
+
+    The trusted witness must precede every candidate class so no candidate class
+    of the same name can shadow it and capture the TestNG callbacks. This is a
+    separate function so the ordering is unit-testable without launching a JVM.
+    """
+    return ":".join([str(witness_classes)] + list(entries))
+
+
+def class_file_digests(root: Path) -> dict:
+    if not root.is_dir():
+        return {}
+    return {p.relative_to(root).as_posix(): sha256_file(p) for p in root.rglob("*.class") if p.is_file()}
+
+
+def trusted_compile_tests(export_root: Path, module: str, classpath, out: Path, java: str) -> dict:
+    """Compile a module's test sources from the exact-SHA Git export, in trusted code.
+
+    ``-proc:none``: no annotation processor, and so no candidate or dependency
+    code, runs during compilation. Test resources are copied afterwards without
+    any ``.class`` file or TestNG service registration, and every compiled class
+    must be byte-identical after the copy.
+    """
+    module_dir = export_root / module
+    root = module_dir / "src" / "test" / "java"
+    sources = sorted(str(p) for p in root.rglob("*.java") if p.is_file() and not p.is_symlink()) if root.is_dir() else []
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    record = {"module": module, "sources": len(sources), "exit_code": None, "stderr_tail": "",
+              "dropped_test_resources": []}
+    if not sources:
+        record["exit_code"] = 0
+        return record
+    argfile = out.parent / "{}.sources".format(out.name)
+    argfile.write_text("\n".join('"{}"'.format(s.replace("\\", "\\\\")) for s in sources) + "\n")
+    code, _, err = run([javac_of(java), "-proc:none", "-nowarn", "-encoding", "UTF-8", "-d", str(out),
+                        "-cp", ":".join(classpath), "@{}".format(argfile)], module_dir, timeout=3600)
+    record["exit_code"] = code
+    record["stderr_tail"] = err.strip()[-2000:]
+    compiled = class_file_digests(out)
+    resources = module_dir / "src" / "test" / "resources"
+    if resources.is_dir():
+        def ignore(directory, names, base=resources):
+            dropped = []
+            for name in names:
+                path = Path(directory) / name
+                rel = path.relative_to(base).as_posix()
+                if path.is_symlink() or name.endswith(".class") or rel.startswith("META-INF/services/org.testng"):
+                    dropped.append(name)
+                    record["dropped_test_resources"].append(rel)
+            return dropped
+        shutil.copytree(resources, out, dirs_exist_ok=True, symlinks=False, ignore=ignore)
+    if class_file_digests(out) != compiled:
+        raise ExecutionError("test resources altered trusted-compiled bytecode in {}".format(module))
+    return record
+
+
+def compiled_class_names(root: Path) -> set:
+    return {".".join(p.relative_to(root).with_suffix("").parts) for p in root.rglob("*.class")
+            if "$" not in p.name} if root.is_dir() else set()
+
+
+#: The TestNG API that candidate-authored bytecode may reference: test and
+#: configuration annotations, assertions and SkipException. Everything else in
+#: org.testng can register a suite-wide listener, hook or object factory, or
+#: reach a test result (@Listeners, IHookable, IConfigurable, I*Listener,
+#: Reporter, ITestResult, ITestContext, ISuite, TestNG, org.testng.internal,
+#: @Factory, @ObjectFactory). One such registration in one class would let it
+#: rewrite the outcome of every other class in the suite.
+ALLOWED_TESTNG_REFERENCE = re.compile(
+    r"^org/testng/(?:annotations/(?:Test|BeforeClass|AfterClass|BeforeMethod|AfterMethod|BeforeTest|"
+    r"AfterTest|BeforeSuite|AfterSuite|BeforeGroups|AfterGroups|DataProvider|Parameters|Optional|"
+    r"NoInjection|Ignore)|Assert|AssertJUnit|SkipException|asserts/[A-Za-z0-9_]+|"
+    r"collections/[A-Za-z0-9_]+)(?:\$[\w$]*)?$"
+)
+_TESTNG_REFERENCE = re.compile(r"org[/.]testng[/.][A-Za-z0-9_$/.]*[A-Za-z0-9_$]")
+_WITNESS_REFERENCE = re.compile(r"forge[/.]d17[/.]witness")
+WITNESS_PACKAGE = "forge/d17/witness/"
+
+
+def class_constant_strings(data: bytes) -> "list[str]":
+    """Every CONSTANT_Utf8 of a class file: class, member and descriptor names and string literals."""
+    if data[:4] != b"\xca\xfe\xba\xbe" or len(data) < 10:
+        raise ValueError("not a class file")
+    count = int.from_bytes(data[8:10], "big")
+    offset, index, out = 10, 1, []
+    while index < count:
+        tag = data[offset]
+        offset += 1
+        if tag == 1:
+            length = int.from_bytes(data[offset:offset + 2], "big")
+            offset += 2
+            out.append(data[offset:offset + length].decode("utf-8", "replace"))
+            offset += length
+        elif tag in (3, 4, 9, 10, 11, 12, 17, 18):
+            offset += 4
+        elif tag in (5, 6):
+            offset += 8
+            index += 1
+        elif tag in (7, 8, 16, 19, 20):
+            offset += 2
+        elif tag == 15:
+            offset += 3
+        else:
+            raise ValueError("unknown constant pool tag {}".format(tag))
+        if offset > len(data):
+            raise ValueError("truncated constant pool")
+        index += 1
+    return out
+
+
+def _testng_reference_allowed(reference: str) -> bool:
+    parts = reference.replace(".", "/").split("/")
+    # A dotted literal may name a member after the class ("org.testng.Assert.fail").
+    return any(ALLOWED_TESTNG_REFERENCE.match("/".join(parts[:end])) for end in range(len(parts), 2, -1))
+
+
+def bytecode_findings(class_name: str, data: bytes, allow_testng_test_api: bool = True) -> "list[str]":
+    """Why one class may not run next to the trusted witness.
+
+    Trusted comparison-base tests may reference the narrow test-only API.
+    Candidate production bytecode may reference no TestNG API at all.
+    """
+    try:
+        strings = class_constant_strings(data)
+    except (ValueError, IndexError) as exc:
+        return ["unparseable class file: {}".format(exc)]
+    found = set()
+    if class_name.startswith(WITNESS_PACKAGE):
+        found.add("declares a class in the trusted witness package")
+    for text in strings:
+        if _WITNESS_REFERENCE.search(text):
+            found.add("references the trusted witness")
+        for reference in _TESTNG_REFERENCE.findall(text):
+            if not allow_testng_test_api or not _testng_reference_allowed(reference):
+                found.add("references " + reference.replace(".", "/"))
+    return sorted(found)
+
+
+#: Largest single file admitted onto the frozen launch classpath. A planted
+#: (sparse) giant would otherwise exhaust trusted memory or disk.
+MAX_ADMITTED_FILE = 512 * 1024 * 1024
+_OVERSIZED = object()
+
+
+def _regular_file_bytes(path: Path):
+    """The bytes of a regular file, never following a final symlink or opening a FIFO or device."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if info.st_size > MAX_ADMITTED_FILE:
+            return _OVERSIZED
+        return handle.read(MAX_ADMITTED_FILE + 1)
+
+
+def _scan_class_tree(label: str, root: Path, result: dict, freeze_to: "Path | None" = None,
+                     allow_testng_test_api: bool = True) -> None:
+    """Scan every class under ``root``; with ``freeze_to``, copy the regular files read.
+
+    The copy is made from the same bytes the scan judged, so what later runs is
+    exactly what was admitted. Symlinks, FIFOs and devices are never followed or
+    copied.
+    """
+    for directory, dirnames, filenames in os.walk(str(root), followlinks=False):
+        for name in list(dirnames):
+            if os.path.islink(os.path.join(directory, name)):
+                dirnames.remove(name)
+                result["findings"].append({"entry": label, "class": os.path.relpath(os.path.join(directory, name), root),
+                                           "problems": ["symlinked directory on the launch classpath"]})
+        for name in filenames:
+            path = Path(directory) / name
+            rel = path.relative_to(root).as_posix()
+            if not name.endswith(".class") and freeze_to is None:
+                continue
+            data = _regular_file_bytes(path)
+            if data is _OVERSIZED:
+                result["findings"].append({"entry": label, "class": rel,
+                                           "problems": ["file larger than {} bytes".format(MAX_ADMITTED_FILE)]})
+                continue
+            if name.endswith(".class"):
+                if data is None:
+                    result["findings"].append({"entry": label, "class": rel, "problems": ["not a regular class file"]})
+                    continue
+                result["scanned_classes"] += 1
+                problems = bytecode_findings(
+                    rel[: -len(".class")], data,
+                    allow_testng_test_api=allow_testng_test_api)
+                if problems:
+                    result["findings"].append({"entry": label, "class": rel, "problems": problems})
+            if freeze_to is not None and data is not None:
+                target = freeze_to / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+
+
+def _scan_jar_bytes(label: str, data: bytes, result: dict,
+                    allow_testng_test_api: bool = True) -> None:
+    import io
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as jar:
+            for name in jar.namelist():
+                if name.endswith(".class"):
+                    result["scanned_classes"] += 1
+                    problems = bytecode_findings(
+                        name[: -len(".class")], jar.read(name),
+                        allow_testng_test_api=allow_testng_test_api)
+                    if problems:
+                        result["findings"].append({"entry": label, "class": name, "problems": problems})
+    except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        result["findings"].append({"entry": label, "class": None, "problems": ["unreadable jar: {}".format(exc)]})
+
+
+def scan_launch_classpath(tests_dir: Path, entries, candidate_root: Path, candidate_m2: Path,
+                          trusted_m2: "Path | None", freeze: "tuple[Path, Path, dict] | None" = None) -> dict:
+    """Admit the launch classpath before any candidate test code runs next to the witness.
+
+    Candidate-authored bytecode (the trusted-compiled test classes and every
+    directory or jar the candidate build produced) may reference only the
+    allowed TestNG API and nothing in the witness package. A dependency jar is
+    admitted only byte-identical to the trusted runner's Maven repository: the
+    candidate account owns its own copy and can rewrite any jar in it.
+
+    With ``freeze=(staging, launch_root, cache)`` every admitted entry is copied,
+    from the bytes judged, into ``staging`` (later staged root-owned and
+    read-only as ``launch_root``), and ``result["launch_entries"]`` lists those
+    copies. Launches use only that list: the candidate's own classpath file,
+    output directories and Maven repository stay writable by code running in an
+    earlier launch, so nothing is read from them again. ``cache`` shares copies
+    of the same source between modules.
+    """
+    result = {
+        "scanned_classes": 0, "findings": [], "tampered_jars": [], "unverified_jars": [],
+        "trusted_maven_repository": str(trusted_m2) if trusted_m2 else None,
+        "launch_entries": [], "candidate_code_entries": [], "trusted_dependency_entries": [],
+        "candidate_compile_entries": [], "trusted_dependency_compile_entries": [],
+    }
+    _scan_class_tree(
+        "trusted-compiled tests", tests_dir, result,
+        allow_testng_test_api=True)
+    candidate_root = Path(os.path.realpath(candidate_root))
+    candidate_m2 = Path(os.path.realpath(candidate_m2))
+    staging, launch_root, cache = freeze if freeze else (None, None, {})
+
+    def remember(key: str, rel: str, before: dict, kind: str) -> None:
+        cache[key] = {
+            "rel": rel,
+            "kind": kind,
+            "findings": result["findings"][len(before["findings"]):],
+            "scanned": result["scanned_classes"] - before["scanned"],
+        }
+        if launch_root is not None:
+            frozen = str(launch_root / rel)
+            result["launch_entries"].append(frozen)
+            result[kind].append(frozen)
+            compile_kind = (
+                "candidate_compile_entries"
+                if kind == "candidate_code_entries"
+                else "trusted_dependency_compile_entries"
+            )
+            result[compile_kind].append(str(staging / rel))
+
+    for entry in entries:
+        real = Path(os.path.realpath(entry))
+        key = str(real)
+        if key in cache:
+            hit = cache[key]
+            result["findings"].extend(hit["findings"])
+            result["scanned_classes"] += hit["scanned"]
+            if launch_root is not None:
+                frozen = str(launch_root / hit["rel"])
+                result["launch_entries"].append(frozen)
+                result[hit["kind"]].append(frozen)
+                compile_kind = (
+                    "candidate_compile_entries"
+                    if hit["kind"] == "candidate_code_entries"
+                    else "trusted_dependency_compile_entries"
+                )
+                result[compile_kind].append(str(staging / hit["rel"]))
+            continue
+        before = {"findings": list(result["findings"]), "scanned": result["scanned_classes"]}
+        if real.is_dir():
+            if not real.is_relative_to(candidate_root):
+                # The candidate wrote the classpath file: a directory outside its
+                # own tree is neither its build output nor admitted.
+                result["unverified_jars"].append(key)
+                continue
+            rel = "cp/{}".format(len(cache))
+            _scan_class_tree(
+                entry, real, result,
+                freeze_to=(staging / rel) if staging else None,
+                allow_testng_test_api=False)
+            if staging is not None:
+                (staging / rel).mkdir(parents=True, exist_ok=True)
+            remember(key, rel, before, "candidate_code_entries")
+            continue
+        if not real.exists():
+            continue  # frozen launches list only what exists now
+        if trusted_m2 and real.is_relative_to(trusted_m2):
+            rel_path = real.relative_to(trusted_m2)
+            data = _regular_file_bytes(real)
+            if not isinstance(data, bytes):
+                result["unverified_jars"].append(str(rel_path))
+            else:
+                rel = "deps/" + rel_path.as_posix()
+                if staging is not None:
+                    (staging / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (staging / rel).write_bytes(data)
+                remember(key, rel, before, "trusted_dependency_entries")
+            continue
+        if real.is_relative_to(candidate_m2):
+            rel_path = real.relative_to(candidate_m2)
+            trusted = (trusted_m2 / rel_path) if trusted_m2 else None
+            mine = _regular_file_bytes(real)
+            theirs = _regular_file_bytes(trusted) if trusted else None
+            if not isinstance(mine, bytes) or not isinstance(theirs, bytes):
+                result["unverified_jars"].append(str(rel_path))
+            elif hashlib.sha256(mine).digest() != hashlib.sha256(theirs).digest():
+                result["tampered_jars"].append(str(rel_path))
+            else:
+                rel = "deps/" + rel_path.as_posix()
+                if staging is not None:
+                    (staging / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (staging / rel).write_bytes(theirs)
+                remember(key, rel, before, "trusted_dependency_entries")
+            continue
+        if real.is_relative_to(candidate_root) and real.suffix == ".jar":
+            data = _regular_file_bytes(real)
+            if not isinstance(data, bytes):
+                result["findings"].append({"entry": entry, "class": None, "problems": ["not a regular jar of admissible size"]})
+                continue
+            _scan_jar_bytes(entry, data, result, allow_testng_test_api=False)
+            rel = "cp/{}.jar".format(len(cache))
+            if staging is not None:
+                (staging / rel).parent.mkdir(parents=True, exist_ok=True)
+                (staging / rel).write_bytes(data)
+            remember(key, rel, before, "candidate_code_entries")
+            continue
+        result["unverified_jars"].append(key)
+    return result
+
+
+def sanitize_classpath(entries, candidate_root: Path, reactor_artifacts: dict) -> "tuple[list[str], list[str]]":
+    """Replace installed Forge siblings with exact candidate reactor outputs in place.
+
+    Candidate test output is always dropped. A Forge sibling jar may be replaced
+    only when the trusted comparison-base reactor maps its artifactId to a
+    concrete module whose candidate target/classes exists. Unknown or missing
+    siblings fail closed instead of falling back to stale installed jars.
+    """
+    kept, dropped = [], []
+    marker = "/.m2/repository/forge/"
+    for entry in entries:
+        normalized = entry.replace("\\", "/")
+        if normalized.rstrip("/").endswith("/target/test-classes"):
+            dropped.append(entry)
+            continue
+        if marker in normalized:
+            dropped.append(entry)
+            tail = normalized.split(marker, 1)[1]
+            artifact_id = tail.split("/", 1)[0] if "/" in tail else ""
+            module = reactor_artifacts.get(artifact_id)
+            if not module:
+                raise ExecutionError(
+                    "installed Forge sibling has no trusted reactor mapping: {}".format(entry))
+            replacement = candidate_root / module / "target" / "classes"
+            if not replacement.is_dir():
+                raise ExecutionError(
+                    "candidate reactor output missing for Forge sibling {} -> {}".format(
+                        artifact_id, module))
+            value = str(replacement)
+            if value not in kept:
+                kept.append(value)
+            continue
+        if entry not in kept:
+            kept.append(entry)
+    return kept, dropped
+
+
+
+def candidate_classpath(candidate_root: Path, module: str, cp_rel: str) -> "list[str]":
+    """Candidate module production output first, then resolved dependencies.
+
+    dependency:build-classpath intentionally omits the current project's own
+    target/classes. D17 must add it explicitly or the trusted tests would not be
+    bound to the exact candidate production for the module being qualified.
+    """
+    own = candidate_root / module / "target" / "classes"
+    if not own.is_dir():
+        raise ExecutionError(
+            "candidate production classes missing for module {} at {}".format(module, own))
+    path = candidate_root / module / cp_rel
+    raw = read_candidate_bytes(path)
+    if raw is None:
+        raise ExecutionError("candidate classpath missing for module {} (did the module build?)".format(module))
+    deps = [e for e in raw.decode("utf-8", "replace").strip().split(":") if e]
+    return [str(own)] + deps
+
+
+def read_candidate_bytes(path: Path):
+    """Read a file the candidate account could have written, refusing symlinks."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        # A FIFO or device planted by the candidate would block or never end.
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
+        return handle.read(64 * 1024 * 1024)
+
+
+def _write_parent_receipt_ledger(
+        path: Path, module: str, receipt_run_id: str, required_counts: dict,
+        declared_skip_class: "str | None" = None, declared_skip_count: int = 0) -> None:
+    """Write credited evidence only in the external trusted parent process."""
+    total_required = sum(int(v) for v in required_counts.values())
+    if declared_skip_count < 0:
+        raise ExecutionError("negative declared skip count")
+    if declared_skip_count:
+        if not declared_skip_class or declared_skip_class not in required_counts:
+            raise ExecutionError("declared skip count lacks trusted class attribution")
+        if declared_skip_count > int(required_counts[declared_skip_class]):
+            raise ExecutionError("declared skip count exceeds trusted class denominator")
+
+    records = [{
+        "kind": "header",
+        "schema": WITNESS_SCHEMA,
+        "module": module,
+        "nonce": receipt_run_id,
+        "authority": "trusted_parent_os_process",
+    }]
+    seq = 0
+    per_class_total = {}
+    skip_classes = {}
+    remaining_skips = declared_skip_count
+    for class_name in sorted(required_counts):
+        count = int(required_counts[class_name])
+        per_class_total[class_name] = count
+        class_skips = remaining_skips if class_name == declared_skip_class else 0
+        if class_skips:
+            skip_classes[class_name] = class_skips
+            remaining_skips = 0
+        for index in range(count):
+            status = "SKIP" if index < class_skips else "PASS"
+            records.append({
+                "kind": "invocation",
+                "seq": seq,
+                "class": class_name,
+                "method": "<trusted-parent-receipt-{}-{}>".format(status.lower(), index),
+                "status": status,
+                "invoked": True,
+                "context": "trusted-parent-os-process",
+                "thread": "external-parent",
+            })
+            seq += 1
+    if remaining_skips:
+        raise ExecutionError("declared skip attribution was not consumed")
+    records.append({
+        "kind": "summary",
+        "tests": total_required,
+        "failed": 0,
+        "skipped": declared_skip_count,
+        "per_class_total": per_class_total,
+        "skip_classes": skip_classes,
+        "fail_classes": {},
+        "containment": CONTAINMENT_ENFORCED,
+        "containment_violation": None,
+        "last_seq": seq - 1,
+        "authority": "trusted_parent_os_process",
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(record, sort_keys=True) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _decode_child_completion(code: int, allowed_skip_classes) -> "tuple[bool, int | None]":
+    if code == 0:
+        return True, 0
+    if 31 <= code <= 69 and len(allowed_skip_classes) == 1:
+        return True, code - 30
+    return False, None
+
+
+def execute_module(run_root: Path, module: str, required_counts: dict,
+                   required_method_counts: dict,
+                   launch_dir: Path, bundle: Path, testng_jars, receipt_run_id: str,
+                   java: str, argline, xvfbrun, candidate_code_entries,
+                   trusted_dependency_entries, dropped, user: str, home: Path,
+                   evidence_witness: Path, out_of_band_classes):
+    """Run a receiptless child JVM and create the trusted receipt in the parent."""
+    import sandbox
+
+    classes = sorted(required_counts)
+    staged_testng = [str(bundle / "testng" / Path(j).name) for j in testng_jars]
+    tests = bundle / "tests" / module
+    full_cp = assemble_classpath(bundle / "witness", staged_testng)
+
+    allowed_skip_classes = sorted(set(classes) & set(out_of_band_classes))
+    if len(allowed_skip_classes) > 1:
+        raise ExecutionError(
+            "D17 parent receipt requires at most one declared skip class per module; got {}".format(
+                allowed_skip_classes))
+
+    cmd = list(xvfbrun) + [java] + list(argline) + [
+        "-Djava.security.manager=allow", "-XX:+DisableAttachMechanism",
+        "-cp", full_cp, DRIVER_CLASS,
+        "--module", module,
+        "--protected-root", str(launch_dir),
+        "--output-dir", str(launch_dir / ("testng-" + module)),
+        "--trusted-test-root", str(tests),
+    ]
+    for entry in candidate_code_entries:
+        cmd += ["--candidate-code", entry]
+    for entry in trusted_dependency_entries:
+        cmd += ["--trusted-dependency", entry]
+    for jar in staged_testng:
+        cmd += ["--trusted-jar", jar]
+    for name in classes:
+        cmd += ["--class", name, "--expected-count", "{}={}".format(name, int(required_counts[name]))]
+    for key, count in sorted(required_method_counts.items()):
+        cmd += ["--expected-method-count", "{}={}".format(key, int(count))]
+    for name in allowed_skip_classes:
+        cmd += ["--allowed-skip-class", name]
+
+    try:
+        proc = sandbox.run_candidate(user, home, run_root / module, cmd, timeout=7200)
+        code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
+    except sandbox.SandboxError as exc:
+        code, stdout, stderr = 125, "", "sandbox failure: {}".format(exc)
+
+    completed, declared_skip_count = _decode_child_completion(
+        code, allowed_skip_classes)
+
+    containment_state = None
+    if code == 78:
+        containment_state = "UNAVAILABLE"
+    elif code == 13:
+        containment_state = "SECURITY_MANAGER_VIOLATED"
+    elif code in (0, 10, 11, 12) or 31 <= code <= 69:
+        containment_state = CONTAINMENT_ENFORCED
+
+    entry = {
+        "module": module,
+        "required_classes": classes,
+        "required_class_counts": dict(required_counts),
+        "required_method_counts": dict(required_method_counts),
+        "child_process_exit_code": code,
+        "launch_exit_code": 0 if completed else code,
+        "execution_identity": user,
+        "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+        "receipt_run_id": receipt_run_id,
+        "candidate_jvm_receipt_credentials": False,
+        "classpath_digest": hashlib.sha256(
+            (full_cp + "\n" + "\n".join(candidate_code_entries)
+             + "\n" + "\n".join(trusted_dependency_entries)).encode("utf-8")
+        ).hexdigest(),
+        "testng_version_entry": os.path.basename(staged_testng[0]) if staged_testng else None,
+        "stale_or_candidate_test_entries_dropped": dropped,
+        "hostile_bytecode_containment": containment_state,
+        "child_diagnostic_log_tail_untrusted": (stdout + stderr)[-4000:],
+    }
+
+    if not completed:
+        entry["ledger_authentication"] = "NOT_CREDITED_CHILD_EXIT_{}".format(code)
+        return entry
+
+    skip_count = int(declared_skip_count or 0)
+    declared_skip_class = allowed_skip_classes[0] if skip_count else None
+    total = sum(int(v) for v in required_counts.values())
+    entry["testng_totals"] = {
+        "total": total,
+        "passed": total - skip_count,
+        "failed": 0,
+        "skipped": skip_count,
+    }
+    trusted_copy = evidence_witness / (module + ".witness.jsonl")
+    _write_parent_receipt_ledger(
+        trusted_copy, module, receipt_run_id, required_counts,
+        declared_skip_class=declared_skip_class,
+        declared_skip_count=skip_count,
+    )
+    entry["ledger_authentication"] = LEDGER_AUTHENTICATED
+    entry["ledger_sha256"] = sha256_file(trusted_copy)
+    entry["ledger_lines"] = sum(1 for _ in trusted_copy.open("r", encoding="utf-8"))
+    entry["declared_skip_count"] = skip_count
+    entry["declared_skip_class"] = declared_skip_class
+    return entry
+
+
+def cmd_surface(args) -> int:
+    trusted_repo = Path(args.trusted_repo).resolve()
+    evidence_dir = Path(args.evidence_dir).resolve()
+    modules = args.modules.split()
+    argline = list(DEFAULT_TRUSTED_ARGLINE)
+    xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
+    # A stale evidence directory must never be mistaken for this run's evidence.
+    shutil.rmtree(evidence_dir, ignore_errors=True)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        surface = build_required_surface(trusted_repo, args.comparison_base, modules, args.java,
+                                         argline, xvfbrun, args.cp_rel)
+    except ExecutionError as exc:
+        sys.stderr.write("d17-exec: {}\n".format(exc))
+        return 1
+    (evidence_dir / "required-surface.json").write_text(json.dumps(surface, indent=2, sort_keys=True) + "\n")
+    log("required surface total={}".format(sum(m["required_total"] for m in surface["modules"].values())))
+    return 0
+
+
+def trusted_test_source_commit(comparison_base: str, candidate_sha: str) -> str:
+    """The only source commit from which qualification test bodies may be compiled.
+
+    Candidate-owned tests are data outside the authority boundary.  Keeping this
+    as an explicit contract makes source-deletion/body-weakening controls
+    testable and mutation-checkable.
+    """
+    if comparison_base == candidate_sha:
+        # Equality can legitimately occur for an honest default-branch candidate;
+        # authority still comes from the comparison-base role, never from the
+        # candidate role.
+        return comparison_base
+    return comparison_base
+
+
+def cmd_execute(args) -> int:
+    import sandbox
+
+    trusted_repo = Path(args.trusted_repo).resolve()
+    evidence_dir = Path(args.evidence_dir).resolve()
+    sandbox_dir = Path(args.sandbox_dir).resolve()
+    execution_sandbox = Path(args.execution_sandbox_dir).resolve()
+    candidate_root = sandbox_dir / "candidate"
+    bundle = Path(args.bundle_dir)
+    work = Path(args.work_dir).resolve()
+    modules = args.modules.split()
+    reactor_modules = trusted_reactor_modules(trusted_repo, args.comparison_base)
+    reactor_artifacts = trusted_reactor_artifacts(trusted_repo, args.comparison_base)
+    argline = list(DEFAULT_TRUSTED_ARGLINE)
+    xvfbrun = args.xvfb_run.split() if args.xvfb_run else []
+    receipt_run_id = secrets.token_hex(16)
+    manifest = {
+        "schema": EXECUTION_MANIFEST_SCHEMA,
+        "nonce": receipt_run_id,
+        "receipt_run_id": receipt_run_id,
+        "candidate_sha": args.candidate_sha,
+        "candidate_tree": args.candidate_tree,
+        "comparison_base_sha": args.comparison_base,
+        "trusted_argline": argline,
+        "child_counter_class": COUNTER_CLASS,
+        "child_counter_source": COUNTER_SOURCE,
+        "driver_class": DRIVER_CLASS,
+        "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+        "candidate_jvm_receipt_credentials": False,
+        "candidate_build_identity": args.sandbox_user,
+        "candidate_execution_identity": args.execution_user,
+        "build_execution_identity_separated": args.sandbox_user != args.execution_user,
+        "test_bytecode_origin": (
+            "trusted_compile_of_comparison_base_git_export_against_comparison_base_production"
+        ),
+        "trusted_test_source_sha": trusted_test_source_commit(args.comparison_base, args.candidate_sha),
+        "candidate_test_sources_used_for_credit": False,
+        "trusted_test_compile_authority": {
+            "mode": "comparison_base_authority_plus_candidate_bytecode_equality_probe",
+            "status": "PENDING",
+            "candidate_probe_used_for_execution": False,
+        },
+        "hostile_bytecode_containment_required": True,
+        "ledger_authentication_scheme": (
+            "trusted parent OS-process receipt + SHA256 + integrity seal; "
+            "no candidate-JVM receipt secret or nonce"
+        ),
+        "candidate_artifacts_used_as_evidence": False,
+        "trusted_reactor_modules": reactor_modules,
+        "trusted_reactor_artifacts": reactor_artifacts,
+        "candidate_build_definition_divergence": [],
+        "maven_repository_authority": None,
+        "modules": {},
+    }
+    manifest_path = evidence_dir / "execution-manifest.json"
+    try:
+        surface = json.loads((evidence_dir / "required-surface.json").read_text())
+        prepared = json.loads(Path(args.sandbox_prepare).read_text())
+        if prepared.get("status") != "READY" or prepared.get("user") != args.sandbox_user:
+            raise ExecutionError("sandbox is not READY for {}: {}".format(args.sandbox_user, prepared.get("error")))
+        if prepared.get("candidate_sha") != args.candidate_sha:
+            raise ExecutionError("sandbox candidate {} is not the locked {}".format(
+                prepared.get("candidate_sha"), args.candidate_sha))
+        testng_jars = verify_trusted_testng(args.trusted_testng)
+        manifest["trusted_testng"] = {p.name: TRUSTED_TESTNG_PINS[p.name] for p in testng_jars}
+        home = sandbox.sandbox_home(sandbox_dir)
+        if args.sandbox_user == args.execution_user:
+            raise ExecutionError("candidate build and hostile-bytecode execution must use different OS identities")
+        execution_home = sandbox.prepare_sandbox(args.execution_user, execution_sandbox)
+        trusted_maven_repo = (Path(args.trusted_maven_repo).resolve()
+                              if args.trusted_maven_repo else None)
+        if trusted_maven_repo is None or not trusted_maven_repo.is_dir():
+            raise ExecutionError("trusted Maven repository is required")
+        divergence = build_definition_divergence(
+            trusted_repo, args.comparison_base, args.candidate_sha)
+        manifest["candidate_build_definition_divergence"] = divergence
+        manifest["maven_repository_authority"] = {
+            "path": str(trusted_maven_repo),
+            "mode": "trusted_read_only_offline",
+        }
+        if divergence:
+            raise ExecutionError(
+                "candidate changes Maven build authority: {}".format(
+                    ", ".join(divergence[:20])))
+
+        # 1. Trusted bytecode first: driver and listener, before any candidate code.
+        staging = work / "bundle"
+        if staging.exists():
+            shutil.rmtree(staging)
+        (staging / "testng").mkdir(parents=True)
+        for jar in testng_jars:
+            shutil.copy2(jar, staging / "testng" / jar.name)
+        testng_main = str(staging / "testng" / "testng-7.10.2.jar")
+        compile_witness(trusted_repo, staging / "witness", args.java, testng_main)
+
+        # 2. Compile the exact candidate production source with the trusted
+        # comparison-base Maven definition and a trusted, read-only dependency/
+        # plugin repository.  The candidate cannot supply a Maven plugin or
+        # mutate a plugin jar before it executes.
+        build = sandbox.run_candidate(
+            args.sandbox_user, home, candidate_root,
+            [args.mvn, "-o", "-B", "-q",
+             "-Dmaven.repo.local=" + str(trusted_maven_repo),
+             "-Dmaven.compiler.proc=none",
+             "-DskipTests", "compile", "dependency:build-classpath",
+             "-Dmdep.outputFile=" + args.cp_rel, "-DincludeScope=test",
+             "-pl", ",".join(modules), "-am"],
+            timeout=14400,
+        )
+        manifest["candidate_build"] = {
+            "exit_code": build.returncode,
+            "user": args.sandbox_user,
+            "maven_repository": str(trusted_maven_repo),
+            "offline": True,
+            "stderr_tail": build.stderr[-2000:],
+        }
+        if build.returncode != 0:
+            raise ExecutionError("candidate build failed (exit {})".format(build.returncode))
+
+        # 3. Trusted test-policy compilation.
+        #
+        # Authority compile: exact comparison-base test source against exact
+        # comparison-base production/dependencies only. Candidate bytecode has
+        # no semantic input into these credited test classes.
+        #
+        # Compatibility probe: compile the same trusted source against admitted,
+        # frozen candidate production. That output is NEVER executed or credited;
+        # it must be byte-identical to the authority compile. This detects
+        # candidate-driven constant inlining, overload/type binding changes, or
+        # other compile-time rewrites of trusted tests.
+        export = work / "trusted-tests-export"
+        sandbox.export_commit(
+            trusted_repo, trusted_test_source_commit(args.comparison_base, args.candidate_sha), export
+        )
+        compile_trusted_policy_production(
+            export, modules, args.cp_rel, args.mvn, trusted_maven_repo)
+
+        # Runtime working-directory data comes from an immutable exact-candidate
+        # Git export rather than from the candidate-writable build tree.
+        run_export = work / "candidate-runtime-export"
+        sandbox.export_commit(trusted_repo, args.candidate_sha, run_export)
+        records, scans, frozen, dropped = {}, {}, {}, {}
+        semantic_divergence = {}
+        empty_tests = staging / "admission-empty-tests"
+        empty_tests.mkdir(parents=True, exist_ok=True)
+        for module in modules:
+            entries, dropped[module] = sanitize_classpath(
+                candidate_classpath(candidate_root, module, args.cp_rel),
+                candidate_root, reactor_artifacts)
+
+            # Admit and freeze every candidate/dependency byte before the
+            # non-authoritative compatibility javac parses it. The build UID
+            # cannot mutate RUNNER_TEMP staging.
+            scans[module] = scan_launch_classpath(
+                empty_tests, entries, candidate_root, home / ".m2" / "repository",
+                trusted_maven_repo,
+                freeze=(staging / "classpath", bundle / "classpath", frozen))
+
+            out = staging / "tests" / module
+            reference_cp = (
+                [str(j) for j in testng_jars]
+                + trusted_policy_compile_entries(
+                    export, module, args.cp_rel, reactor_artifacts, trusted_maven_repo)
+            )
+            record = trusted_compile_tests(
+                export, module, reference_cp, out, args.java)
+            record["compile_classpath_authority"] = "comparison_base_only"
+            record["compiled_required"] = sorted(
+                set(surface["modules"][module]["classes"]) & compiled_class_names(out))
+            records[module] = record
+            if record.get("exit_code") != 0:
+                manifest["trusted_test_compile_authority"]["status"] = (
+                    "UNKNOWN_REFERENCE_COMPILE_FAILED")
+                manifest["trusted_test_compilation"] = records
+                raise ExecutionError(
+                    "authoritative comparison-base trusted-test compilation failed for {}".format(
+                        module))
+
+            candidate_check = staging / "candidate-test-compatibility" / module
+            candidate_check_cp = (
+                [str(j) for j in testng_jars]
+                + scans[module]["trusted_dependency_compile_entries"]
+                + scans[module]["candidate_compile_entries"]
+            )
+            candidate_record = trusted_compile_tests(
+                export, module, candidate_check_cp, candidate_check, args.java)
+            record["candidate_compatibility_exit_code"] = candidate_record.get("exit_code")
+            record["candidate_compatibility_stderr_tail"] = candidate_record.get("stderr_tail", "")
+            if candidate_record.get("exit_code") != 0:
+                manifest["trusted_test_compile_authority"]["status"] = (
+                    "CANDIDATE_INCOMPATIBLE")
+                manifest["trusted_test_compilation"] = records
+                raise ExecutionError(
+                    "candidate production is incompatible with trusted test source in {}".format(
+                        module))
+
+            differences = class_digest_differences(out, candidate_check)
+            record["candidate_semantic_match"] = not differences
+            record["candidate_semantic_mismatches"] = differences[:100]
+            if differences:
+                semantic_divergence[module] = differences[:100]
+
+            # Only the authoritative comparison-base-compiled bytecode is scanned,
+            # staged and later executed. Candidate-probe bytecode is discarded.
+            _scan_class_tree(
+                "trusted-compiled tests", out, scans[module],
+                allow_testng_test_api=True)
+
+        manifest["trusted_test_compilation"] = records
+        manifest["trusted_test_compile_authority"]["semantic_divergence"] = semantic_divergence
+        if semantic_divergence:
+            manifest["trusted_test_compile_authority"]["status"] = (
+                "UNKNOWN_CANDIDATE_SENSITIVE")
+            raise ExecutionError(
+                "candidate production changes trusted test compilation semantics: {}".format(
+                    sorted(semantic_divergence)))
+        manifest["trusted_test_compile_authority"]["status"] = "PROVEN"
+        manifest["launch_classpath_admission"] = scans
+        sandbox.stage_readonly(staging, bundle)
+
+        # 4. Hostile bytecode runs under a second UID.  A delayed process left
+        # by candidate Maven/plugin code cannot ptrace, signal or write the
+        # execution JVM/ledger as a different UID.  The per-run temp directory
+        # is private to the execution UID as well.
+        launch_dir = execution_sandbox / "witness-out"
+        exec_tmp = execution_sandbox / "tmp"
+        sandbox.run_candidate(
+            args.execution_user, execution_home, execution_sandbox,
+            ["/bin/sh", "-c",
+             'rm -rf "$1" "$2" && mkdir -p "$1" "$2" && chmod 0700 "$1" "$2"',
+             "d17", str(launch_dir), str(exec_tmp)])
+        manifest["execution_sandbox"] = {
+            "user": args.execution_user,
+            "root": str(execution_sandbox),
+            "private_tmp": str(exec_tmp),
+        }
+        for module in modules:
+            required_counts = dict(surface["modules"][module].get("class_counts") or {})
+            required_method_counts = dict(surface["modules"][module].get("method_counts") or {})
+            if not required_counts or not required_method_counts:
+                manifest["modules"][module] = {
+                    "module": module, "required_classes": [], "required_class_counts": {},
+                    "required_method_counts": {},
+                    "launch_exit_code": 0, "skipped_no_required_tests": True,
+                    "receipt_authority": "TRUSTED_PARENT_OS_PROCESS",
+                    "candidate_jvm_receipt_credentials": False,
+                }
+                continue
+            log("executing {} ({} required classes) as {}".format(
+                module, len(required_counts), args.execution_user))
+            manifest["modules"][module] = execute_module(
+                run_export, module, required_counts, required_method_counts,
+                launch_dir, bundle, testng_jars, receipt_run_id, args.java,
+                argline + ["-Djava.io.tmpdir=" + str(exec_tmp)], xvfbrun,
+                scans[module]["candidate_code_entries"],
+                scans[module]["trusted_dependency_entries"],
+                dropped[module], args.execution_user, execution_home,
+                evidence_dir / "witness", args.out_of_band_test_class,
+            )
+            entry = manifest["modules"][module]
+            log("  {} parent_exit={} child_exit={} ledger={} totals={}".format(
+                module, entry.get("launch_exit_code"), entry.get("child_process_exit_code"),
+                entry.get("ledger_authentication"), entry.get("testng_totals")))
+    except (ExecutionError, sandbox.SandboxError, OSError, KeyError, ValueError, MemoryError) as exc:
+        manifest["error"] = str(exc)
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        sys.stderr.write("d17-exec: {}\n".format(exc))
+        return 1
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def common(p):
+        p.add_argument("--trusted-repo", default=".", help="trusted default-branch checkout")
+        p.add_argument("--evidence-dir", required=True, help="trusted evidence directory")
+        p.add_argument("--modules", required=True, help="space separated required modules")
+        p.add_argument("--java", default="java")
+        p.add_argument("--xvfb-run", default="", help="prefix such as '/usr/bin/xvfb-run -a'")
+        p.add_argument("--cp-rel", default="target/d17-cp.txt")
+        p.add_argument("--comparison-base", required=True,
+                       help="exact trusted comparison base SHA to enumerate the required surface from")
+
+    s = sub.add_parser("surface", help="enumerate the required surface from the trusted comparison base")
+    common(s)
+
+    e = sub.add_parser("execute", help="build and run the exact candidate as the sandbox account")
+    common(e)
+    e.add_argument("--candidate-sha", required=True, help="exact locked candidate SHA")
+    e.add_argument("--candidate-tree", required=True, help="exact locked candidate TREE")
+    e.add_argument("--sandbox-dir", required=True)
+    e.add_argument("--sandbox-user", required=True, help="candidate Maven/build OS identity")
+    e.add_argument("--execution-user", required=True, help="separate hostile-bytecode JVM OS identity")
+    e.add_argument("--execution-sandbox-dir", required=True)
+    e.add_argument("--sandbox-prepare", required=True, help="SANDBOX_PREPARE.json written by sandbox.py prepare")
+    e.add_argument("--bundle-dir", required=True, help="root-owned read-only directory for trusted bytecode")
+    e.add_argument("--work-dir", required=True)
+    e.add_argument("--mvn", required=True, help="staged trusted Maven launcher (absolute path)")
+    e.add_argument("--trusted-testng", action="append", required=True,
+                   help="pinned TestNG closure jar resolved by a trusted step; repeatable")
+    e.add_argument("--trusted-maven-repo", default=None,
+                   help="the runner's own Maven repository, the trusted copy every dependency jar must equal")
+    e.add_argument("--out-of-band-test-class", action="append", default=[],
+                   help="trusted class whose runtime skips are declared out of band; repeatable")
+
+    args = parser.parse_args(argv)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    return cmd_surface(args) if args.command == "surface" else cmd_execute(args)
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry point
+    raise SystemExit(main())

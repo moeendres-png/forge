@@ -1,0 +1,99 @@
+name: Forge D17 qualification gate selftest
+
+# The exact-SHA qualification itself runs on pull_request_target, from the
+# definition on master, so a change to the gate cannot qualify itself. This
+# workflow exercises the changed gate code on the pull request instead: the
+# verdict-rule controls, the mutation check that proves those controls are not
+# vacuous, and runtime controls that run the receiptless trusted child harness
+# against hostile candidate production bytecode under a separate sandbox UID.
+#
+# It grants no qualification credit and needs no secret.
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - ".github/qualification/**"
+      - ".github/workflows/forge-candidate-qualification.yml"
+      - ".github/workflows/forge-candidate-qualification-selftest.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHONHASHSEED: "0"
+  D17_TESTNG_VERSION: "7.10.2"
+
+jobs:
+  selftest:
+    name: D17 gate controls (Java ${{ matrix.java }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["17", "21"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Setup java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Resolve the pinned trusted TestNG closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mvn -B -q dependency:get -Dartifact=org.testng:testng:${D17_TESTNG_VERSION} -Dtransitive=true
+          dest="$RUNNER_TEMP/d17-testng"
+          mkdir -p "$dest"
+          m2="$HOME/.m2/repository"
+          cp "$m2/org/testng/testng/${D17_TESTNG_VERSION}/testng-${D17_TESTNG_VERSION}.jar" \
+             "$m2/com/beust/jcommander/1.82/jcommander-1.82.jar" \
+             "$m2/org/webjars/jquery/3.7.1/jquery-3.7.1.jar" \
+             "$m2/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar" "$dest/"
+          sha256sum "$dest"/*.jar
+
+      - name: Verdict-rule controls
+        working-directory: .github/qualification
+        run: python3 -m unittest -v qualification_selftest
+
+      # Run the real hostile-JVM boundary before the expensive mutation sweep.
+      # Both remain mandatory gates; this ordering only shortens diagnosis when
+      # the runtime contract itself is red.
+      - name: Runtime controls (real driver, real TestNG, sandbox account)
+        working-directory: .github/qualification
+        env:
+          D17_REQUIRE_TOOLCHAIN: "1"
+          D17_BUILD_USER: d17build
+          D17_EXEC_USER: d17exec
+          D17_BUILD_SANDBOX_DIR: /srv/d17-selftest-build
+          D17_EXEC_SANDBOX_DIR: /srv/d17-selftest-exec
+        run: |
+          set -euo pipefail
+          export D17_TRUSTED_TESTNG_DIR="$RUNNER_TEMP/d17-testng"
+          python3 -m unittest -v qualification_runtime_controls
+
+      # Mutations that name runtime killers must also turn those real-JVM
+      # controls red, so the sweep needs the same required toolchain/sandbox.
+      - name: Mutation check (every control family must catch its mutation)
+        working-directory: .github/qualification
+        env:
+          D17_REQUIRE_TOOLCHAIN: "1"
+          D17_BUILD_USER: d17build
+          D17_EXEC_USER: d17exec
+          D17_BUILD_SANDBOX_DIR: /srv/d17-selftest-build
+          D17_EXEC_SANDBOX_DIR: /srv/d17-selftest-exec
+        run: |
+          set -euo pipefail
+          export D17_TRUSTED_TESTNG_DIR="$RUNNER_TEMP/d17-testng"
+          python3 qualification_mutation_check.py
