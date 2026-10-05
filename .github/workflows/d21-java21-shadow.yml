@@ -12,6 +12,8 @@ permissions:
 env:
   D21_FIXTURE_SOURCE: .github/d21/D21SecurityManagerCompatibilityRedControlTest.java
   D21_FIXTURE_TARGET: forge-gui-desktop/src/test/java/forge/d21/D21SecurityManagerCompatibilityRedControlTest.java
+  D21_CHILD_SOURCE: .github/d21/D21SecurityManagerChild.java
+  D21_CHILD_TARGET: forge-gui-desktop/src/test/java/forge/d21/D21SecurityManagerChild.java
 
 jobs:
   baseline-red-control-java17:
@@ -30,6 +32,7 @@ jobs:
         run: |
           mkdir -p "$(dirname "$D21_FIXTURE_TARGET")"
           cp "$D21_FIXTURE_SOURCE" "$D21_FIXTURE_TARGET"
+          cp "$D21_CHILD_SOURCE" "$D21_CHILD_TARGET"
       - name: Install Xvfb
         run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
       - name: Prove baseline accepts compatibility behavior
@@ -86,6 +89,7 @@ jobs:
         run: |
           mkdir -p "$(dirname "$D21_FIXTURE_TARGET")"
           cp "$D21_FIXTURE_SOURCE" "$D21_FIXTURE_TARGET"
+          cp "$D21_CHILD_SOURCE" "$D21_CHILD_TARGET"
       - name: Require reduced candidate to catch red control
         shell: bash
         run: |
@@ -129,6 +133,7 @@ jobs:
         run: |
           mkdir -p "$(dirname "$D21_FIXTURE_TARGET")"
           cp "$D21_FIXTURE_SOURCE" "$D21_FIXTURE_TARGET"
+          cp "$D21_CHILD_SOURCE" "$D21_CHILD_TARGET"
       - name: Install Xvfb
         run: command -v Xvfb >/dev/null 2>&1 || { sudo apt update && sudo apt install -y xvfb; }
       - name: Require full battery to catch red control
