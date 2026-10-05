@@ -2175,16 +2175,23 @@ class FrozenLaunchClasspath(unittest.TestCase):
         self.assertIn('unix.equals("/proc") || unix.startsWith("/proc/")', source)
         self.assertIn('targetUnix.equals("/proc") || targetUnix.startsWith("/proc/")', source)
         self.assertIn('loader == candidate || loader == dependencies', source)
-        self.assertIn('new Guard(candidate, deps, protectedRoot)', source)
+        self.assertIn('return CONTEXT_HOSTILE;', source)
+        self.assertIn(
+            'return trustedAuthority ? CONTEXT_TRUSTED_AUTHORITY : CONTEXT_UNTRUSTED_ASYNC;',
+            source,
+        )
+        self.assertIn('if (!authorityRestrictedContext())', source)
+        self.assertIn('new Guard(candidate, deps, system, protectedRoot)', source)
         runtime = (Path(__file__).resolve().parent / "qualification_runtime_controls.py").read_text()
         for alias in ("/proc/thread-self/mem", "/proc/self/root/proc/self/mem",
                       "/proc/thread-self/fd", "proc-self-mem-write",
-                      "async_confused_deputy"):
+                      "async_confused_deputy", "jdk-async-properties-deputy",
+                      "runtime_defined_bytecode_remains_in_hostile_candidate_domain"):
             self.assertIn(alias, runtime)
         guarded = source.split("static final class GuardedProperties", 1)[1].split(
             "static final class Session", 1)[0]
         check_key = guarded.split("private void checkKey", 1)[1].split("@Override", 1)[0]
-        self.assertIn("guard.candidateInContext()", check_key)
+        self.assertIn("guard.authorityRestrictedContext()", check_key)
         self.assertNotIn("sensitiveProperty", check_key)
         self.assertIn("putIfAbsent(Object key, Object value)", guarded)
         self.assertIn("remove(Object key, Object value)", guarded)
