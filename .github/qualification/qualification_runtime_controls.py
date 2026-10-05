@@ -283,6 +283,11 @@ class HostileBytecodeContainmentRuntimeControls(RuntimeCase):
             'java.nio.file.Files.list(java.nio.file.Path.of("/proc/self/fd")).close();',
         "proc-thread-self-fd":
             'java.nio.file.Files.list(java.nio.file.Path.of("/proc/thread-self/fd")).close();',
+        "symlink-proc-alias":
+            'java.nio.file.Path d=java.nio.file.Files.createTempDirectory("d17-proc-link-"); '
+            'java.nio.file.Path l=d.resolve("mem"); '
+            'java.nio.file.Files.createSymbolicLink(l, java.nio.file.Path.of("/proc/self/mem")); '
+            'java.nio.file.Files.newByteChannel(l).close();',
         "thread-race":
             'Thread t=new Thread(() -> System.setProperty("testng.mode.dryrun","true")); t.start(); t.join();',
     }
