@@ -16,13 +16,14 @@ any qualification signal. Credit is derived from two trusted ledgers:
     would execute. A candidate cannot shrink it.
 
 ``execution-manifest.json`` + ``witness/*.witness.jsonl``
-    The trusted observation: the trusted orchestrator launched each module's
-    required classes itself, as the separate sandbox account, with a trusted
-    driver and listener compiled from the trusted branch placed ahead of every
-    candidate class, and that listener recorded each dispatched method with its
-    outcome. Each ledger is HMAC-chained with a key only the trusted driver held;
-    the orchestrator verified the chain before copying the ledger into trusted
-    evidence and recorded the copy's digest in the manifest.
+    The trusted observation: the trusted orchestrator launches trusted
+    comparison-base tests against candidate production bytecode as the separate
+    execution sandbox account.  The receiptless child validates exact per-class
+    and per-method dispatch counts, failures, skips and containment, then returns
+    only a bounded OS exit status.  The external trusted parent -- outside the
+    candidate UID/JVM -- creates the credited receipt, binds it to a fresh
+    parent-only run id and records its SHA-256 digest in the manifest.  Candidate
+    reports and child-authored ledgers carry no credit.
 
 ``INTEGRITY.json``
     Written by ``sandbox.py verify`` after every candidate execution: trusted
@@ -203,8 +204,9 @@ def read_witness(path: Path, module: str, nonce: str) -> dict:
         status = record["status"]
         if status not in ("PASS", "FAIL", "SKIP"):
             raise QualificationError("witness invocation {} has status {!r}".format(index, status))
-        # The listener records a PASS only for a result TestNG really dispatched
-        # to its method (never a dry-run success); anything else is not credit.
+        # A credited parent receipt represents only dispatches accepted by the
+        # receiptless child counter (never a dry-run-only success). Any malformed
+        # or manually edited receipt shape remains non-credit.
         if status == "PASS" and record.get("invoked") is not True:
             raise QualificationError("witness invocation {} is a PASS without dispatch".format(index))
         name = record["class"]
