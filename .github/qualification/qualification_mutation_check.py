@@ -528,12 +528,22 @@ MUTATIONS = [
         "procfs aliases or write-only process-memory access could bypass containment",
     ),
     Mutation(
+        "retain-trusted-loader-handle-in-dependency-domain",
+        "witness/forge/d17/witness/Containment.java",
+        '    static final class DependencyLoader extends URLClassLoader {\n'
+        '        private volatile Guard guard;\n',
+        '    static final class DependencyLoader extends URLClassLoader {\n'
+        '        private final ClassLoader trusted = Containment.class.getClassLoader();\n'
+        '        private volatile Guard guard;\n',
+        "the hostile-tainted dependency loader would retain a direct trusted system-loader authority handle",
+    ),
+    Mutation(
         "bridge-testng-through-dependency-loader",
         "witness/forge/d17/witness/Containment.java",
         '                denyAuthority("dependency attempted to load trusted authority class " + name);\n'
         '                throw new ClassNotFoundException(\n'
         '                        "D17 trusted authority package is not dependency-visible: " + name);\n',
-        '                return trusted.loadClass(name);\n',
+        '                return Class.forName(name);\n',
         "candidate code could route TestNG authority through a generic dependency classloader deputy",
     ),
     Mutation(
