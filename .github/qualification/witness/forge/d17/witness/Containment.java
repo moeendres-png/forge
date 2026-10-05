@@ -318,6 +318,8 @@ public final class Containment {
                     || permission.getClass().getName().equals("jdk.jfr.FlightRecorderPermission")
                     || permission.getClass().getName().equals("com.sun.tools.attach.AttachPermission")) {
                 deny(actor + " VM-introspection permission " + permission.getClass().getName());
+            } else if (permission.getClass().getName().equals("java.nio.file.LinkPermission")) {
+                deny(actor + " filesystem link permission " + name);
             } else if (permission instanceof PropertyPermission
                     && permission.getActions().contains("write")) {
                 // Process-global properties are trusted-runtime state.  Even a
