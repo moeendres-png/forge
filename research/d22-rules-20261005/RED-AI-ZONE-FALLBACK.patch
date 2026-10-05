@@ -1,0 +1,18 @@
+diff --git a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java
+index 12bdda0e5cf..bf513079e71 100644
+--- a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java
++++ b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/util/PlayerControllerForTests.java
+@@ -714,12 +714,7 @@ public class PlayerControllerForTests extends PlayerController {
+         if (delayedReveal != null) {
+             reveal(delayedReveal);
+         }
+-        ChooseZoneCardAction action = playerActions == null ? null
+-                : playerActions.getNextActionIfApplicable(decider, getGame(), ChooseZoneCardAction.class);
+-        if (action == null) {
+-            throw new IllegalStateException("Missing scripted zone-card choice");
+-        }
+-        return action.choose(destination, origin, fetchList);
++        return ChangeZoneAi.chooseCardToHiddenOriginChangeZone(destination, origin, sa, fetchList, player, decider);
+     }
+ 
+     @Override

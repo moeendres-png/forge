@@ -1,0 +1,48 @@
+{
+  "source_sha": "ff4302432fa518573a2d05e5e81a3160928a6c00",
+  "source_tree": "15fbcb83ed6227d2ae8e6dba5bc142f069a9f708",
+  "code_delta_sha256": "475fccd28f59573219403ee96772441e5584088bbdf396dbb04a99e20219b49d",
+  "code_delta_file": "REVIEWED-RED-CARD-SCRIPT-NO-LOSS.patch",
+  "java": "17",
+  "java_version": "openjdk version \"17.0.20.1\" 2026-08-18\nOpenJDK Runtime Environment (build 17.0.20.1+1-1-24.04-Ubuntu)\nOpenJDK 64-Bit Server VM (build 17.0.20.1+1-1-24.04-Ubuntu, mixed mode, sharing)\n",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-o",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T20:31:50.577913+00:00",
+  "completed_at": "2026-10-05T20:34:16.609174+00:00",
+  "maven_exit": 1,
+  "suite": {
+    "name": "TestSuite",
+    "time": "33.809",
+    "tests": "25",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "2"
+  },
+  "failures": [
+    {
+      "class": "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104",
+      "method": "test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses",
+      "message": "java.lang.RuntimeException: java.lang.AssertionError: expected [Player 2] but found [Player 1]"
+    },
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "unpayableDamageReplacementLosesBeforeDraw",
+      "message": "java.lang.RuntimeException: java.lang.AssertionError: expected [Player 2] but found [Player 1]"
+    }
+  ],
+  "raw_xml_sha256": "ee221a52a0eb62c702cbdc9c796c82b220cde54d32ef5c353ae1fd710c4e6c9a",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}

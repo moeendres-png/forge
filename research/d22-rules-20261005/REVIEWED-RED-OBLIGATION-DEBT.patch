@@ -1,0 +1,13 @@
+diff --git a/forge-gui-desktop/src/test/java/forge/d24/D24ExecutionGuardTest.java b/forge-gui-desktop/src/test/java/forge/d24/D24ExecutionGuardTest.java
+index 3ab75018cfb..9a7b44e9f98 100644
+--- a/forge-gui-desktop/src/test/java/forge/d24/D24ExecutionGuardTest.java
++++ b/forge-gui-desktop/src/test/java/forge/d24/D24ExecutionGuardTest.java
+@@ -48,7 +48,7 @@ public class D24ExecutionGuardTest {
+ 
+     // Executed historical method names are not evidence that their named Rules
+     // obligations are isolated. D22 reclassifies this debt, it does not clear it.
+-    private static final Set<String> UNQUALIFIED_RULE_OBLIGATIONS = Set.of("CR104.3f");
++    private static final Set<String> UNQUALIFIED_RULE_OBLIGATIONS = Set.of();
+ 
+     private static Map<String, Integer> runtimeDiscovered = zeroCounts();
+     private static Map<String, Integer> runtimePassed = zeroCounts();

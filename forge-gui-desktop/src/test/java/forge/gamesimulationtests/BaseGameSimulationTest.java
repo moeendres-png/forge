@@ -1,6 +1,10 @@
 package forge.gamesimulationtests;
 
 import forge.card.CardMockTestCase;
+import forge.card.CardType;
+import forge.localinstance.properties.ForgeConstants;
+import forge.util.FileSection;
+import forge.util.FileUtil;
 import forge.game.GameLogFormatter;
 import forge.gamesimulationtests.util.GameWrapper;
 import forge.gamesimulationtests.util.player.PlayerSpecification;
@@ -16,10 +20,22 @@ public abstract class BaseGameSimulationTest extends CardMockTestCase {
     @BeforeMethod
     @Override
     protected void initMocks() throws Exception {
+        Lang.createInstance("en-US");
         super.initMocks();
         mockStaticTracked(Sentry.class);
         mockStaticTracked(GameLogFormatter.class);
-        Lang.createInstance("en-US");
+    }
+
+    @Override
+    protected void initializeStaticData() {
+        // Parsing needs multiword types before the fixture eagerly caches cards.
+        // FModel is mocked, so initialize its normal source-controlled type data.
+        if (!CardType.Constant.LOADED.isSet()) {
+            FileSection.parseSections(FileUtil.readFile(ForgeConstants.TYPE_LIST_FILE))
+                    .forEach(CardType.Helper::parseTypes);
+            CardType.Constant.LOADED.set();
+        }
+        super.initializeStaticData();
     }
 
     protected void runGame(GameWrapper game, PlayerSpecification expectedWinner, int finalTurn,

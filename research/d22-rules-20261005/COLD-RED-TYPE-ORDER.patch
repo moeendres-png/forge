@@ -1,0 +1,20 @@
+diff --git a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/BaseGameSimulationTest.java b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/BaseGameSimulationTest.java
+index 64c4a85922f..c3783b50469 100644
+--- a/forge-gui-desktop/src/test/java/forge/gamesimulationtests/BaseGameSimulationTest.java
++++ b/forge-gui-desktop/src/test/java/forge/gamesimulationtests/BaseGameSimulationTest.java
+@@ -28,6 +28,7 @@ public abstract class BaseGameSimulationTest extends CardMockTestCase {
+ 
+     @Override
+     protected void initializeStaticData() {
++        super.initializeStaticData();
+         // Parsing needs multiword types before the fixture eagerly caches cards.
+         // FModel is mocked, so initialize its normal source-controlled type data.
+         if (!CardType.Constant.LOADED.isSet()) {
+@@ -35,7 +36,6 @@ public abstract class BaseGameSimulationTest extends CardMockTestCase {
+                     .forEach(CardType.Helper::parseTypes);
+             CardType.Constant.LOADED.set();
+         }
+-        super.initializeStaticData();
+     }
+ 
+     protected void runGame(GameWrapper game, PlayerSpecification expectedWinner, int finalTurn,

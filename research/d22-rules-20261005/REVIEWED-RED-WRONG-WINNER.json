@@ -1,0 +1,44 @@
+{
+  "source_sha": "46680f24dd6c6f104d53297c57872a3779ac8afe",
+  "source_tree": "7bcc5871f44d2cc35907534cd52676274f6276c8",
+  "code_delta_sha256": "d877caaa0038b14608b8df925c33de3cf30159761c6c9f2a6a1f637992f1c254",
+  "code_delta_file": "REVIEWED-RED-WRONG-WINNER.patch",
+  "java": "21",
+  "java_version": "openjdk version \"21.0.12.1\" 2026-08-18\nOpenJDK Runtime Environment (build 21.0.12.1+1-1-26.04.4-Ubuntu)\nOpenJDK 64-Bit Server VM (build 21.0.12.1+1-1-26.04.4-Ubuntu, mixed mode, sharing)\n",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T09:07:31.206625+00:00",
+  "completed_at": "2026-10-05T09:08:21.765131+00:00",
+  "maven_exit": 1,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "TestSuite",
+    "time": "8.311",
+    "tests": "23",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "1"
+  },
+  "failures": [
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "unpayableDamageReplacementLosesBeforeDraw",
+      "message": "java.lang.AssertionError: expected [Player 1] but found [Player 2]"
+    }
+  ],
+  "raw_xml_sha256": "77d9d725feefbf35186d4ec5bd2f99f0ae9b3d7c12912a7a8ff476ee44c5f0db",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}

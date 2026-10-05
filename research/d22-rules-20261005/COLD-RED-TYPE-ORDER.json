@@ -1,0 +1,43 @@
+{
+  "source_sha": "4bc55fabed2731f72ca6305de3c133f1b439407e",
+  "source_tree": "5c2c7b1cae2f070ab371e605ac915dcf31fa36cf",
+  "code_delta_sha256": "a767b74bfc294452a3a862b6ddfe1ea886903d5d9f76106373d77e633e04e6b3",
+  "code_delta_file": "COLD-RED-TYPE-ORDER.patch",
+  "java": "21",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T13:58:21.525084+00:00",
+  "completed_at": "2026-10-05T13:59:12.259596+00:00",
+  "maven_exit": 1,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "TestSuite",
+    "time": "10.503",
+    "tests": "23",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "1"
+  },
+  "failures": [
+    {
+      "class": "forge.gamesimulationtests.LichFixtureInitializationTest",
+      "method": "multiwordTypesAreLoadedBeforeCardParsing",
+      "message": "Mockito is currently self-attaching to enable the inline-mock-maker. This will no longer work in future releases of the JDK. Please add Mockito as an agent to your build what is described in Mockito's documentation: https://javadoc.io/doc/org.mockito/mockito-core/latest/org/mockito/Mockito.html#0.3\nWARNING: A Java agent has been loaded dynamically (/home/moeen/.m2/repository/net/bytebuddy/byte-buddy-agent/1.15.5/byte-buddy-agent-1.15.5.jar)\nWARNING: If a serviceability tool is in use, please run with -XX:+EnableDynamicAgentLoading to hide this warning\nWARNING: If a serviceability tool is not in use, please run with -Djdk.instrument.traceUsage for more information\nWARNING: Dynamic loading of agents will be disallowed by default in a future release\nOpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended\ncould not load default stars image\n(ThreadUtil first call): Running with priority 5\nRead cards: 33669 files in 0 ms (25 parts) using thread pool\nUpcoming set Star Trek (TRK) dated in the future. All `upcoming` cards will be added to this set with unknown rarity.\nThe card A-Alrund's Epiphany was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Baba Lysaga, Night Witch was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Divide by Zero was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Esika's Chariot was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Faceless Haven was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Fires of Invention was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Goldspan Dragon was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Hullbreaker Horror was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Kumano Faces Kakkazan was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Luminarch Aspirant was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Monster Manual was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Omnath, Locus of Creation was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-The Meathook Massacre was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card A-Unholy Heat was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card Blinding Radiance was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card Goblin Bruiser was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card Ogre Painbringer was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card Titanic Pelagosaur was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nThe card Treetop Recluse was not assigned to any set. Adding it to UNKNOWN set... to fix see res/editions/ folder. \nUpcoming set Star Trek (TRK) dated in the future. All `upcoming` cards will be added to this set with unknown rarity.\nException in thread \"main\" java.lang.AssertionError: source multiword types must be loaded before card rules are cached expected [true] but found [false]\n at org.testng.Assert.fail(Assert.java:111)\n at org.testng.Assert.failNotEquals(Assert.java:1578)\n at org.testng.Assert.assertTrue(Assert.java:57)\n at forge.gamesimulationtests.LichFixtureInitializationProbe.main(LichFixtureInitializationProbe.java:20)\n expected [0] but found [1]"
+    }
+  ],
+  "raw_xml_sha256": "2209d26c1dbcb4e0dec7b50a72b47906f707467b9c7e375f25996725f06f89d7",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}

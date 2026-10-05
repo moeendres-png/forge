@@ -1,0 +1,54 @@
+{
+  "source_sha": "95dce6de1bb3aebabfcbdba8aa30122fed8883d7",
+  "source_tree": "e53d01264edd0fa798c6a5ec0483a582306b03a9",
+  "code_delta_sha256": "5d3a429b0725f7f2921727eea4019cbe0f6694a5f4d0e2ef1afae9236de5091c",
+  "code_delta_file": "RED-UNPAID-ACTIVATION.patch",
+  "java": "21",
+  "java_version": "openjdk version \"21.0.12.1\" 2026-08-18\nOpenJDK Runtime Environment (build 21.0.12.1+1-1-26.04.4-Ubuntu)\nOpenJDK 64-Bit Server VM (build 21.0.12.1+1-1-26.04.4-Ubuntu, mixed mode, sharing)\n",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T08:46:47.102147+00:00",
+  "completed_at": "2026-10-05T08:47:33.922173+00:00",
+  "maven_exit": 1,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "TestSuite",
+    "time": "7.609",
+    "tests": "21",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "3"
+  },
+  "failures": [
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "activationWithoutManaIsRejected",
+      "message": "Expected IllegalStateException to be thrown, but nothing was thrown"
+    },
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "payableDamageReplacementAllowsManiacWin",
+      "message": "java.lang.AssertionError: actual engine mana payment must tap the only declared Swamp expected [true] but found [false]"
+    },
+    {
+      "class": "forge.gamesimulationtests.LichDamageReplacementTest",
+      "method": "unpayableDamageReplacementLosesBeforeDraw",
+      "message": "java.lang.AssertionError: actual engine mana payment must tap the only declared Swamp expected [true] but found [false]"
+    }
+  ],
+  "raw_xml_sha256": "62f081800bc279fa885bda5c3592873b42ee6b005d3f71a6ccf94170d1153950",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}

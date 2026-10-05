@@ -5,6 +5,7 @@ import java.util.List;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.player.Player;
+import forge.game.player.PlaySpellAbility;
 import forge.game.spellability.SpellAbility;
 import forge.gamesimulationtests.util.card.CardSpecification;
 import forge.gamesimulationtests.util.card.CardSpecificationHandler;
@@ -31,6 +32,12 @@ public class ActivateAbilityAction extends BasePlayerAction {
 		}
 
 		SpellAbility ability = abilities.get( 0 );
-		game.getStack().add( ability );
+		ability.setActivatingPlayer(player);
+		if (!ability.canPlay()) {
+			throw new IllegalStateException("Scripted activation is not legal: " + actualCardWithAbility);
+		}
+		if (!new PlaySpellAbility(player.getController(), ability).playAbility(true, false, false)) {
+			throw new IllegalStateException("Scripted activation costs were not paid: " + actualCardWithAbility);
+		}
 	}
 }

@@ -1,0 +1,38 @@
+{
+  "source_sha": "46680f24dd6c6f104d53297c57872a3779ac8afe",
+  "source_tree": "7bcc5871f44d2cc35907534cd52676274f6276c8",
+  "code_delta_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "code_delta_file": null,
+  "java": "17",
+  "java_version": "openjdk version \"17.0.20.1\" 2026-08-18\nOpenJDK Runtime Environment (build 17.0.20.1+1-1-26.04-Ubuntu)\nOpenJDK 64-Bit Server VM (build 17.0.20.1+1-1-26.04-Ubuntu, mixed mode, sharing)\n",
+  "command": [
+    "xvfb-run",
+    "-a",
+    "mvn",
+    "-B",
+    "-pl",
+    "forge-gui-desktop",
+    "-am",
+    "-Dtest=ComprehensiveRulesSection104,LichDamageReplacementTest,LichFixtureInitializationTest,D24ExecutionGuardTest",
+    "-Dsurefire.failIfNoSpecifiedTests=false",
+    "clean",
+    "test"
+  ],
+  "started_at": "2026-10-05T09:05:10.142723+00:00",
+  "completed_at": "2026-10-05T09:05:55.901312+00:00",
+  "maven_exit": 0,
+  "suite": {
+    "{http://www.w3.org/2001/XMLSchema-instance}noNamespaceSchemaLocation": "https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd",
+    "version": "3.0",
+    "name": "TestSuite",
+    "time": "8.374",
+    "tests": "23",
+    "errors": "0",
+    "skipped": "0",
+    "failures": "0"
+  },
+  "failures": [],
+  "raw_xml_sha256": "626e64d0900e93106307ed48d62f3572a85a7fe3867d16ab924f87df7d6bea1b",
+  "qualification_credit": "none",
+  "trusted_exact_sha_candidate_qualification": "NOT_CLAIMED"
+}

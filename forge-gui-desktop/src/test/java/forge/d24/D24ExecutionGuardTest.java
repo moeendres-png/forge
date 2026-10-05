@@ -3,12 +3,16 @@ package forge.d24;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.testng.Assert;
@@ -26,17 +30,23 @@ public class D24ExecutionGuardTest {
             Map.entry("forge.card.CardDbPerformanceTests", 4),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103", 2),
             Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 3),
-            Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 1));
+            Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 1),
+            // D22's actual-card evidence: losing either class would silently
+            // drop the paid-activation, loss-route and Maniac-win controls.
+            Map.entry("forge.gamesimulationtests.LichDamageReplacementTest", 6),
+            Map.entry("forge.gamesimulationtests.LichFixtureInitializationTest", 1));
 
     private static final Map<String, Integer> ENABLED_RUNTIME_METHODS = Map.ofEntries(
             Map.entry("forge.deck.DeckRecognizerTest", 85),
             Map.entry("forge.card.CardDbCardMockTestCase", 54),
-            Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 11),
+            Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104", 12),
             Map.entry("forge.card.CardDbLazyCardLoadingCardMockTestCase", 4),
             Map.entry("forge.card.CardDbPerformanceTests", 56),
             Map.entry("forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection103", 2),
             Map.entry("forge.card.CardEditionCollectionCardMockTestCase", 3),
-            Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 55));
+            Map.entry("forge.card.CardDbWithNoImageCardDbMockTestCase", 55),
+            Map.entry("forge.gamesimulationtests.LichDamageReplacementTest", 6),
+            Map.entry("forge.gamesimulationtests.LichFixtureInitializationTest", 1));
 
     private static final List<String> BASE_CLASSES = List.of(
             "forge.card.CardMockTestCase",
@@ -44,9 +54,11 @@ public class D24ExecutionGuardTest {
 
     private static final Set<String> EXPECTED_DISABLED = Set.of(
             "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardLegacyImplementation",
-            "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardNewDbImplementation",
-            "forge.gamesimulationtests.comprehensiverules.ComprehensiveRulesSection104"
-                    + "#test_104_3f_if_a_player_would_win_and_lose_simultaneously_he_loses");
+            "forge.card.CardDbPerformanceTests#testBenchmarkFullDbGetCardNewDbImplementation");
+
+    // Executed historical method names are not evidence that their named Rules
+    // obligations are isolated. D22 reclassifies this debt, it does not clear it.
+    private static final Set<String> UNQUALIFIED_RULE_OBLIGATIONS = Set.of("CR104.3f");
 
     private static Map<String, Integer> runtimeDiscovered = zeroCounts();
     private static Map<String, Integer> runtimePassed = zeroCounts();
@@ -128,10 +140,30 @@ public class D24ExecutionGuardTest {
 
         // #531 adds two controls: the database deck-text grammar
         // (DeckRecognizerTest) and the UNKNOWN sentinel edition codes
-        // (CardEditionCollectionCardMockTestCase).
-        Assert.assertEquals(declared, 165, "D24 declared-method denominator drifted");
-        Assert.assertEquals(enabled, 162, "D24 enabled declared-method denominator drifted");
+        // (CardEditionCollectionCardMockTestCase). D22 adds the seven Lich
+        // controls and re-enables the 104.3f scenario.
+        Assert.assertEquals(declared, 172, "D24 declared-method denominator drifted");
+        Assert.assertEquals(enabled, 170, "D24 enabled declared-method denominator drifted");
         Assert.assertEquals(disabled, EXPECTED_DISABLED, "disabled NOT_RUN obligations drifted");
+    }
+
+    @Test
+    public void enabledHistoricalScenarioCannotClearUnqualifiedRuleDebt() throws IOException {
+        Assert.assertEquals(UNQUALIFIED_RULE_OBLIGATIONS, Set.of("CR104.3f"),
+                "actual simultaneous-win/loss evidence is required before adjudicating this obligation");
+        // The durable research record must state the same open debt: clearing it
+        // takes both this set and RULE_OBLIGATIONS.json, never one of them alone.
+        Path obligations = Paths.get("..", "research", "d22-rules-20261005", "RULE_OBLIGATIONS.json");
+        String json = new String(Files.readAllBytes(obligations), StandardCharsets.UTF_8);
+        Matcher entry = Pattern.compile(
+                "\\{[^{}]*\"id\"\\s*:\\s*\"([^\"]+)\"[^{}]*\"status\"\\s*:\\s*\"NOT_RUN\"[^{}]*"
+                        + "\"qualification_credit\"\\s*:\\s*\"none\"[^{}]*\\}").matcher(json);
+        Set<String> open = new java.util.TreeSet<>();
+        while (entry.find()) {
+            open.add(entry.group(1));
+        }
+        Assert.assertEquals(open, UNQUALIFIED_RULE_OBLIGATIONS,
+                "RULE_OBLIGATIONS.json and the guard disagree on the open Rules debt");
     }
 
     @Test
@@ -205,6 +237,10 @@ public class D24ExecutionGuardTest {
 
     @AfterSuite(alwaysRun = true)
     public void verifyLiveAffectedExecution() {
+        UNQUALIFIED_RULE_OBLIGATIONS.stream().sorted().forEach(rule ->
+                System.out.println("D24_RULE_OBLIGATION id=" + rule
+                        + " status=NOT_RUN evidence_class=UNKNOWN historical_fixture=EXECUTED_NOT_ISOLATED qualification_credit=none"));
+        System.out.println("D24_RULE_COVERAGE=PARTIAL");
         if (System.getProperty("test") != null) {
             return;
         }
