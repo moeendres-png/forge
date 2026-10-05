@@ -644,6 +644,13 @@ MUTATIONS = [
         "trusted TestNG invocation would not activate the synchronous-deputy containment barrier",
     ),
     Mutation(
+        "reenter-security-manager-during-authority-loader-inspection",
+        "witness/forge/d17/witness/Containment.java",
+        '                ClassLoader loader = classLoaderOf(frame);\n',
+        '                ClassLoader loader = frame.getClassLoader();\n',
+        "guard-internal loader inspection would recursively re-enter RuntimePermission(getClassLoader)",
+    ),
+    Mutation(
         "trust-jdk-only-asynchronous-authority",
         "witness/forge/d17/witness/Containment.java",
         '            // A JDK-only asynchronous task has neither a hostile frame nor an\n'
