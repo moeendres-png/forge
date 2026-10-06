@@ -83,6 +83,26 @@ public class G1R1TurnBeganBootstrapTest {
         return ScenarioBootstrap.parse(neutral(battlefield));
     }
 
+    /** Whether the projected battlefield of a seat lists the named permanent. */
+    private static boolean readbackContains(BridgeSession session, String playerId,
+            String cardName) {
+        final JsonObject state = StateProjection.gameState(session, "p1");
+        for (JsonElement element : state.getAsJsonArray("players")) {
+            final JsonObject player = element.getAsJsonObject();
+            if (!player.get("player_id").getAsString().equals(playerId)) {
+                continue;
+            }
+            final JsonObject zones = player.getAsJsonObject("zones");
+            for (JsonElement detail : zones.getAsJsonArray("battlefield_details")) {
+                final JsonObject entry = detail.getAsJsonObject();
+                if (cardName.equals(entry.get("name").getAsString())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** Reads a projected battlefield-detail field from a seat's own state read. */
     private static boolean readbackFlag(BridgeSession session, String playerId, String observer,
             String cardName, String field) {
@@ -107,6 +127,28 @@ public class G1R1TurnBeganBootstrapTest {
     private static String stateStep(BridgeSession session) {
         final JsonObject state = StateProjection.gameState(session, "p1");
         return state.get("step").isJsonNull() ? null : state.get("step").getAsString();
+    }
+
+    /** Waits for a frame strictly newer than the given revision, or null. */
+    private static DecisionFrame awaitFrameAfter(BridgeSession session, long revision,
+            long timeoutMillis) {
+        final long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            final DecisionFrame frame = session.getCurrentFrame();
+            if (frame != null && frame.revision > revision) {
+                return frame;
+            }
+            if (session.isTerminal()) {
+                return null;
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return null;
     }
 
     /** Content signature of the offered options; order-independent. */
@@ -850,5 +892,192 @@ public class G1R1TurnBeganBootstrapTest {
         Assert.assertEquals(optionSignature(legacyFirst), signature,
                 "placement timing must not change unrelated offered options");
         legacy.shutdown(5000);
+    }
+
+    // ---- ported blocking hardening (PR #33 comment 6021272692) ----
+
+    /**
+     * Port 1 (late-error fail-open). An error recorded after the hook
+     * completed must move a RUNNING session to FAILED and abort the parked
+     * frame. FAILED must never be turned into CLOSED: the frame abort used to
+     * reclassify the session on its way out.
+     */
+    @Test(timeOut = 300000)
+    public void testLateBootstrapErrorFailsRunningSessionClosed() {
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(placement("Runeclaw Bear", "p1", false));
+        final BridgeSession session = scenarioGame("g1-late-error", 5626L, battlefield,
+                new JsonObject());
+        final DecisionFrame parked = BridgeTestSupport.driveStartToPriority(session, "p1",
+                120000);
+        Assert.assertEquals(session.getStatus(), BridgeSession.Status.RUNNING,
+                "the hook completed and the first priority frame is parked");
+        // A stale duplicate turn-one event for the intended game is a bootstrap
+        // error that arrives only after the start-game hook already completed.
+        session.getGame().fireEvent(new GameEventTurnBegan(
+                PlayerView.get(session.playerById("p1")), 1));
+        Assert.assertEquals(session.getStatus(), BridgeSession.Status.FAILED,
+                "a late bootstrap error must fail the running session");
+        Assert.assertTrue(session.getFailReason().contains("invoked more than once"),
+                "late failure reason: " + session.getFailReason());
+        final DecisionFrame.Option pass = find(parked, o -> o.isPass, "pass");
+        final BridgeSession.SubmitOutcome outcome = session.submit(parked.actorPlayerId,
+                pass.optionId, pass.actionType, parked.revision);
+        Assert.assertFalse(outcome.applied, "an aborted frame must not serve a decision");
+        Assert.assertEquals(outcome.errorCode, BridgeErrors.SESSION_FAILED,
+                "the failed session refuses further decisions");
+        Assert.assertTrue(session.awaitTerminal(30000),
+                "the aborted game thread must terminate");
+        Assert.assertEquals(session.getStatus(), BridgeSession.Status.FAILED,
+                "the frame abort must not reclassify FAILED as CLOSED");
+        session.shutdown(5000);
+        Assert.assertEquals(session.getStatus(), BridgeSession.Status.FAILED,
+                "shutdown must not turn a FAILED session into CLOSED");
+    }
+
+    /**
+     * Port 2 (hook-time turn binding). The retained hook only ever runs at the
+     * first-turn untap step; a hook invocation outside turn one must fail
+     * closed instead of applying scenario state at an arbitrary point.
+     */
+    @Test(timeOut = 120000)
+    public void hookRefusesCallsOutsideTurnOne() {
+        final BridgeTestSupport.ConstructedGame constructed =
+                BridgeTestSupport.buildConstructedGame("g1-hook-turn");
+        final BridgeSession session = constructed.session;
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(placement("Runeclaw Bear", "p1", false));
+        final ScenarioBootstrap.Plan plan = planFor(battlefield);
+        session.setScenarioPlan(plan);
+        final Player p1 = constructed.game.getPlayers().get(0);
+        constructed.game.getPhaseHandler().setPlayerTurn(p1);
+        session.installScenarioBootstrap(constructed.game, plan);
+        constructed.game.fireEvent(new GameEventTurnBegan(PlayerView.get(p1), 1));
+        Assert.assertEquals(session.scenarioBootstrapInvocationsForTests(), 1,
+                "the turn-one event satisfies the latch");
+        Assert.assertNotEquals(constructed.game.getPhaseHandler().getTurn(), 1,
+                "the constructed game never started a turn");
+        expectIllegalState(() -> session.scenarioStartGameHook(constructed.game,
+                session.getScenarioPlan()).run(), "turn one");
+    }
+
+    /**
+     * Port 2 (hook-time placement exactness). The post-untap hook must apply
+     * exactly the placement list the TurnBegan bootstrap accepted: a truncated
+     * list fails closed instead of silently skipping plan entries (the loops
+     * used to be bounded only by {@code placed.size()}).
+     */
+    @Test(timeOut = 300000)
+    public void hookRefusesPartialPlacement() {
+        final JsonArray one = new JsonArray();
+        one.add(placement("Runeclaw Bear", "p1", false));
+        final BridgeSession session = scenarioGame("g1-partial", 5627L, one,
+                new JsonObject());
+        BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
+        Assert.assertEquals(session.getStatus(), BridgeSession.Status.RUNNING);
+        Assert.assertEquals(session.scenarioPlacedCardsForTests().size(), 1,
+                "one placement was accepted at TurnBegan");
+        final JsonArray two = new JsonArray();
+        two.add(placement("Runeclaw Bear", "p1", false));
+        two.add(placement("Forest", "p1", false));
+        final ScenarioBootstrap.Plan expanded = planFor(two);
+        expectIllegalState(() -> session.scenarioStartGameHook(session.getGame(), expanded).run(),
+                "placed");
+        session.shutdown(5000);
+    }
+
+    /**
+     * Port 3 control (CR 502.1 / 702.26). A scenario-placed Breezekeeper has
+     * phasing: at the turn-one untap step it phases out before the placement
+     * checkpoint and leaves the projected battlefield, so the Lab readback for
+     * it can only be MISMATCH. Grizzly Bears (no phasing) is the present
+     * control: the same readback path still sees it. The divergence is
+     * recorded in {@code G1-R1-TURNBEGAN-PLACEMENT.md}.
+     */
+    @Test(timeOut = 300000)
+    public void phasedScenarioPermanentLeavesReadbackAtUntap() {
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(placement("Grizzly Bears", "p1", false));
+        battlefield.add(placement("Breezekeeper", "p1", false));
+        final BridgeSession session = scenarioGame("g1-phasing", 5628L, battlefield,
+                new JsonObject());
+        BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
+        Assert.assertTrue(readbackContains(session, "p1", "Grizzly Bears"),
+                "the non-phasing control permanent must stay in readback");
+        Assert.assertFalse(readbackContains(session, "p1", "Breezekeeper"),
+                "the phasing permanent must be absent from readback after the untap step");
+        Card phasedOut = null;
+        for (Card card : session.getGame().getCardsIncludePhasingIn(ZoneType.Battlefield)) {
+            if ("Breezekeeper".equals(card.getName())) {
+                phasedOut = card;
+            }
+        }
+        Assert.assertNotNull(phasedOut, "the phasing permanent still exists in the zone");
+        Assert.assertTrue(phasedOut.isPhasedOut(),
+                "the engine's own untap-step phasing phased it out");
+        Assert.assertEquals(session.playerIdOf(phasedOut.getController()), "p1");
+        session.shutdown(5000);
+    }
+
+    /**
+     * Port 4 control. Five scenario-placed eligible creatures exceed the
+     * complete-declaration limit, so the engine declares attackers
+     * incrementally, one frame per eligible creature. The summoning-sick
+     * creature cast on turn one must never be asked: only the five placed
+     * creatures are.
+     */
+    @Test(timeOut = 300000)
+    public void incrementalAttackFramesNeverAskSickTurnOneCast() {
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(placement("Grizzly Bears", "p1", false));
+        battlefield.add(placement("Runeclaw Bear", "p1", false));
+        battlefield.add(placement("Craw Wurm", "p1", false));
+        battlefield.add(placement("Raging Goblin", "p1", false));
+        battlefield.add(placement("Ornithopter", "p1", false));
+        battlefield.add(placement("Forest", "p1", false));
+        final JsonObject hands = new JsonObject();
+        final JsonArray hand = new JsonArray();
+        hand.add("Llanowar Elves");
+        hands.add("p1", hand);
+        final BridgeSession session = scenarioGame("g1-incremental", 5629L, battlefield, hands);
+        BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
+        final DecisionFrame main = BridgeTestSupport.drivePassesToMainPhase(session, "p1", 60);
+        Assert.assertNotNull(main, "p1 never reached its main phase");
+        submit(session, main, find(main,
+                o -> "activate_ability".equals(o.actionType) && "Forest".equals(o.sourceCardName),
+                "Forest mana ability"));
+        final DecisionFrame castFrame = BridgeTestSupport.awaitFrame(session, 30000);
+        Assert.assertNotNull(castFrame, "no frame after tapping Forest");
+        submit(session, castFrame, find(castFrame,
+                o -> "cast_spell".equals(o.actionType)
+                        && "Llanowar Elves".equals(o.sourceCardName),
+                "Llanowar Elves cast"));
+        final List<String> asked = new ArrayList<>();
+        DecisionFrame frame = driveToAttackersTurnOne(session, "p1");
+        while (frame != null
+                && frame.kind == DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
+                && "p1".equals(frame.actorPlayerId)
+                && any(frame, o -> "declare_attacker".equals(o.actionType))) {
+            Assert.assertFalse(any(frame, o -> o.label != null
+                            && o.label.contains("Llanowar Elves")),
+                    "a sick turn-one cast must never be asked: " + frame.options);
+            final DecisionFrame.Option noAttack = find(frame,
+                    o -> "declare_attacker".equals(o.actionType)
+                            && o.label.endsWith(": no attack"),
+                    "no-attack option");
+            asked.add(noAttack.sourceCardName);
+            final long answeredRevision = frame.revision;
+            submit(session, frame, noAttack);
+            frame = awaitFrameAfter(session, answeredRevision, 30000);
+        }
+        Assert.assertEquals(asked.size(), 5,
+                "one incremental frame per eligible placed creature: " + asked);
+        Assert.assertEquals(new java.util.HashSet<>(asked).size(), 5,
+                "each placed creature is asked exactly once: " + asked);
+        Assert.assertTrue(frame == null
+                        || frame.kind != DecisionFrame.Kind.COMBAT_DECLARE_ATTACKERS
+                        || !"p1".equals(frame.actorPlayerId),
+                "no sixth incremental attacker frame may be parked: " + frame.options);
+        session.shutdown(5000);
     }
 }

@@ -364,10 +364,21 @@ public final class BridgeSession {
     }
 
     private void recordScenarioBootstrapFailure(final String reason) {
-        if (scenarioBootstrapFailure == null) {
-            scenarioBootstrapFailure = reason;
+        synchronized (this) {
+            if (scenarioBootstrapFailure == null) {
+                scenarioBootstrapFailure = reason;
+            }
+            // G1-R1: an error recorded after the start-game hook completed (for
+            // example a stale duplicate turn-one event) would otherwise only be
+            // audited and never observed by a guard that has already run. Fail
+            // the running session now; the parked frame is aborted below.
+            if (status == Status.RUNNING) {
+                status = Status.FAILED;
+                failReason = reason;
+            }
         }
         audit("scenario_bootstrap_failed", detail("reason", reason));
+        abortParkedFrame();
     }
 
     /**
@@ -400,6 +411,21 @@ public final class BridgeSession {
                 scenarioPlacedCards = ScenarioBootstrap.placeBattlefield(self, game, plan);
             } else {
                 requireScenarioBootstrapCompleted();
+            }
+            // G1-R1 hook-time binding: the retained hook only ever runs at the
+            // first-turn untap step, and only for the exact placement list the
+            // TurnBegan bootstrap accepted. Anything else fails closed instead
+            // of applying state at an arbitrary point or silently skipping
+            // plan entries (the apply loops used to be bounded only by
+            // placed.size()).
+            if (game == null || game.getPhaseHandler().getTurn() != 1) {
+                throw new IllegalStateException(
+                        "scenario start-game hook must run on turn one");
+            }
+            if (scenarioPlacedCards.size() != plan.battlefield.size()) {
+                throw new IllegalStateException("scenario bootstrap placed "
+                        + scenarioPlacedCards.size() + " of " + plan.battlefield.size()
+                        + " planned permanents before the start-game hook");
             }
             ScenarioBootstrap.applyPostUntap(self, game, plan, scenarioPlacedCards);
             if ("sick_active".equals(scenarioBootstrapFaultForTests)) {
@@ -662,7 +688,11 @@ public final class BridgeSession {
             audit("session_over", detail("game_id", gameId));
         } catch (SessionAbortedException e) {
             synchronized (this) {
-                status = Status.CLOSED;
+                // A failed session is terminal: aborting the frame that was in
+                // flight must not launder FAILED into CLOSED.
+                if (status != Status.FAILED) {
+                    status = Status.CLOSED;
+                }
             }
             audit("session_aborted", detail("reason", e.getMessage()));
         } catch (BridgeUnsupportedDecision e) {

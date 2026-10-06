@@ -360,6 +360,24 @@ public final class ScenarioBootstrap {
     }
 
     /**
+     * The post-placement apply steps may only run against the complete
+     * placement the TurnBegan bootstrap accepted. A truncated list would
+     * silently skip plan entries (the apply loops were previously bounded only
+     * by {@code placed.size()}); a mismatch fails closed instead.
+     */
+    private static void requireCompletePlacement(Plan plan, List<Card> placed) {
+        if (plan == null) {
+            return;
+        }
+        final int placedCount = placed == null ? 0 : placed.size();
+        if (placedCount != plan.battlefield.size()) {
+            throw new IllegalStateException("scenario placement incomplete: placed "
+                    + placedCount + " of " + plan.battlefield.size()
+                    + " planned permanents");
+        }
+    }
+
+    /**
      * Adds each placement's requested counters exactly once, at placement
      * time, with {@code fireEvents=false}. {@code addCounterInternal} is
      * additive (Card.java), so calling this more than once for the same
@@ -367,10 +385,11 @@ public final class ScenarioBootstrap {
      * Visible for the counter double-application control.
      */
     static void addRequestedCounters(BridgeSession session, Plan plan, List<Card> placed) {
-        if (plan == null || placed == null) {
+        if (plan == null) {
             return;
         }
-        for (int i = 0; i < plan.battlefield.size() && i < placed.size(); i++) {
+        requireCompletePlacement(plan, placed);
+        for (int i = 0; i < plan.battlefield.size(); i++) {
             final Placement placement = plan.battlefield.get(i);
             final Card card = placed.get(i);
             for (Map.Entry<String, Integer> counter : placement.counters.entrySet()) {
@@ -400,10 +419,11 @@ public final class ScenarioBootstrap {
      * state to a moved object.
      */
     static void applyRequestedTapped(BridgeSession session, Plan plan, List<Card> placed) {
-        if (plan == null || placed == null) {
+        if (plan == null) {
             return;
         }
-        for (int i = 0; i < plan.battlefield.size() && i < placed.size(); i++) {
+        requireCompletePlacement(plan, placed);
+        for (int i = 0; i < plan.battlefield.size(); i++) {
             final Placement placement = plan.battlefield.get(i);
             if (!placement.tapped) {
                 continue;
@@ -439,6 +459,7 @@ public final class ScenarioBootstrap {
         if (game == null || plan == null) {
             return;
         }
+        requireCompletePlacement(plan, placed);
         applyRequestedTapped(session, plan, placed);
         // Return natural opening hands to libraries (order hidden; counts natural).
         for (Player player : session.registryPlayers()) {

@@ -29,6 +29,30 @@ permanents are admitted to the first-turn readiness sweep, and only under the
 accepted ruling above. No Rules-Core behavior is changed to hide the
 distinction.
 
+### Scenario-placed phasing permanents (CR 502.1 / 702.26)
+
+Because placement now precedes the turn-one untap step, a scenario-placed
+permanent with phasing (`Phasing`, for example `Breezekeeper`) is on the
+battlefield when the untap step's own phasing action runs and phases out
+before the first checkpoint. It stays in the battlefield zone phased out and
+is absent from `players[].zones.battlefield_details[]`, so the Lab readback for
+such a placement can only be **MISMATCH**; no bridge behavior is changed to
+hide this. `Grizzly Bears` (no phasing) is the present control in
+`G1R1TurnBeganBootstrapTest#phasedScenarioPermanentLeavesReadbackAtUntap`: the
+same readback path still sees it. Scenario plans that request phasing
+permanents must be adjudicated with this divergence during Lab requalification.
+
+### Late bootstrap errors and hook-time binding (PR #33 hardening ports)
+
+A bootstrap error recorded after the retained start-game hook already
+completed (for example a stale duplicate turn-one event delivered on the
+game's event bus) fails the RUNNING session and aborts the parked frame; the
+frame abort never reclassifies FAILED as CLOSED. The retained hook itself
+refuses to run unless the phase handler is on turn one and the accepted
+placement list is complete (`placed.size() == plan.battlefield.size()`), so a
+hook run at another point or against a truncated list fails closed instead of
+skipping plan entries.
+
 ## Exact before/after bridge behavior
 
 | Surface | Before (ee37e4a5) | After (this branch) |
@@ -39,7 +63,7 @@ distinction.
 | Non-active seats' placed creatures | summoning-sick until their own turn begins | unchanged (still summoning-sick until their own turn begins; `isFirstTurnControlled()==true`) |
 | Counters | added once, `fireEvents=false`, at placement | added once, `fireEvents=false`, at TurnBegan placement; never re-applied. The bridge-fixed property is exactly one application; native `addCounterInternal` clamps or drops per engine rules, and exactness is checkpoint-verified by the Lab |
 | Hands / life / commander damage | retained hook, after untap | unchanged; still the retained hook |
-| Subscriber failure handling | n/a (no subscriber) | subscriber catches `Throwable`, records it on the session; one-shot latch keyed to the intended game and turn 1; duplicate and missing invocation fail closed; the retained hook throws unless bootstrap ran exactly once and succeeded |
+| Subscriber failure handling | n/a (no subscriber) | subscriber catches `Throwable`, records it on the session; one-shot latch keyed to the intended game and turn 1; duplicate and missing invocation fail closed; the retained hook throws unless bootstrap ran exactly once and succeeded; a late error fails a RUNNING session (FAILED is never turned into CLOSED) and aborts the parked frame; the hook additionally requires turn 1 and a complete placement list |
 | Hands-off rules | native | native (all legality, SBAs, triggers, casts, combat stay in the Rules Core) |
 
 ## Changed decision/frame surfaces
@@ -97,7 +121,10 @@ Preserved:
   readback; C1 fail-closed controls (`never`, `throw`, `double`, wrong game,
   wrong turn, hook refusal); C2 placement-point mutants (`late`,
   `tapped_at_begin`, `counters_twice`, `sick_active`, `ready_all`,
-  `ready_casts`); C5 first-frame A/B.
+  `ready_casts`); C5 first-frame A/B; PR #33 hardening ports
+  (`testLateBootstrapErrorFailsRunningSessionClosed`; hook refuses non-turn-one
+  and partial placements; `phasedScenarioPermanentLeavesReadbackAtUntap`;
+  `incrementalAttackFramesNeverAskSickTurnOneCast`).
 - `WS202SeparateProcessTest#testPipeTurnOneScenarioReadiness` (new):
   end-to-end over Protocol-2 JSONL — turn-one attacker offered, projected
   `controlled_since_turn_began` true for the active seat and false for a
