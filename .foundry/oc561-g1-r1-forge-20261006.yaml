@@ -4,8 +4,8 @@ worktree: /home/moeen/work/worktrees/oc561-g1-r1-forge-20261006
 branch: opencode/oc561-g1-r1-forge-20261006
 audit_base_sha: ee37e4a52d99401ba57fba7ca516ac01f1981161
 audit_base_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
-state_written_against_head: 0330ba3db86cc95dcd28149fc008e1a3dc9c4205
-validated_head: 0330ba3db86cc95dcd28149fc008e1a3dc9c4205
+state_written_against_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
+validated_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
 source_lock:
   forge_bridge_source_commit: ee37e4a52d99401ba57fba7ca516ac01f1981161
   forge_bridge_source_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
@@ -55,9 +55,14 @@ out_of_scope:
   - forge/master merge, G4 tape, G4-K, B2/F1-F4, unrelated cleanup
 ownership: oc561-g1-r1-forge-20261006 (OpenCode DeepSeek MAX sole active writer; Claude baton 6007555350 superseded by comment 6017653019)
 takeover_baton: https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6017653019
-status: ACTIVE
-final_head: 0330ba3db86cc95dcd28149fc008e1a3dc9c4205
-final_tree: 7dac6857283b8000c056676306e038ab9d4dd6df
+status: COMPLETE
+pull_request: https://github.com/moeendres-png/forge/pull/33
+pr_base: claude/forge-unified-successor-20260929 (732e133589afa9631c90bd3f94fee50ad6c3848d, no drift at open)
+pr_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
+pr_ci: ALL_GREEN (Java 17 pass, Java 21 pass, iOS/MobiVM pass on 0d7988a)
+checkpoint: https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6020095403
+final_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
+final_tree: 0b9759e6f3d28981fc0a4fd0b3d83262094252e0
 commits:
   - 5fbd4b8ac2f23085e5a3ce91829d6b7253850bbd bridge: place scenario permanents at turn-one TurnBegan with a fail-closed latch (#561 G1-R1)
   - 0330ba3db86cc95dcd28149fc008e1a3dc9c4205 Tests: strengthen G1-R1 identity coverage and restore the combat tripwire
@@ -140,12 +145,17 @@ failure_class: NONE
 current_reasoning_tier: xhigh
 technical_decision_authority: COORDINATOR_DECISION_6005365186_WITHIN_CONTRACT
 technical_decisions:
+  - 'Validated heads: local 385-test full bridge suite and 31/31 post-repair rerun on 0330ba3 (production sources identical through 0d7988a); exact-head CI on 0d7988a: Java 17/21 and iOS/MobiVM all pass (two runs each).'
+  - 'The writer lock was stale (launcher pid 41763 dead, flock free); the successor session re-acquired the worktree writer lock in a wrapper and ran tools/foundry/safe_push.py for the checkpoint push, as safe_push requires an ancestor-held live lock.'
   - 'Fresh-context adversarial review bound to 5fbd4b8 returned NO BLOCKING FINDING; 13/13 wrong-reason controls present and non-vacuous; non-blocking repairs committed as 0330ba3 (test/docs only).'
   - 'Source-lock launcher metadata discrepancy (live_head/source_sha 20e3e1f7 vs binding pin ee37e4a5) adjudicated METADATA_ONLY: the branch was created from the worktree tip at launch and reset to the Lab pin at 15:40:07 before any edit; 20e3e1f7 is an ancestor of ee37e4a5 and the delta touches only forge-protocol2-bridge/. Evidence: /tmp/foundry-launch-oc561-g1-r1-forge-20261006/evidence/source-lock-metadata-adjudication.txt.'
   - 'Full bridge suite evidence (385 tests, 0 failures/errors/skipped, EXIT=0, 16:59:01) remains valid because no production source changed after it started; the review repairs touched tests and the impact doc only, and the two invalidated test classes were rerun (31/31 PASS).'
   - 'Placement divergence recorded as qualification-bridge behavior, not Forge-native game start (C6); Rules-Core candidate identity bb0a740d is untouched.'
 exact_next_action: >-
-  Push opencode/oc561-g1-r1-forge-20261006 (HEAD 0330ba3, tree 7dac6857),
-  post the #561 checkpoint with exact SHA/tree and evidence, verify
-  claude/forge-unified-successor-20260929 drift, and open the PR against that
-  qualification bridge lineage (never forge/master).
+  Forge-only G1-R1 is PR-ready (PR #33, all checks green). No further Forge
+  action. The serial Lab workstream next re-pins config/rules_engines.json to
+  the merged bridge head, updates forge_scenario_lane.py (_HOOK_ASSERTIONS
+  fragments and the controlled_since_turn_began verified dimension), runs PB-03
+  on the new exact head and sealed epoch, and adjudicates the 17 historical
+  Forge PASS rows. This state commit is local-only; the pushed/PR head remains
+  0d7988a with green CI.
