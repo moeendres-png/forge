@@ -4,8 +4,53 @@ worktree: /home/moeen/work/worktrees/oc561-g1-r1-forge-20261006
 branch: opencode/oc561-g1-r1-forge-20261006
 audit_base_sha: ee37e4a52d99401ba57fba7ca516ac01f1981161
 audit_base_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
-state_written_against_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
+state_written_against_head: c89e1c590cf15170db588fe84cae533c003ec52b
 validated_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
+handoff:
+  status: OPENCODE_WRITER_RELEASED_CLAUDE_NEXT_WRITER
+  next_writer: Claude
+  ownership_release: 'OPENCODE_WRITER = RELEASED; CLAUDE_NEXT_WRITER = AUTHORIZED_BY_OWNER'
+  parent_issue: https://github.com/moeendres-png/commander-playtest-lab/issues/561
+  pr: https://github.com/moeendres-png/forge/pull/33
+  workstream_classification:
+    VALIDATED_CURRENT_WORK:
+      - 5fbd4b8ac2f23085e5a3ce91829d6b7253850bbd (implementation)
+      - 0330ba3db86cc95dcd28149fc008e1a3dc9c4205 (review repairs, tests/doc only)
+      - 0d7988a4a5d782c4acdb6b403b319d9bcf06166e (pushed checkpoint state; exact-head CI green)
+    GENERATED_STATE_OR_EVIDENCE:
+      - c89e1c590cf15170db588fe84cae533c003ec52b (terminal state; pushed by this handoff)
+      - the handoff state commit created after this edit
+    PARTIALLY_VALIDATED_CURRENT_WORK: []
+    UNVALIDATED_WIP: []
+    FOREIGN_OR_OUT_OF_SCOPE: none (working tree was clean; every commit since ee37e4a5 belongs to this workstream)
+  files_changed_main:
+    - forge-protocol2-bridge/src/main/java/forge/bridge/BridgeSession.java
+    - forge-protocol2-bridge/src/main/java/forge/bridge/ScenarioBootstrap.java
+    - forge-protocol2-bridge/src/main/java/forge/bridge/StateProjection.java
+  files_changed_tests:
+    - forge-protocol2-bridge/src/test/java/forge/bridge/G1R1TurnBeganBootstrapTest.java (new, 20 tests)
+    - forge-protocol2-bridge/src/test/java/forge/bridge/WS202ExecutableSurfaceTest.java
+    - forge-protocol2-bridge/src/test/java/forge/bridge/WS202SeparateProcessTest.java
+    - forge-protocol2-bridge/src/test/java/forge/bridge/WS216SeparateProcessTest.java
+  files_changed_docs_state:
+    - forge-protocol2-bridge/G1-R1-TURNBEGAN-PLACEMENT.md
+    - .foundry/oc561-g1-r1-forge-20261006.yaml
+  tests_not_to_rerun_without_invalidating_change:
+    - full bridge suite 385 (production tree of 0d7988a/0330ba3; only a production or test-driver change invalidates it)
+    - G1R1TurnBeganBootstrapTest + WS216SeparateProcessTest 31/31 post-repair (only changes to those tests or production invalidate it)
+    - WS202ExecutableSurfaceTest 27/27, WS202SeparateProcessTest 13/13 (+wire readiness test), WS216+WS217 13/13
+    - exact-head CI on 0d7988a Java 17/21 and iOS (only a new commit invalidates it)
+  unvalidated:
+    - the state-only handoff commit's own CI run (state-only change, no build inputs): NOT_RUN at handoff
+  resume_instructions:
+    - fresh-fetch origin before any mutation
+    - verify remote refs/heads/opencode/oc561-g1-r1-forge-20261006 equals the handoff checkpoint SHA and its tree matches
+    - verify no newer conflicting baton/owner on #561 before writing
+    - consume this Foundry state (schema 2.0) and the #561 handoff comment
+    - do not rerun already-valid expensive tests without an invalidating change
+    - preserve FAIL/UNKNOWN classifications; requalify only evidence invalidated by later changes
+    - Forge-only G1-R1 implementation is complete; the serial Lab re-pin/requalification is the continuation
+  blocked: none
 source_lock:
   forge_bridge_source_commit: ee37e4a52d99401ba57fba7ca516ac01f1981161
   forge_bridge_source_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
@@ -53,14 +98,16 @@ out_of_scope:
   - Lab re-pin, PB-03, sealed epochs, FULL107 assemblers
   - production provider selection, Architecture Freeze, Production Repository
   - forge/master merge, G4 tape, G4-K, B2/F1-F4, unrelated cleanup
-ownership: oc561-g1-r1-forge-20261006 (OpenCode DeepSeek MAX sole active writer; Claude baton 6007555350 superseded by comment 6017653019)
+ownership: oc561-g1-r1-forge-20261006 (OpenCode DeepSeek MAX sole active writer 2026-10-06; writer baton released by this handoff; Claude is the authorized next writer per the Owner handoff instruction; earlier Claude baton 6007555350 superseded by comment 6017653019)
 takeover_baton: https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6017653019
 status: COMPLETE
 pull_request: https://github.com/moeendres-png/forge/pull/33
 pr_base: claude/forge-unified-successor-20260929 (732e133589afa9631c90bd3f94fee50ad6c3848d, no drift at open)
 pr_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
 pr_ci: ALL_GREEN (Java 17 pass, Java 21 pass, iOS/MobiVM pass on 0d7988a)
-checkpoint: https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6020095403
+checkpoints:
+  - https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6020095403
+  - https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6020755555
 final_head: 0d7988a4a5d782c4acdb6b403b319d9bcf06166e
 final_tree: 0b9759e6f3d28981fc0a4fd0b3d83262094252e0
 commits:
@@ -145,6 +192,7 @@ failure_class: NONE
 current_reasoning_tier: xhigh
 technical_decision_authority: COORDINATOR_DECISION_6005365186_WITHIN_CONTRACT
 technical_decisions:
+  - 'This handoff checkpoint is a persistence/ownership-transfer act only: no new implementation, tests or qualification work; the state-only commits are GENERATED_STATE_OR_EVIDENCE, not new validation credit.'
   - 'Validated heads: local 385-test full bridge suite and 31/31 post-repair rerun on 0330ba3 (production sources identical through 0d7988a); exact-head CI on 0d7988a: Java 17/21 and iOS/MobiVM all pass (two runs each).'
   - 'The writer lock was stale (launcher pid 41763 dead, flock free); the successor session re-acquired the worktree writer lock in a wrapper and ran tools/foundry/safe_push.py for the checkpoint push, as safe_push requires an ancestor-held live lock.'
   - 'Fresh-context adversarial review bound to 5fbd4b8 returned NO BLOCKING FINDING; 13/13 wrong-reason controls present and non-vacuous; non-blocking repairs committed as 0330ba3 (test/docs only).'
@@ -152,10 +200,13 @@ technical_decisions:
   - 'Full bridge suite evidence (385 tests, 0 failures/errors/skipped, EXIT=0, 16:59:01) remains valid because no production source changed after it started; the review repairs touched tests and the impact doc only, and the two invalidated test classes were rerun (31/31 PASS).'
   - 'Placement divergence recorded as qualification-bridge behavior, not Forge-native game start (C6); Rules-Core candidate identity bb0a740d is untouched.'
 exact_next_action: >-
-  Forge-only G1-R1 is PR-ready (PR #33, all checks green). No further Forge
-  action. The serial Lab workstream next re-pins config/rules_engines.json to
-  the merged bridge head, updates forge_scenario_lane.py (_HOOK_ASSERTIONS
-  fragments and the controlled_since_turn_began verified dimension), runs PB-03
-  on the new exact head and sealed epoch, and adjudicates the 17 historical
-  Forge PASS rows. This state commit is local-only; the pushed/PR head remains
-  0d7988a with green CI.
+  Claude: fresh-fetch and verify the remote checkpoint on
+  refs/heads/opencode/oc561-g1-r1-forge-20261006 (branch head = the handoff
+  commit named in the #561 handoff comment, containing 0d7988a with green CI),
+  confirm no newer owner on #561, consume this Foundry state and the handoff
+  comment, then proceed with the serial Lab re-pin/requalification workstream
+  (update config/rules_engines.json, forge_scenario_lane.py _HOOK_ASSERTIONS and
+  the controlled_since_turn_began verified dimension, run PB-03 + sealed epoch,
+  adjudicate the 17 historical Forge PASS rows). Do not rerun the already-valid
+  Forge suites without an invalidating change. No Forge-only implementation
+  work remains.
