@@ -938,6 +938,14 @@ public final class StateProjection {
      * is entitled to see (same {@code shownName} gates). Hidden/face-down cards
      * keep redacted markers with empty counters and null PT, never names. Library
      * order stays hidden; only {@code library_size} (public count) is exposed.
+     *
+     * <p>G1-R1 (#561 C3): the engine-native first-turn-control flag is exposed as
+     * {@code controlled_since_turn_began} — the negation of
+     * {@link Card#isFirstTurnControlled()} (raw summoning-sickness, CR 302.6), not
+     * {@code hasSickness()} (which folds in haste). The Lab checkpoint compares
+     * this field instead of assuming attack eligibility. Control history is
+     * public game state, so it is emitted for every battlefield entry, including
+     * redacted ones.
      */
     private static JsonArray battlefieldDetails(Player player, PlayerView observerView) {
         final JsonArray details = new JsonArray();
@@ -952,6 +960,13 @@ public final class StateProjection {
                 throw new BridgeProjectionException("card.tapped", t);
             }
             entry.addProperty("tapped", tapped);
+            final boolean firstTurnControlled;
+            try {
+                firstTurnControlled = card.isFirstTurnControlled();
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("card.first_turn_controlled", t);
+            }
+            entry.addProperty("controlled_since_turn_began", !firstTurnControlled);
             final boolean redacted =
                     "<hidden>".equals(shown) || "<face-down>".equals(shown);
             if (redacted) {

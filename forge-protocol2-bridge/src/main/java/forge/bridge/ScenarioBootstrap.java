@@ -16,22 +16,45 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Qualification-only native scenario bootstrap (WS202).
+ * Qualification-only native scenario bootstrap (WS202; Commander-Lab #561
+ * G1-R1 placement point).
  *
  * <p>Establishes an initial qualification state through native Forge
  * game/state lifecycle APIs only, without creating a second Rules engine.
- * Runs inside the engine-owned {@code startGameHook} (after first-turn phase
- * setup, before the main game loop, while priority is withheld), using only:
- * zone add/remove on live game objects, {@code Card.fromPaperCard} for
- * genuinely absent identities, and {@code Player.setLife} for life totals.
+ * Battlefield placement now runs from the {@code GameEventTurnBegan}
+ * subscriber for turn one ({@link BridgeSession}'s scenario subscriber),
+ * i.e. before the engine's first-turn readiness loop
+ * ({@code PhaseHandler}: turn-began event, then the {@code setSickness(false)}
+ * sweep) and before the untap step. The engine itself therefore marks the
+ * turn's active seat's scenario permanents as controlled since that turn
+ * began, exactly as its own beginning-of-turn step does (CR 302.6; XMage
+ * BEGIN_TURN precedent, {@code PLACEMENT_POINT_ADJUDICATION.md}). The retained
+ * {@code startGameHook} then runs after the untap step and applies requested
+ * tapped state silently ({@link Card#setTapped}, no {@code GameEventCardTapped})
+ * while priority is still withheld. It uses only: zone add/remove on live game
+ * objects, {@code Card.fromPaperCard} for genuinely absent identities, and
+ * {@code Player.setLife} for life totals.
+ *
+ * <p><b>Recorded divergence (C6).</b> This placement point is a
+ * qualification-bridge behavior, not unmodified Forge-native game-start
+ * behavior: Forge's own game-start permanents ({@code Player.initVariantsZones})
+ * plus the {@code playerTurn.getTurn() > 0} guard are deliberately left
+ * summoning-sick on turn one. Only scenario-placed permanents are admitted to
+ * the readiness sweep, and only through the accepted Coordinator ruling
+ * (Commander-Lab #561 comment 6005365186) and the Rules sources it cites:
+ * CR 302.6, CR 508.1a, CR 103.6a. No Rules-Core behavior is changed to hide
+ * the distinction.
  *
  * <p>It never injects game outcomes, resolves spells/abilities manually,
  * bypasses state-based actions, fabricates continuous effects, computes layers,
  * injects discretionary decision results, or contains card-name-specific
- * production logic. After bootstrap, Forge remains the sole Rules authority;
- * dice/chooser, mulligans, shuffles (seeded when bound), triggers and SBAs all
- * proceed natively. Turn/phase advancement after bootstrap is native
- * pass-driven progression, never injection.
+ * production logic. Permanents are always placed untapped so the untap step
+ * cannot untap (or the tap history claim) a permanent that was never legally
+ * tapped. Counters are added exactly once, with {@code fireEvents=false}
+ * (additive native API). After bootstrap, Forge remains the sole Rules
+ * authority; dice/chooser, mulligans, shuffles (seeded when bound), triggers
+ * and SBAs all proceed natively. Turn/phase advancement after bootstrap is
+ * native pass-driven progression, never injection.
  */
 public final class ScenarioBootstrap {
     private ScenarioBootstrap() { }
@@ -248,40 +271,29 @@ public final class ScenarioBootstrap {
     }
 
     /**
-     * Applies the plan to the live game inside the start-game hook.
-     * Moves existing library identities to their scripted zones when present
-     * (preserving singleton deck identity, no duplication); creates via
-     * {@code Card.fromPaperCard} only when the identity is genuinely absent
-     * from the library (e.g. basic fill or slot cards outside the 100).
-     * Natural hand cards are returned to the library before scripted hands are
-     * established. All moves are direct zone operations (no triggers, no stack,
-     * no decisions); SBAs and triggers proceed natively after the hook.
+     * Places every requested battlefield permanent, untapped, at the turn-one
+     * TurnBegan point. Moves existing commander identities first (command
+     * zone), then library identities (preserving singleton deck identity), else
+     * creates via {@code Card.fromPaperCard} only when the identity is
+     * genuinely absent from the library (basic fill or slot cards outside the
+     * 100). Counters are added exactly once ({@link #addRequestedCounters},
+     * {@code fireEvents=false}, additive native API); auras attach after all
+     * placements so named hosts exist.
+     *
+     * <p>This method must only run from {@link BridgeSession}'s TurnBegan
+     * subscriber, which owns the one-shot latch. It never applies requested
+     * tapped state: the untap step runs after this placement, so tapping here
+     * would let the engine untap an object whose tap was never a real game
+     * event (a fabricated untap).
+     *
+     * @return placed cards index-aligned with {@code plan.battlefield}, for the
+     *         retained post-untap hook.
      */
-    public static void apply(BridgeSession session, Game game, Plan plan) {
-        if (game == null || plan == null) {
-            return;
-        }
-        // Return natural opening hands to libraries (order hidden; counts natural).
-        for (Player player : session.registryPlayers()) {
-            final String playerId = session.playerIdOf(player);
-            if (!plan.hands.containsKey(playerId)) {
-                continue;
-            }
-            final List<Card> handCards = new ArrayList<>(player.getCardsIn(ZoneType.Hand));
-            for (Card card : handCards) {
-                try {
-                    player.getZone(ZoneType.Hand).remove(card);
-                    player.getZone(ZoneType.Library).add(card);
-                } catch (Throwable t) {
-                    throw new IllegalStateException("hand return failed for " + playerId);
-                }
-            }
-        }
-        // Battlefield placements: real commander identities first (command zone),
-        // then library identities (preserving singleton deck identity), else create
-        // via Card.fromPaperCard for genuinely absent cards (basic fill or slot
-        // cards outside the 100).
+    public static List<Card> placeBattlefield(BridgeSession session, Game game, Plan plan) {
         final List<Card> placed = new ArrayList<>();
+        if (plan == null) {
+            return placed;
+        }
         for (Placement placement : plan.battlefield) {
             final Player owner = session.playerById(placement.ownerId);
             final Player controller = session.playerById(placement.controllerId);
@@ -300,27 +312,6 @@ public final class ScenarioBootstrap {
             } catch (Throwable t) {
                 throw new IllegalStateException("battlefield placement failed");
             }
-            if (placement.tapped) {
-                try {
-                    card.setTapped(true);
-                } catch (Throwable t) {
-                    throw new IllegalStateException("tap failed");
-                }
-            }
-            for (Map.Entry<String, Integer> counter : placement.counters.entrySet()) {
-                final forge.game.card.CounterType counterType;
-                try {
-                    counterType = forge.game.card.CounterEnumType.valueOf(counter.getKey());
-                } catch (Exception e) {
-                    throw new IllegalStateException("unknown counter: " + counter.getKey());
-                }
-                try {
-                    card.addCounterInternal(counterType, counter.getValue(), null, false, null,
-                            null);
-                } catch (Throwable t) {
-                    throw new IllegalStateException("counter placement failed");
-                }
-            }
             placed.add(card);
             final Map<String, String> details = new LinkedHashMap<>();
             details.put("card", placement.cardName);
@@ -328,6 +319,7 @@ public final class ScenarioBootstrap {
             details.put("owner", placement.ownerId);
             session.audit("scenario_placed_battlefield", details);
         }
+        addRequestedCounters(session, plan, placed);
         // Aura attachments resolve after all placements so named hosts exist.
         // Uses the native attach path (legality + timestamps); the attach target
         // is matched by card name among the controller's battlefield cards.
@@ -363,6 +355,106 @@ public final class ScenarioBootstrap {
             details.put("card", placement.cardName);
             details.put("attached_to", placement.attachedTo);
             session.audit("scenario_attached", details);
+        }
+        return placed;
+    }
+
+    /**
+     * Adds each placement's requested counters exactly once, at placement
+     * time, with {@code fireEvents=false}. {@code addCounterInternal} is
+     * additive (Card.java), so calling this more than once for the same
+     * placement doubles the counters; the bootstrap calls it exactly once.
+     * Visible for the counter double-application control.
+     */
+    static void addRequestedCounters(BridgeSession session, Plan plan, List<Card> placed) {
+        if (plan == null || placed == null) {
+            return;
+        }
+        for (int i = 0; i < plan.battlefield.size() && i < placed.size(); i++) {
+            final Placement placement = plan.battlefield.get(i);
+            final Card card = placed.get(i);
+            for (Map.Entry<String, Integer> counter : placement.counters.entrySet()) {
+                final forge.game.card.CounterType counterType;
+                try {
+                    counterType = forge.game.card.CounterEnumType.valueOf(counter.getKey());
+                } catch (Exception e) {
+                    throw new IllegalStateException("unknown counter: " + counter.getKey());
+                }
+                try {
+                    card.addCounterInternal(counterType, counter.getValue(), null, false, null,
+                            null);
+                } catch (Throwable t) {
+                    throw new IllegalStateException("counter placement failed");
+                }
+            }
+        }
+    }
+
+    /**
+     * Applies requested tapped state silently at the retained post-untap hook:
+     * {@link Card#setTapped} mutates only the tapped flag, so no
+     * {@code GameEventCardTapped} and no {@code Untaps} trigger is fabricated
+     * for a permanent that never legally became tapped. A requested-tapped
+     * permanent that is no longer on the battlefield at this point makes the
+     * requested state unreachable; that fails closed rather than reapplying
+     * state to a moved object.
+     */
+    static void applyRequestedTapped(BridgeSession session, Plan plan, List<Card> placed) {
+        if (plan == null || placed == null) {
+            return;
+        }
+        for (int i = 0; i < plan.battlefield.size() && i < placed.size(); i++) {
+            final Placement placement = plan.battlefield.get(i);
+            if (!placement.tapped) {
+                continue;
+            }
+            final Card card = placed.get(i);
+            if (card == null || !card.isInZone(ZoneType.Battlefield)) {
+                throw new IllegalStateException(
+                        "requested tapped permanent left the battlefield before the post-untap "
+                                + "hook: " + placement.cardName);
+            }
+            try {
+                card.setTapped(true);
+            } catch (Throwable t) {
+                throw new IllegalStateException("tap failed");
+            }
+            final Map<String, String> details = new LinkedHashMap<>();
+            details.put("card", placement.cardName);
+            details.put("controller", placement.controllerId);
+            session.audit("scenario_applied_tapped", details);
+        }
+    }
+
+    /**
+     * The retained start-game hook's post-untap work (after the untap step,
+     * while priority is withheld): requested tapped state, scripted hands,
+     * life totals and commander damage. Natural hand cards are returned to the
+     * library before scripted hands are established. All moves are direct zone
+     * operations (no triggers, no stack, no decisions); SBAs and triggers
+     * proceed natively after the hook.
+     */
+    public static void applyPostUntap(BridgeSession session, Game game, Plan plan,
+            List<Card> placed) {
+        if (game == null || plan == null) {
+            return;
+        }
+        applyRequestedTapped(session, plan, placed);
+        // Return natural opening hands to libraries (order hidden; counts natural).
+        for (Player player : session.registryPlayers()) {
+            final String playerId = session.playerIdOf(player);
+            if (!plan.hands.containsKey(playerId)) {
+                continue;
+            }
+            final List<Card> handCards = new ArrayList<>(player.getCardsIn(ZoneType.Hand));
+            for (Card card : handCards) {
+                try {
+                    player.getZone(ZoneType.Hand).remove(card);
+                    player.getZone(ZoneType.Library).add(card);
+                } catch (Throwable t) {
+                    throw new IllegalStateException("hand return failed for " + playerId);
+                }
+            }
         }
         // Scripted hands: prefer library identities, else create.
         for (Map.Entry<String, List<String>> entry : plan.hands.entrySet()) {

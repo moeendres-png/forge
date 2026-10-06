@@ -3,9 +3,13 @@ package forge.bridge;
 import forge.game.Game;
 import forge.game.Match;
 import com.google.common.eventbus.Subscribe;
+import forge.game.card.Card;
+import forge.game.event.GameEventPlayerPriority;
 import forge.game.event.GameEventShuffle;
+import forge.game.event.GameEventTurnBegan;
 import forge.game.player.Player;
 import forge.game.player.PlayerView;
+import forge.game.zone.ZoneType;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -142,6 +146,36 @@ public final class BridgeSession {
     /** WSR30 test-only fault injection for the creation-time seed install. */
     static volatile String seedInstallFaultForTests;
 
+    /**
+     * Commander-Lab #561 G1-R1 test-only fault injection for the scenario
+     * bootstrap controls. {@code null} is production. Named mutants:
+     * {@code "never"} the subscriber never does the placement;
+     * {@code "throw"} the subscriber's placement throws;
+     * {@code "double"} the turn-one event is handled twice;
+     * {@code "late"} placement stays at the retained post-untap hook (the
+     * pre-G1-R1 point); {@code "tapped_at_begin"} requested tapped state is
+     * applied before the untap step; {@code "counters_twice"} counters are
+     * re-applied in the hook; {@code "sick_active"} the active seat's placed
+     * permanents are re-marked summoning-sick after the readiness sweep;
+     * {@code "ready_all"} every placed permanent is marked not summoning-sick;
+     * {@code "ready_casts"} the active seat's sickness is cleared at every
+     * turn-one priority. Each is
+     * deterministic, set before launch and cleared by the test.
+     */
+    static volatile String scenarioBootstrapFaultForTests;
+
+    /**
+     * G1-R1 fail-closed latch. Guava's EventBus logs and swallows subscriber
+     * exceptions, so the subscriber records failure on the session and the
+     * retained start-game hook refuses to run unless the bootstrap ran exactly
+     * once, for the intended game's turn one, and without error.
+     */
+    private final java.util.concurrent.atomic.AtomicInteger scenarioBootstrapInvocations =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private volatile String scenarioBootstrapFailure;
+    private volatile boolean scenarioBootstrapPlaced;
+    private volatile List<forge.game.card.Card> scenarioPlacedCards = new ArrayList<>();
+
     /** WSR30: engine-readback of an accepted seed binding (never a request echo). */
     public static final class SeedAcknowledgement {
         public final long acceptedSeed;
@@ -198,6 +232,203 @@ public final class BridgeSession {
     /** The engine's library shuffles of {@code player} so far. */
     public int libraryShuffles(Player player) {
         return libraryShuffles.getOrDefault(PlayerView.get(player).getId(), 0);
+    }
+
+    // ---- G1-R1 (#561): TurnBegan scenario bootstrap, fail-closed latch ----
+
+    /**
+     * Subscribed to the game's event bus before the game thread starts. Runs
+     * synchronously at {@code PhaseHandler}'s turn-began event, before the
+     * first-turn readiness sweep and before the untap step.
+     */
+    public final class ScenarioTurnBeganSubscriber {
+        @Subscribe
+        public void onTurnBegan(GameEventTurnBegan event) {
+            handleScenarioTurnBegan(event);
+        }
+    }
+
+    /** Test-only mutant: clears the active seat's sickness at each turn-one priority. */
+    private final class ScenarioCastReadyFaultSubscriber {
+        @Subscribe
+        public void onPriority(GameEventPlayerPriority event) {
+            try {
+                if (event == null) {
+                    return;
+                }
+                final Game current = game;
+                if (current == null || current.getPhaseHandler().getTurn() != 1) {
+                    return;
+                }
+                final Player active = current.getPhaseHandler().getPlayerTurn();
+                if (active == null) {
+                    return;
+                }
+                for (Card card : active.getCardsIn(ZoneType.Battlefield)) {
+                    card.setSickness(false);
+                }
+            } catch (Throwable t) {
+                // Deterministic mutant simulation only; it never affects production.
+            }
+        }
+    }
+
+    /**
+     * Registers the scenario TurnBegan subscriber before the game thread
+     * starts. The one-shot latch lives on this session, not in the event bus:
+     * Guava logs and swallows subscriber exceptions, so only an explicit,
+     * session-owned record of "exactly one successful invocation" can stop a
+     * silently failed bootstrap from producing a usable game.
+     */
+    synchronized void installScenarioBootstrap(final Game game, final ScenarioBootstrap.Plan plan) {
+        if (game == null || plan == null) {
+            return;
+        }
+        if ("never".equals(scenarioBootstrapFaultForTests)) {
+            audit("scenario_bootstrap_subscriber_skipped", detail("fault", "never"));
+            return;
+        }
+        game.subscribeToEvents(new ScenarioTurnBeganSubscriber());
+        if ("ready_casts".equals(scenarioBootstrapFaultForTests)) {
+            game.subscribeToEvents(new ScenarioCastReadyFaultSubscriber());
+        }
+        audit("scenario_bootstrap_subscribed", detail("game_id", gameId));
+    }
+
+    /**
+     * The one-shot, game-and-turn-bound bootstrap handler. Duplicate
+     * invocation for the intended game's turn one fails closed; an event for a
+     * different game or turn one never satisfies the latch. Every
+     * {@code Throwable} is recorded on the session rather than escaping into
+     * Guava's swallowing dispatcher.
+     */
+    void handleScenarioTurnBegan(final GameEventTurnBegan event) {
+        final ScenarioBootstrap.Plan plan = scenarioPlan;
+        if (event == null || plan == null) {
+            return;
+        }
+        final String fault = scenarioBootstrapFaultForTests;
+        if ("never".equals(fault)) {
+            return;
+        }
+        try {
+            // Later turns are legitimate native events, never bootstrap attempts.
+            if (event.turnNumber() != 1) {
+                return;
+            }
+            final Game intended = game;
+            final Player active = intended == null ? null
+                    : intended.getPhaseHandler().getPlayerTurn();
+            // TrackableObject equality is (class, id), which two different games can
+            // satisfy; the intended game binds by the identity of its own player view.
+            if (active == null || event.turnOwner() == null
+                    || PlayerView.get(active) != event.turnOwner()) {
+                recordScenarioBootstrapFailure(
+                        "scenario bootstrap turn-began event does not belong to the intended game");
+                return;
+            }
+            if (scenarioBootstrapInvocations.incrementAndGet() > 1) {
+                recordScenarioBootstrapFailure(
+                        "scenario bootstrap invoked more than once for the intended game");
+                return;
+            }
+            if ("throw".equals(fault)) {
+                throw new IllegalStateException("injected scenario bootstrap failure");
+            }
+            if ("late".equals(fault)) {
+                // Pre-G1-R1 mutant: the retained hook places instead.
+                return;
+            }
+            final List<Card> placed = ScenarioBootstrap.placeBattlefield(this, intended, plan);
+            scenarioPlacedCards = placed;
+            if ("tapped_at_begin".equals(fault)) {
+                ScenarioBootstrap.applyRequestedTapped(this, plan, placed);
+            }
+            if ("counters_twice".equals(fault)) {
+                ScenarioBootstrap.addRequestedCounters(this, plan, placed);
+            }
+            if ("ready_all".equals(fault)) {
+                for (Card card : placed) {
+                    card.setSickness(false);
+                }
+            }
+            scenarioBootstrapPlaced = true;
+            audit("scenario_bootstrap_placed",
+                    detail("turn", Integer.toString(event.turnNumber())));
+            if ("double".equals(fault)) {
+                handleScenarioTurnBegan(event);
+            }
+        } catch (Throwable t) {
+            recordScenarioBootstrapFailure("scenario bootstrap failed: " + t);
+        }
+    }
+
+    private void recordScenarioBootstrapFailure(final String reason) {
+        if (scenarioBootstrapFailure == null) {
+            scenarioBootstrapFailure = reason;
+        }
+        audit("scenario_bootstrap_failed", detail("reason", reason));
+    }
+
+    /**
+     * Refuses continuation unless the bootstrap ran exactly once, for the
+     * intended game's turn one, with no recorded failure. This is the retained
+     * start-game hook's guard: a missing, duplicated or failed invocation can
+     * never lead to a usable game.
+     */
+    void requireScenarioBootstrapCompleted() {
+        if (scenarioBootstrapFailure != null) {
+            throw new IllegalStateException(scenarioBootstrapFailure);
+        }
+        if (!scenarioBootstrapPlaced || scenarioBootstrapInvocations.get() != 1) {
+            throw new IllegalStateException(
+                    "scenario bootstrap did not run exactly once before the start-game hook");
+        }
+    }
+
+    /**
+     * The retained start-game hook. Runs after the first-turn untap step with
+     * priority still withheld: it refuses continuation unless the TurnBegan
+     * bootstrap is complete, then applies requested tapped state silently and
+     * the non-battlefield plan (hands, life, commander damage).
+     */
+    Runnable scenarioStartGameHook(final Game game, final ScenarioBootstrap.Plan plan) {
+        final BridgeSession self = this;
+        return () -> {
+            if ("late".equals(scenarioBootstrapFaultForTests)) {
+                // Pre-G1-R1 mutant: placement happens here instead of at TurnBegan.
+                scenarioPlacedCards = ScenarioBootstrap.placeBattlefield(self, game, plan);
+            } else {
+                requireScenarioBootstrapCompleted();
+            }
+            ScenarioBootstrap.applyPostUntap(self, game, plan, scenarioPlacedCards);
+            if ("sick_active".equals(scenarioBootstrapFaultForTests)) {
+                // Mutant: the active seat's placed permanents are re-marked sick
+                // after the engine's readiness sweep.
+                final Player active = game == null ? null
+                        : game.getPhaseHandler().getPlayerTurn();
+                for (Card card : scenarioPlacedCards) {
+                    if (active != null && active.equals(card.getController())) {
+                        card.setSickness(true);
+                    }
+                }
+            }
+        };
+    }
+
+    /** Latch state for the fail-closed controls (test-only accessor). */
+    int scenarioBootstrapInvocationsForTests() {
+        return scenarioBootstrapInvocations.get();
+    }
+
+    /** Recorded failure for the fail-closed controls (test-only accessor). */
+    String scenarioBootstrapFailureForTests() {
+        return scenarioBootstrapFailure;
+    }
+
+    /** Placed battlefield cards from the TurnBegan handler (test-only accessor). */
+    List<Card> scenarioPlacedCardsForTests() {
+        return scenarioPlacedCards;
     }
 
     public Long getSeedBinding() {
@@ -395,10 +626,13 @@ public final class BridgeSession {
         if (capturedPlan == null) {
             launchStarter(() -> capturedMatch.startGame(capturedGame));
         } else {
-            final BridgeSession self = this;
-            launchStarter(() -> capturedMatch.startGame(capturedGame, () -> {
-                ScenarioBootstrap.apply(self, capturedGame, capturedPlan);
-            }));
+            // G1-R1: battlefield placement happens from the TurnBegan
+            // subscriber (registered before the game thread starts); the
+            // retained start-game hook only refuses-on-failure and applies the
+            // post-untap plan.
+            installScenarioBootstrap(capturedGame, capturedPlan);
+            final Runnable scenarioHook = scenarioStartGameHook(capturedGame, capturedPlan);
+            launchStarter(() -> capturedMatch.startGame(capturedGame, scenarioHook));
         }
     }
 
