@@ -1016,6 +1016,66 @@ public class WS202SeparateProcessTest {
         }
     }
 
+    /**
+     * G1-R1 (#561): over the wire, the scenario-placed active-seat creature is
+     * a legal turn-one attacker, the non-active seat's placed creature carries
+     * the engine-native not-controlled-since-turn-began readback, and the
+     * projected checkpoint exposes the raw first-turn-control semantic.
+     */
+    @Test(timeOut = 900000)
+    public void testPipeTurnOneScenarioReadiness() throws Exception {
+        final Pipe pipe = boot();
+        final String game = "wspipe-g1r1";
+        try {
+            final List<String> handles = importPod(pipe);
+            final JsonArray battlefield = new JsonArray();
+            battlefield.add(placement("Runeclaw Bear", "p1", "p1", false));
+            battlefield.add(placement("Llanowar Elves", "p2", "p2", false));
+            createScenarioGame(pipe, game, 1110L, handles, battlefield, new JsonObject());
+            keepsAndStarter(pipe, game);
+            final JsonObject p1 = state(pipe, game, "p1");
+            Assert.assertEquals(turn(p1), 1);
+            final JsonObject bear = detailFor(battlefieldDetails(p1, "p1"), "Runeclaw Bear");
+            Assert.assertNotNull(bear, "Bear detail must project");
+            Assert.assertTrue(bear.get("controlled_since_turn_began").getAsBoolean(),
+                    "the active seat's placed permanent is controlled since turn 1 began");
+            final JsonObject elves = detailFor(battlefieldDetails(p1, "p2"), "Llanowar Elves");
+            Assert.assertNotNull(elves, "Elves detail must project");
+            Assert.assertFalse(elves.get("controlled_since_turn_began").getAsBoolean(),
+                    "a non-active seat's placed permanent is not");
+            final Frame attackFrame = driveTo(pipe, game, "p1", "COMBAT_DECLARE_ATTACKERS",
+                    "DECLARE_ATTACKERS", 1, 120);
+            final Opt attack = find(attackFrame,
+                    o -> o.label != null && o.label.contains("Runeclaw Bear")
+                            && o.label.contains("-> p"),
+                    "turn-one Bear attack");
+            submit(pipe, game, attackFrame.actor, attack.id, attack.type,
+                    attackFrame.revision, null);
+            shutdown(pipe, game);
+        } finally {
+            try {
+                pipe.close();
+            } catch (Exception e) {
+                pipe.process.destroyForcibly();
+            }
+        }
+    }
+
+    private static JsonArray battlefieldDetails(JsonObject state, String pid) {
+        return playerState(state, pid).getAsJsonObject("zones")
+                .getAsJsonArray("battlefield_details");
+    }
+
+    private static JsonObject detailFor(JsonArray details, String name) {
+        for (JsonElement element : details) {
+            final JsonObject entry = element.getAsJsonObject();
+            if (name.equals(str(entry, "name"))) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
     @Test(timeOut = 900000)
     public void testPipeCommanderMoveConcede() throws Exception {
         final Pipe pipe = boot();

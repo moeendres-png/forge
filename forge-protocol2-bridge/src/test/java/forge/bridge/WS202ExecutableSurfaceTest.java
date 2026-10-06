@@ -2572,7 +2572,9 @@ public class WS202ExecutableSurfaceTest {
         }
         final BridgeTestSupport.ConstructedGame constructed =
                 BridgeTestSupport.buildConstructedGame("ws202-l8");
-        ScenarioBootstrap.apply(constructed.session, constructed.game, plan);
+        final List<Card> placed = ScenarioBootstrap.placeBattlefield(constructed.session,
+                constructed.game, plan);
+        ScenarioBootstrap.applyPostUntap(constructed.session, constructed.game, plan, placed);
         Card bear = null;
         Card pacifism = null;
         for (Card card : constructed.game.getPlayers().get(0)

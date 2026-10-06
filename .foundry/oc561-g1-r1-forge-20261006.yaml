@@ -1,0 +1,254 @@
+schema_version: '2.0'
+repository: moeendres-png/forge
+worktree: /home/moeen/work/worktrees/oc561-g1-r1-forge-20261006
+branch: opencode/oc561-g1-r1-forge-20261006
+audit_base_sha: ee37e4a52d99401ba57fba7ca516ac01f1981161
+audit_base_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
+state_written_against_head: ce37ea26e44e1f4d84807d6486d8758d28920458
+validated_head: ce37ea26e44e1f4d84807d6486d8758d28920458
+handoff:
+  status: OPENCODE_WRITER_RESUMED_OWNER_TRANSFER
+  next_writer: Coordinator (Lab re-pin / PB-03 continuation)
+  ownership_release: >-
+    OpenCode is the sole active writer again per the Owner transfer of
+    2026-10-06; the earlier OpenCode -> Claude handoff is superseded as
+    authority. Forge-only implementation work is complete; the serial Lab
+    re-pin/requalification is Coordinator-owned.
+  parent_issue: https://github.com/moeendres-png/commander-playtest-lab/issues/561
+  pr: https://github.com/moeendres-png/forge/pull/33
+  workstream_classification:
+    VALIDATED_CURRENT_WORK:
+      - 5fbd4b8ac2f23085e5a3ce91829d6b7253850bbd (implementation)
+      - 0330ba3db86cc95dcd28149fc008e1a3dc9c4205 (first-review repairs, tests/doc only)
+      - 0d7988a4a5d782c4acdb6b403b319d9bcf06166e (pushed checkpoint state; exact-head CI green)
+      - ce37ea26e44e1f4d84807d6486d8758d28920458 (PR #33 blocking ports + 391/0 suite + targeted 25/0 + exact-head adversarial review NO_BLOCKING_FINDING + exact-head CI all green)
+    GENERATED_STATE_OR_EVIDENCE:
+      - c89e1c590cf15170db588fe84cae533c003ec52b (terminal state)
+      - cab108a20282a1b64d4e5aca636f53f8d30fe2e3 (handoff state for the superseded Claude handoff)
+      - the state-only resume commit created after this edit
+    PARTIALLY_VALIDATED_CURRENT_WORK: []
+    UNVALIDATED_WIP: []
+    FOREIGN_OR_OUT_OF_SCOPE: none (working tree was clean; every commit since ee37e4a5 belongs to this workstream)
+  files_changed_main:
+    - forge-protocol2-bridge/src/main/java/forge/bridge/BridgeSession.java
+    - forge-protocol2-bridge/src/main/java/forge/bridge/ScenarioBootstrap.java
+    - forge-protocol2-bridge/src/main/java/forge/bridge/StateProjection.java
+  files_changed_tests:
+    - forge-protocol2-bridge/src/test/java/forge/bridge/G1R1TurnBeganBootstrapTest.java (new, 25 tests)
+    - forge-protocol2-bridge/src/test/java/forge/bridge/WS202ExecutableSurfaceTest.java
+    - forge-protocol2-bridge/src/test/java/forge/bridge/WS202SeparateProcessTest.java
+    - forge-protocol2-bridge/src/test/java/forge/bridge/WS216SeparateProcessTest.java
+  files_changed_docs_state:
+    - forge-protocol2-bridge/G1-R1-TURNBEGAN-PLACEMENT.md
+    - .foundry/oc561-g1-r1-forge-20261006.yaml
+  tests_not_to_rerun_without_invalidating_change:
+    - full bridge suite 391 on ce37ea2 (Tests run 391, Failures 0, Errors 0, Skipped 0; report forge-protocol2-bridge/target/surefire-reports/TestSuite.txt; only a production or test-driver change invalidates it)
+    - G1R1TurnBeganBootstrapTest 25/25 on ce37ea2 (same report dir; reviewer independently re-ran 25/0 and WS202/WS202SeparateProcess 41/0)
+    - pre-port red run of the new G1R1 tests: 25 run / 3 failures against the pre-port tree (testLateBootstrapErrorFailsRunningSessionClosed RUNNING-not-FAILED; hookRefusesCallsOutsideTurnOne; hookRefusesPartialPlacement); recorded in commit ce37ea2 message and PR #33 comment 6021272692
+    - exact-head CI on ce37ea2: Java 17 x2 pass, Java 21 x2 pass, iOS/MobiVM x2 pass (six checks); only a new commit invalidates it
+    - prior heads' evidence (385 suite on 0d7988a/0330ba3, 31/31 post-repair, WS202 27/27 + separate-process 13/13, WS216+WS217 13/13) remains historical and is superseded by the ce37ea2 suite
+  unvalidated: []
+  resume_instructions:
+    - fresh-fetch origin before any mutation
+    - verify remote refs/heads/opencode/oc561-g1-r1-forge-20261006 equals the checkpoint SHA named here and its tree matches
+    - verify no newer conflicting baton/owner on #561 or PR #33 before writing
+    - consume this Foundry state (schema 2.0) and the latest #561 / PR #33 checkpoints
+    - do not rerun already-valid expensive tests without an invalidating change
+    - preserve FAIL/UNKNOWN classifications; requalify only evidence invalidated by later changes
+    - do not merge PR #33 without explicit authority and green required checks/reviews
+    - Forge-only G1-R1 implementation is complete; the serial Lab re-pin/requalification is the continuation
+  blocked: none
+source_lock:
+  forge_bridge_source_commit: ee37e4a52d99401ba57fba7ca516ac01f1981161
+  forge_bridge_source_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
+  source_authority: Commander-Lab config/rules_engines.json secondary_engine.bridge_source.commit, fresh-read from live origin/main
+  rules_core_candidate_commit: bb0a740d2bef725194798383c2452213ecdd0b37
+  qualification_lineage_branch: claude/forge-unified-successor-20260929 (head 732e133589afa9631c90bd3f94fee50ad6c3848d, re-verified at this resume; no drift)
+  pr_target: claude/forge-unified-successor-20260929 (qualification bridge lineage, NOT forge/master)
+source_lock_metadata_discrepancy:
+  status: RESOLVED_METADATA_ONLY
+  observed: >-
+    Foundry launcher metadata records the pre-worktree-creation branch tip:
+    launch-context.json live_head = 20e3e1f7ff8e6195b95ed0dc14e0d4c87f1bcf4c,
+    metrics.jsonl source_sha = 20e3e1f7ff8e6195b95ed0dc14e0d4c87f1bcf4c, and the
+    launcher command line carried --audit-base-sha 20e3e1f7... . The launcher's
+    bootstrap state file (now replaced) carried audit_base_sha 20e3e1f7 and
+    audit_base_tree 000066890decca5ed7b1b889be0ea46d77903aee.
+  actual_source_lock: >-
+    The binding source lock is the Lab pin secondary_engine.bridge_source.commit
+    = ee37e4a52d99401ba57fba7ca516ac01f1981161 (tree b26c59365bb88f898a2ec7e7a7e337bdf7d4573e).
+  proof:
+    - 'git reflog opencode/oc561-g1-r1-forge-20261006: 2026-10-06 15:34:50 branch created from 20e3e1f7; 2026-10-06 15:40:07 branch reset to ee37e4a5, before any mutation'
+    - 'git merge-base --is-ancestor 20e3e1f7 ee37e4a5: true; 20e3e1f7..ee37e4a5 touches only forge-protocol2-bridge/ files (matches SUCCESSOR_SOURCE_LOCK ancestry)'
+    - 'all working-tree diffs, tests and evidence bind to HEAD ce37ea2 / tree 6503ac3d; no 20e3e1f7 content is part of the change'
+  impact: >-
+    Metadata-only. The launcher records the tip at worktree creation; the
+    workstream re-pointed the branch to the Lab binding pin before any edit.
+    No ownership, source-lock, hook, guard, evidence or execution semantics were
+    affected; the durable audit_base_sha/audit_base_tree already record ee37e4a5.
+  foundry_gate_effect: NONE_INVALIDATED
+objective: >-
+  Commander-Lab #561 G1-R1 (Coordinator decision comment 6005365186): implement
+  the approved TurnBegan scenario-permanent placement point on the Forge bridge
+  lineage, with fail-closed latch (C1), no fabricated event/state history (C2),
+  engine-native controlled_since_turn_began checkpoint readback (C3), three
+  real-engine controls (C4 a/b/c), impact preservation (C5) and recorded
+  divergence (C6), plus the four PR #33 blocking hardening ports from the
+  superseded Claude line. Forge-only phase: no Lab source, no
+  rules_engines.json, no re-pin, no PB-03, no provider/freeze decisions, no
+  forge/master merge.
+in_scope:
+  - forge-protocol2-bridge main/test implementation of the TurnBegan subscriber + retained hook
+  - StateProjection battlefield_details controlled_since_turn_began readback
+  - bridge tests, mutation/wrong-reason controls, source ratchets
+  - branch evidence and #561 checkpoints
+out_of_scope:
+  - Commander-Lab source and config/rules_engines.json
+  - Lab re-pin, PB-03, sealed epochs, FULL107 assemblers
+  - production provider selection, Architecture Freeze, Production Repository
+  - forge/master merge, G4 tape, G4-K, B2/F1-F4, unrelated cleanup
+ownership: >-
+  oc561-g1-r1-forge-20261006 (OpenCode DeepSeek MAX sole active writer,
+  resumed by the Owner transfer 2026-10-06; the OpenCode -> Claude handoff
+  recorded in commit cab108a is superseded as authority by that transfer)
+takeover_baton: https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6017653019
+status: COMPLETE
+pull_request: https://github.com/moeendres-png/forge/pull/33
+pr_base: claude/forge-unified-successor-20260929 (732e133589afa9631c90bd3f94fee50ad6c3848d, no drift at this resume)
+pr_head: ce37ea26e44e1f4d84807d6486d8758d28920458
+pr_ci: ALL_GREEN (Java 17 x2, Java 21 x2, iOS/MobiVM x2 on ce37ea2; mergeStateStatus CLEAN, no unresolved review threads)
+checkpoints:
+  - https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6020095403
+  - https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6020755555
+  - https://github.com/moeendres-png/forge/pull/33 (latest resume checkpoint; SHA/TREE/evidence posted at ce37ea2)
+final_head: ce37ea26e44e1f4d84807d6486d8758d28920458
+final_tree: 6503ac3d7492cb4eeaa2d92631725c7e964c25ea
+commits:
+  - 5fbd4b8ac2f23085e5a3ce91829d6b7253850bbd bridge: place scenario permanents at turn-one TurnBegan with a fail-closed latch (#561 G1-R1)
+  - 0330ba3db86cc95dcd28149fc008e1a3dc9c4205 Tests: strengthen G1-R1 identity coverage and restore the combat tripwire
+  - ce37ea26e44e1f4d84807d6486d8758d28920458 G1-R1: port PR #33 blocking hardening from the Claude line
+review:
+  type: fresh-context adversarial, read-only, bound to ce37ea2 (tree 6503ac3d)
+  verdict: NO_BLOCKING_FINDING
+  scope: git diff cab108a..ce37ea2 (4 files); production + 5 new tests + divergence doc
+  ports_verified:
+    - late bootstrap error fails RUNNING -> FAILED and aborts parked frame; no FAILED -> CLOSED path (covers runStarter catch, shutdown, normal completion)
+    - hook turn-1 + complete-placement guards before applyPostUntap; ScenarioBootstrap apply steps guarded (addRequestedCounters, applyRequestedTapped, applyPostUntap)
+    - phasing control engine-accurate (Breezekeeper phases out at turn-one untap; absent from battlefield_details; Grizzly Bears present control)
+    - incremental attack control exercises the production >4-attacker path; sick turn-one cast excluded by canAttack
+  mutation_proved_tests: 5/5 (each new test fails under the corresponding revert/mutant)
+  evidence_consistent_with_head:
+    - TestSuite.xml/TestSuite.txt 391 tests, 0 failures/errors/skips; 391 testcase elements
+    - G1R1TurnBeganBootstrapTest.xml 25 tests, 0 failures; names exactly match HEAD's 25 @Test methods
+  residual_non_blocking_risks:
+    - 'P3: abortParkedFrame snapshots currentHandoff; an error recorded between frames or with a full 1-slot queue can lose the abort while status stays FAILED; explicit shutdown recovers (pre-existing pattern, only the parked-frame interleaving is covered by the new test)'
+    - 'P3: a FAILED session can still serve the stale parked frame through get_legal_actions; session_status FAILED is exposed and submits reject (pre-existing, not introduced by this commit)'
+    - 'P3: a scenario plan requesting a tapped phasing permanent is applied silently (isInZone is true for phased-out cards); the divergence doc records only the readback consequence'
+  history:
+    - type: fresh-context adversarial, read-only, bound to 5fbd4b8 (tree 4c611e06)
+      verdict: NO BLOCKING FINDING
+      controls: 13/13 present and non-vacuous per reviewer matrix
+      repaired_non_blocking:
+        - bus-level identity/latch controls now fire through the production Guava subscription
+        - WS216 driver unexpected-frame tripwire restored outside turn one
+        - control Javadoc corrected; impact doc gains untap-step interaction, counter-exactness and control-13 coverage boundaries
+      rerun_after_repairs: G1R1TurnBeganBootstrapTest + WS216SeparateProcessTest 31/31 PASS; checkstyle green
+milestones:
+  - id: source-lock
+    state: DONE
+    evidence: HEAD ee37e4a5 tree b26c5936 == live Lab bridge_source pin; tree equality with lineage head 732e1335; re-verified at resume, no drift
+  - id: fail-before
+    state: DONE
+    evidence: pre-change HEAD, G1R1TurnBeganBootstrapTest active-seat attack + cast controls failed with "declare-attackers was never offered on turn 1", non-active control passed
+  - id: implementation
+    state: DONE
+    evidence: ScenarioBootstrap placeBattlefield/applyPostUntap split; BridgeSession latch+subscriber+hook+fault controls; StateProjection controlled_since_turn_began
+  - id: review-repairs
+    state: DONE
+    evidence: first fresh-context review on 5fbd4b8 returned NO BLOCKING FINDING; non-blocking repairs committed as 0330ba3 (tests/doc only)
+  - id: full-suite
+    state: DONE
+    evidence: >-
+      391 tests, 0 failures, 0 errors, 0 skipped, BUILD SUCCESS at ce37ea2;
+      report forge-protocol2-bridge/target/surefire-reports/TestSuite.txt
+      (Time elapsed 1634 s); reviewer independently recompiled and re-ran
+      G1R1 25/0 and WS202 41/0 without restoring any failing state
+  - id: pr33-blocking-ports
+    state: DONE
+    evidence: >-
+      ce37ea2 ports all four review items; pre-port red 25 run / 3 failures
+      (commit message + PR #33 comment); post-port targeted 25/0 and full
+      suite 391/0; checkstyle green via the same Maven run
+  - id: host-ci-consumed
+    state: DONE
+    evidence: >-
+      ce37ea2 exact-head CI: Test with Java 17 x2 pass, Test with Java 21 x2
+      pass, iOS/MobiVM link audit x2 pass; PR #33 mergeStateStatus CLEAN,
+      reviewDecision empty, no unresolved threads
+  - id: adversarial-review-current-head
+    state: DONE
+    evidence: >-
+      fresh-context review on ce37ea2 returned NO_BLOCKING_FINDING; 5/5 new
+      tests mutation-proved non-vacuous; residual risks all P3 (recorded above)
+  - id: checkstyle
+    state: DONE
+    evidence: mvn -o -B test-compile -pl forge-protocol2-bridge -am (no skip) BUILD SUCCESS
+changed_fault_controls:
+  never: subscriber never registered -> hook refuses
+  throw: subscriber placement throws -> recorded -> hook refuses
+  double: duplicate turn-one invocation -> recorded -> hook refuses
+  late: placement at retained post-untap hook (pre-G1-R1 point; control 6/9)
+  tapped_at_begin: requested tapped applied before untap (control 7)
+  counters_twice: counters re-applied in hook (control 8)
+  sick_active: active seat re-marked sick after readiness sweep (control 9)
+  ready_all: all placed marked not sick (control 10)
+  ready_casts: active seat sickness cleared at every turn-one priority (control 11)
+  late_error_fails_running: stale duplicate event after hook -> FAILED + parked frame aborted (control 12)
+  hook_turn_and_completeness: hook refuses non-turn-one and partial placement (controls 13/14)
+  phasing_readback: Breezekeeper absent, Grizzly Bears present (control 15)
+  incremental_attack: 5 eligible placed creatures; sick turn-one cast never asked (control 16)
+impact:
+  historical_forge_pass_rows_potentially_invalidated:
+    - PLAYER_COUNT_2P
+    - PLAYER_COUNT_3P
+    - PLAYER_COUNT_4P
+    - PLAYER_COUNT_5P
+    - PILOT_MULLIGAN
+    - WS05-MP-ELIM-OWNED-3
+    - WS05-MP-ELIM-PRIO-3
+    - WS05-MP-ELIM-5
+    - WS05-CMD-ZONE-GY-YES
+    - WS05-CMD-ZONE-GY-NO
+    - WS05-CMD-ZONE-EXILE-YES
+    - WS05-CMD-ZONE-EXILE-NO
+    - WS05-CMD-ZONE-HAND-YES
+    - WS05-CMD-ZONE-HAND-NO
+    - WS05-CMD-DMG-SPLIT
+    - WS05-CMD-PARTNER-DMG
+    - WS05-CMD-PARTNER-ZONE
+  note: >-
+    The 13 WS05 FORGE_SCENARIO_BOOTSTRAP_OBLIGATION rows are the directly
+    affected set; the 4 PLAYER_COUNT rows and PILOT_MULLIGAN do not use the
+    scenario bootstrap and only see the additive readback field. No row keeps
+    current credit until the Lab re-pin + PB-03 requalification.
+failure_class: NONE
+current_reasoning_tier: xhigh
+technical_decision_authority: COORDINATOR_DECISION_6005365186_WITHIN_CONTRACT
+technical_decisions:
+  - 'This resume is a verification + persistence act: no implementation change was needed; the only commits since the ports are state-only and claim no new qualification credit.'
+  - 'The adversarial review on the exact current HEAD (ce37ea2) returned NO_BLOCKING_FINDING; residual risks are P3 and pre-existing; no P1/P2 repair was required so no test was invalidated.'
+  - 'Exact-head CI on ce37ea2 is all green (Java 17/21 and iOS, two runs each) and PR #33 is mergeable CLEAN with no unresolved threads; merge remains gated on explicit authority and the Lab re-pin dependency (PR #33 must not be merged merely from prose).'
+  - 'Fresh verification at resume: local branch == origin (ce37ea2), remote tree 6503ac3d, base branch head 732e1335 unchanged, no newer writer baton on #561 (last comment 2026-10-06T16:41:15Z was the superseded OpenCode -> Claude handoff; Owner transfer is the current authority).'
+  - 'Source-lock launcher metadata discrepancy (live_head/source_sha 20e3e1f7 vs binding pin ee37e4a5) remains adjudicated METADATA_ONLY.'
+  - 'Placement divergence recorded as qualification-bridge behavior, not Forge-native game start (C6); Rules-Core candidate identity bb0a740d is untouched.'
+exact_next_action: >-
+  Coordinator: with Forge-side G1-R1 complete and PR #33 open (ce37ea2, tree
+  6503ac3d, all checks green, no review threads), decide the merge of PR #33
+  into claude/forge-unified-successor-20260929 under normal repository policy
+  and explicit authority, then perform the serial Lab re-pin/requalification
+  workstream on Commander-Lab (update config/rules_engines.json to the new
+  bridge commit, forge_scenario_lane.py _HOOK_ASSERTIONS and the
+  controlled_since_turn_began verified dimension, adjudicate the 17 historical
+  Forge PASS rows with the phasing divergence, run PB-03 + sealed epoch). Do
+  not mutate Commander-Lab or re-pin from this Forge workstream. No Forge-only
+  implementation or review action remains.

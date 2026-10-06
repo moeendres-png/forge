@@ -439,14 +439,26 @@ public class WS216SeparateProcessTest {
             submit(pipe, game, frame.actor, first.id, first.type, frame.revision, null);
             return;
         }
-        if (("COMBAT_DECLARE_ATTACKERS".equals(frame.kind)
-                || "COMBAT_DECLARE_BLOCKERS".equals(frame.kind))
-                && !frame.actor.equals(actor)) {
+        if ("COMBAT_DECLARE_ATTACKERS".equals(frame.kind)
+                || "COMBAT_DECLARE_BLOCKERS".equals(frame.kind)) {
+            // G1-R1 makes the turn-1 active seat's scenario creatures legal
+            // attackers, so declare-attackers frames now park on turn 1 where
+            // the pre-change placement point parked none. Only turn-one frames
+            // of the driving actor are expected extras and answered with the
+            // engine-offered empty declaration; a later combat frame for the
+            // driving actor is still an unexpected frame. Bystander frames
+            // (including any turn) are declined as before.
+            if (frame.actor.equals(actor)
+                    && state(pipe, game, frame.actor).get("turn_number").getAsInt() != 1) {
+                throw new AssertionError("unexpected " + frame.kind + " for " + frame.actor
+                        + " while driving to " + targetKind);
+            }
             final Opt decline = find(frame,
                     o -> o.label != null && (o.label.contains("No attack")
                             || o.label.contains("No block")),
-                    "bystander decline");
-            submit(pipe, game, frame.actor, decline.id, decline.type, frame.revision, null);
+                    "incidental combat decline");
+            submit(pipe, game, frame.actor, decline.id, decline.type, frame.revision,
+                    null);
             return;
         }
         if ("COLOR_CHOICE".equals(frame.kind)) {
@@ -638,8 +650,11 @@ public class WS216SeparateProcessTest {
     }
 
     // ---- PIPE_COLOR_CHOICE: City of Brass parks and funds over the pipe ----
-    // Lands carry no summoning sickness, so the turn-1 scenario placement taps
-    // immediately (Birds would be sick until turn 2 when placed via the hook).
+    // G1-R1: scenario permanents are placed untapped at the turn-one TurnBegan
+    // and requested tapped state is applied silently after the untap step, so a
+    // scenario land is usable at the first priority. The turn's active seat's
+    // scenario creatures are controlled since that turn began (attack/tap
+    // legal); other seats' stay sick until their own turn begins.
 
     @Test(timeOut = 900000)
     public void testPipeColorChoice() throws Exception {
@@ -910,9 +925,12 @@ public class WS216SeparateProcessTest {
             battlefield.add(placement("Runeclaw Bear", "p2", "p2", false));
             createScenarioGame(pipe, game, 2206L, handles, battlefield, new JsonObject());
             keepsAndStarter(pipe, game);
-            // Scenario creatures enter during turn 1 via the hook and are
-            // summoning-sick on turn 1; Master taps, so wait for p1's next own
-            // turn (turn 5 in a 4-player pod) where sickness has cleared.
+            // G1-R1: p1's scenario creatures enter at its turn-one TurnBegan and
+            // are controlled since that turn began (not sick); other seats' stay
+            // sick until their own turn begins. Master taps, so wait for p1's
+            // next own turn (turn 5 in a 4-player pod) for a clean activation
+            // checkpoint. Turn-one declare-attackers frames now park and
+            // autoAnswer declines them as incidental combat.
             final JsonObject beforeMaster = state(pipe, game, "p1");
             final int turnNow = beforeMaster.get("turn_number").getAsInt();
             int masterTurn = turnNow + 1;
