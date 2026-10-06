@@ -441,11 +441,18 @@ public class WS216SeparateProcessTest {
         }
         if ("COMBAT_DECLARE_ATTACKERS".equals(frame.kind)
                 || "COMBAT_DECLARE_BLOCKERS".equals(frame.kind)) {
-            // Incidental combat while driving to a non-combat frame is answered
-            // with the engine-offered empty declaration, for the driving actor
-            // too: G1-R1 makes the turn-1 active seat's scenario creatures legal
+            // G1-R1 makes the turn-1 active seat's scenario creatures legal
             // attackers, so declare-attackers frames now park on turn 1 where
-            // the pre-change placement point parked none.
+            // the pre-change placement point parked none. Only turn-one frames
+            // of the driving actor are expected extras and answered with the
+            // engine-offered empty declaration; a later combat frame for the
+            // driving actor is still an unexpected frame. Bystander frames
+            // (including any turn) are declined as before.
+            if (frame.actor.equals(actor)
+                    && state(pipe, game, frame.actor).get("turn_number").getAsInt() != 1) {
+                throw new AssertionError("unexpected " + frame.kind + " for " + frame.actor
+                        + " while driving to " + targetKind);
+            }
             final Opt decline = find(frame,
                     o -> o.label != null && (o.label.contains("No attack")
                             || o.label.contains("No block")),

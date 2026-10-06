@@ -422,9 +422,10 @@ public class G1R1TurnBeganBootstrapTest {
 
     /**
      * C4(c). Kills the defect "clearing sickness globally so combat tests go
-     * green". The Runeclaw Bear the active player actually casts on turn 1 is a
-     * new object and cannot attack, while the scenario-placed creature in the
-     * same game can: the discrimination is per object and per placement point.
+     * green". The Llanowar Elves the active player actually casts on turn 1 is
+     * a new object and cannot attack, while the scenario-placed Runeclaw Bear
+     * in the same game can: the discrimination is per object and per placement
+     * point.
      */
     @Test(timeOut = 300000)
     public void activeSeatCreatureCastTurnOneCannotAttack() {
@@ -565,7 +566,8 @@ public class G1R1TurnBeganBootstrapTest {
         final BridgeTestSupport.ConstructedGame foreign =
                 BridgeTestSupport.buildConstructedGame("g1-foreign-game");
         final PlayerView foreignView = PlayerView.get(foreign.game.getPlayers().get(0));
-        session.handleScenarioTurnBegan(new GameEventTurnBegan(foreignView, 1));
+        session.installScenarioBootstrap(constructed.game, session.getScenarioPlan());
+        constructed.game.fireEvent(new GameEventTurnBegan(foreignView, 1));
         Assert.assertEquals(session.scenarioBootstrapInvocationsForTests(), 0,
                 "a foreign game event must not consume the latch");
         Assert.assertNotNull(session.scenarioBootstrapFailureForTests());
@@ -585,8 +587,10 @@ public class G1R1TurnBeganBootstrapTest {
         final BridgeSession session = constructed.session;
         final JsonArray battlefield = new JsonArray();
         battlefield.add(placement("Runeclaw Bear", "p1", false));
-        session.setScenarioPlan(planFor(battlefield));
-        session.handleScenarioTurnBegan(new GameEventTurnBegan(
+        final ScenarioBootstrap.Plan plan = planFor(battlefield);
+        session.setScenarioPlan(plan);
+        session.installScenarioBootstrap(constructed.game, plan);
+        constructed.game.fireEvent(new GameEventTurnBegan(
                 PlayerView.get(constructed.game.getPlayers().get(0)), 2));
         Assert.assertEquals(session.scenarioBootstrapInvocationsForTests(), 0,
                 "a turn-two event must not consume the latch");
@@ -613,7 +617,8 @@ public class G1R1TurnBeganBootstrapTest {
         session.setScenarioPlan(plan);
         final Player p1 = constructed.game.getPlayers().get(0);
         constructed.game.getPhaseHandler().setPlayerTurn(p1);
-        session.handleScenarioTurnBegan(new GameEventTurnBegan(PlayerView.get(p1), 1));
+        session.installScenarioBootstrap(constructed.game, plan);
+        constructed.game.fireEvent(new GameEventTurnBegan(PlayerView.get(p1), 1));
         Assert.assertEquals(session.scenarioBootstrapInvocationsForTests(), 1);
         Assert.assertNull(session.scenarioBootstrapFailureForTests());
         Assert.assertEquals(session.scenarioPlacedCardsForTests().size(),

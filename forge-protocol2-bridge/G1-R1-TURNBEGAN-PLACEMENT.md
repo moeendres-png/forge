@@ -37,7 +37,7 @@ distinction.
 | Requested tapped state | applied at placement (`card.setTapped(true)` in the hook) | placed untapped at TurnBegan; applied silently by `Card.setTapped` in the retained post-untap hook (`GameEventCardTapped` never fires for it) |
 | Active seat's placed creature on turn 1 | stayed summoning-sick; the engine parks **no** declare-attackers frame (no legal attacker) | controlled since that turn began (native readiness sweep); legal attacker; declare-attackers frame parks |
 | Non-active seats' placed creatures | summoning-sick until their own turn begins | unchanged (still summoning-sick until their own turn begins; `isFirstTurnControlled()==true`) |
-| Counters | added once, `fireEvents=false`, at placement | added once, `fireEvents=false`, at TurnBegan placement; never re-applied |
+| Counters | added once, `fireEvents=false`, at placement | added once, `fireEvents=false`, at TurnBegan placement; never re-applied. The bridge-fixed property is exactly one application; native `addCounterInternal` clamps or drops per engine rules, and exactness is checkpoint-verified by the Lab |
 | Hands / life / commander damage | retained hook, after untap | unchanged; still the retained hook |
 | Subscriber failure handling | n/a (no subscriber) | subscriber catches `Throwable`, records it on the session; one-shot latch keyed to the intended game and turn 1; duplicate and missing invocation fail closed; the retained hook throws unless bootstrap ran exactly once and succeeded |
 | Hands-off rules | native | native (all legality, SBAs, triggers, casts, combat stay in the Rules Core) |
@@ -58,13 +58,22 @@ no historical row is called PASS here):
 - **Phase-trigger ordering**: scenario permanents now exist before the untap
   step and before the untap-phase `TriggerType.Phase` run, so any phase/begin
   of turn triggers they carry can be part of the turn-one event history.
+- **Untap-step interactions**: because placement now precedes
+  `PhaseHandler`'s `onPhaseBegin` for the untap step, untap-step static and
+  replacement effects can now see the scenario permanents (none are tapped
+  when placed, so no untap action is fabricated for them). This is the same
+  divergence class as the trigger ordering and is for the Lab requalification
+  to diff.
 
 Preserved:
 
 - The retained hook's `givePriorityToPlayer` frame: the first priority frame is
   still parked for the active player at the first-turn untap step, with the
   same offered options as the legacy placement point (asserted A/B in
-  `G1R1TurnBeganBootstrapTest#initialPriorityDecisionFramePreserved`).
+  `G1R1TurnBeganBootstrapTest#initialPriorityDecisionFramePreserved`). The
+  test additionally asserts the absolute frame kind, actor and step, so a
+  removed or moved frame is caught even if both compared runs regressed; the A/B
+  guards against an option change introduced only by the new placement path.
 - Terminal facts and all non-combat offered frames are unchanged by the bridge;
   any downstream difference is a consequence of now-legal turn-one combat and
   is for the Lab requalification to adjudicate.
