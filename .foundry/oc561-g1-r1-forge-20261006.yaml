@@ -1,0 +1,151 @@
+schema_version: '2.0'
+repository: moeendres-png/forge
+worktree: /home/moeen/work/worktrees/oc561-g1-r1-forge-20261006
+branch: opencode/oc561-g1-r1-forge-20261006
+audit_base_sha: ee37e4a52d99401ba57fba7ca516ac01f1981161
+audit_base_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
+state_written_against_head: 0330ba3db86cc95dcd28149fc008e1a3dc9c4205
+validated_head: 0330ba3db86cc95dcd28149fc008e1a3dc9c4205
+source_lock:
+  forge_bridge_source_commit: ee37e4a52d99401ba57fba7ca516ac01f1981161
+  forge_bridge_source_tree: b26c59365bb88f898a2ec7e7a7e337bdf7d4573e
+  source_authority: Commander-Lab config/rules_engines.json secondary_engine.bridge_source.commit, fresh-read from live origin/main
+  rules_core_candidate_commit: bb0a740d2bef725194798383c2452213ecdd0b37
+  qualification_lineage_branch: claude/forge-unified-successor-20260929 (head 732e1335, tree identical to ee37e4a5)
+  pr_target: claude/forge-unified-successor-20260929 (qualification bridge lineage, NOT forge/master)
+source_lock_metadata_discrepancy:
+  status: RESOLVED_METADATA_ONLY
+  observed: >-
+    Foundry launcher metadata records the pre-worktree-creation branch tip:
+    launch-context.json live_head = 20e3e1f7ff8e6195b95ed0dc14e0d4c87f1bcf4c,
+    metrics.jsonl source_sha = 20e3e1f7ff8e6195b95ed0dc14e0d4c87f1bcf4c, and the
+    launcher command line carried --audit-base-sha 20e3e1f7... . The launcher's
+    bootstrap state file (now replaced) carried audit_base_sha 20e3e1f7 and
+    audit_base_tree 000066890decca5ed7b1b889be0ea46d77903aee.
+  actual_source_lock: >-
+    The binding source lock is the Lab pin secondary_engine.bridge_source.commit
+    = ee37e4a52d99401ba57fba7ca516ac01f1981161 (tree b26c59365bb88f898a2ec7e7a7e337bdf7d4573e).
+  proof:
+    - 'git reflog opencode/oc561-g1-r1-forge-20261006: 2026-10-06 15:34:50 branch created from 20e3e1f7; 2026-10-06 15:40:07 branch reset to ee37e4a5, before any mutation'
+    - 'git merge-base --is-ancestor 20e3e1f7 ee37e4a5: true; 20e3e1f7..ee37e4a5 touches only forge-protocol2-bridge/ files (matches SUCCESSOR_SOURCE_LOCK ancestry)'
+    - 'all working-tree diffs, tests and evidence bind to HEAD ee37e4a5 / tree b26c5936; no 20e3e1f7 content is part of the change'
+  impact: >-
+    Metadata-only. The launcher records the tip at worktree creation; the
+    workstream re-pointed the branch to the Lab binding pin before any edit.
+    No ownership, source-lock, hook, guard, evidence or execution semantics were
+    affected; the durable audit_base_sha/audit_base_tree already record ee37e4a5.
+  foundry_gate_effect: NONE_INVALIDATED
+objective: >-
+  Commander-Lab #561 G1-R1 (Coordinator decision comment 6005365186): implement
+  the approved TurnBegan scenario-permanent placement point on the Forge bridge
+  lineage, with fail-closed latch (C1), no fabricated event/state history (C2),
+  engine-native controlled_since_turn_began checkpoint readback (C3), three
+  real-engine controls (C4 a/b/c), impact preservation (C5) and recorded
+  divergence (C6). Forge-only phase: no Lab source, no rules_engines.json, no
+  re-pin, no PB-03, no provider/freeze decisions, no forge/master merge.
+in_scope:
+  - forge-protocol2-bridge main/test implementation of the TurnBegan subscriber + retained hook
+  - StateProjection battlefield_details controlled_since_turn_began readback
+  - bridge tests, mutation/wrong-reason controls, source ratchets
+  - branch evidence and #561 checkpoints
+out_of_scope:
+  - Commander-Lab source and config/rules_engines.json
+  - Lab re-pin, PB-03, sealed epochs, FULL107 assemblers
+  - production provider selection, Architecture Freeze, Production Repository
+  - forge/master merge, G4 tape, G4-K, B2/F1-F4, unrelated cleanup
+ownership: oc561-g1-r1-forge-20261006 (OpenCode DeepSeek MAX sole active writer; Claude baton 6007555350 superseded by comment 6017653019)
+takeover_baton: https://github.com/moeendres-png/commander-playtest-lab/issues/561#issuecomment-6017653019
+status: ACTIVE
+final_head: 0330ba3db86cc95dcd28149fc008e1a3dc9c4205
+final_tree: 7dac6857283b8000c056676306e038ab9d4dd6df
+commits:
+  - 5fbd4b8ac2f23085e5a3ce91829d6b7253850bbd bridge: place scenario permanents at turn-one TurnBegan with a fail-closed latch (#561 G1-R1)
+  - 0330ba3db86cc95dcd28149fc008e1a3dc9c4205 Tests: strengthen G1-R1 identity coverage and restore the combat tripwire
+review:
+  type: fresh-context adversarial, read-only, bound to 5fbd4b8 (tree 4c611e06)
+  verdict: NO BLOCKING FINDING
+  controls: 13/13 present and non-vacuous per reviewer matrix
+  source_lock_adjudication: METADATA_ONLY_RESOLVED (see evidence file)
+  repaired_non_blocking:
+    - bus-level identity/latch controls now fire through the production Guava subscription
+    - WS216 driver unexpected-frame tripwire restored outside turn one
+    - control Javadoc corrected; impact doc gains untap-step interaction, counter-exactness and control-13 coverage boundaries
+  rerun_after_repairs: G1R1TurnBeganBootstrapTest + WS216SeparateProcessTest 31/31 PASS; checkstyle green
+  production_unchanged_by_repairs: true (full 385-suite evidence remains valid)
+  evidence: /tmp/foundry-launch-oc561-g1-r1-forge-20261006/evidence/source-lock-metadata-adjudication.txt, repair-rerun.log
+milestones:
+  - id: source-lock
+    state: DONE
+    evidence: HEAD ee37e4a5 tree b26c5936 == live Lab bridge_source pin; tree equality with lineage head 732e1335
+  - id: fail-before
+    state: DONE
+    evidence: pre-change HEAD, G1R1TurnBeganBootstrapTest active-seat attack + cast controls failed with "declare-attackers was never offered on turn 1", non-active control passed
+  - id: implementation
+    state: DONE
+    evidence: ScenarioBootstrap placeBattlefield/applyPostUntap split; BridgeSession latch+subscriber+hook+fault controls; StateProjection controlled_since_turn_began
+  - id: targeted-tests
+    state: DONE
+    evidence: >-
+      G1R1TurnBeganBootstrapTest 20/20 PASS (19/19 at the time the full suite
+      snapshot was compiled plus the direct positive latch test run targeted);
+      WS202ExecutableSurfaceTest 27/27; WS202SeparateProcessTest 13/13 plus
+      testPipeTurnOneScenarioReadiness; WS216+WS217 13/13 after the
+      incidental-combat decline fix
+  - id: full-suite
+    state: DONE
+    evidence: >-
+      /tmp/foundry-launch-oc561-g1-r1-forge-20261006/evidence/full-bridge-suite-after.log:
+      Tests run 385, Failures 0, Errors 0, Skipped 0, BUILD SUCCESS, EXIT=0,
+      finished 2026-10-06T16:59:01+02:00; production code under test unchanged
+      since the run started (16:31 -> 16:59), only the additive 20th test method
+      was added after compilation and passed targeted
+  - id: checkstyle
+    state: DONE
+    evidence: mvn -o -B test-compile -pl forge-protocol2-bridge -am (no skip) BUILD SUCCESS
+changed_fault_controls:
+  never: subscriber never registered -> hook refuses
+  throw: subscriber placement throws -> recorded -> hook refuses
+  double: duplicate turn-one invocation -> recorded -> hook refuses
+  late: placement at retained post-untap hook (pre-G1-R1 point; control 6/9)
+  tapped_at_begin: requested tapped applied before untap (control 7)
+  counters_twice: counters re-applied in hook (control 8)
+  sick_active: active seat re-marked sick after readiness sweep (control 9)
+  ready_all: all placed marked not sick (control 10)
+  ready_casts: active seat sickness cleared at every turn-one priority (control 11)
+impact:
+  historical_forge_pass_rows_potentially_invalidated:
+    - PLAYER_COUNT_2P
+    - PLAYER_COUNT_3P
+    - PLAYER_COUNT_4P
+    - PLAYER_COUNT_5P
+    - PILOT_MULLIGAN
+    - WS05-MP-ELIM-OWNED-3
+    - WS05-MP-ELIM-PRIO-3
+    - WS05-MP-ELIM-5
+    - WS05-CMD-ZONE-GY-YES
+    - WS05-CMD-ZONE-GY-NO
+    - WS05-CMD-ZONE-EXILE-YES
+    - WS05-CMD-ZONE-EXILE-NO
+    - WS05-CMD-ZONE-HAND-YES
+    - WS05-CMD-ZONE-HAND-NO
+    - WS05-CMD-DMG-SPLIT
+    - WS05-CMD-PARTNER-DMG
+    - WS05-CMD-PARTNER-ZONE
+  note: >-
+    The 13 WS05 FORGE_SCENARIO_BOOTSTRAP_OBLIGATION rows are the directly
+    affected set; the 4 PLAYER_COUNT rows and PILOT_MULLIGAN do not use the
+    scenario bootstrap and only see the additive readback field. No row keeps
+    current credit until the Lab re-pin + PB-03 requalification.
+failure_class: NONE
+current_reasoning_tier: xhigh
+technical_decision_authority: COORDINATOR_DECISION_6005365186_WITHIN_CONTRACT
+technical_decisions:
+  - 'Fresh-context adversarial review bound to 5fbd4b8 returned NO BLOCKING FINDING; 13/13 wrong-reason controls present and non-vacuous; non-blocking repairs committed as 0330ba3 (test/docs only).'
+  - 'Source-lock launcher metadata discrepancy (live_head/source_sha 20e3e1f7 vs binding pin ee37e4a5) adjudicated METADATA_ONLY: the branch was created from the worktree tip at launch and reset to the Lab pin at 15:40:07 before any edit; 20e3e1f7 is an ancestor of ee37e4a5 and the delta touches only forge-protocol2-bridge/. Evidence: /tmp/foundry-launch-oc561-g1-r1-forge-20261006/evidence/source-lock-metadata-adjudication.txt.'
+  - 'Full bridge suite evidence (385 tests, 0 failures/errors/skipped, EXIT=0, 16:59:01) remains valid because no production source changed after it started; the review repairs touched tests and the impact doc only, and the two invalidated test classes were rerun (31/31 PASS).'
+  - 'Placement divergence recorded as qualification-bridge behavior, not Forge-native game start (C6); Rules-Core candidate identity bb0a740d is untouched.'
+exact_next_action: >-
+  Push opencode/oc561-g1-r1-forge-20261006 (HEAD 0330ba3, tree 7dac6857),
+  post the #561 checkpoint with exact SHA/tree and evidence, verify
+  claude/forge-unified-successor-20260929 drift, and open the PR against that
+  qualification bridge lineage (never forge/master).
