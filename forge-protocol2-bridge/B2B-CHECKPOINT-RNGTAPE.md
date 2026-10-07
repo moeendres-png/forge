@@ -139,3 +139,12 @@ Each mutant was applied to the committed tree, the named test run alone
 | M8a–d game_id / sequence / seat / stream dropped from the HMAC input | #theHmacChangesWithGameIdStreamSeatOrSequence | RED ×4 |
 | M9 shuffle-subscriber exception rethrown to Guava (swallowed) | #aSwallowedSubscriberExceptionPoisonsTheTape | RED (tape served as clean) |
 | M10 result ignores the shuffled order | B2bRngTapeSeparateProcessTest | RED (seed + 1 gives the same digests) |
+
+Review-fix reds (commit 6397682a111; offline build with `-Dcheckstyle.skip`):
+
+| Mutant | Test | Result |
+|---|---|---|
+| M11 missed-seam park guard disabled | B2bCheckpointLibraryTest#aMissedSeamRefusesEveryLaterDecision | RED (a main-phase decision was offered) |
+| M12 coordinate check removed | B2bRulesRngTapeTest#anImpossibleCoordinatePairPoisonsTheTape | RED |
+| M13 seat check removed | B2bRulesRngTapeTest#aShuffleEventForAnotherSeatPoisonsTheTape | RED |
+| M14 `before_lower_bound` key reverted to `before` | B2bRulesRngTapeTest#thePayloadCarriesNoCardNames | RED |
