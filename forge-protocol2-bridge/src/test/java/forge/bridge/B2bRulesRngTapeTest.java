@@ -108,7 +108,7 @@ public class B2bRulesRngTapeTest {
             final int seat = entry.get("seat").getAsInt();
             seats.add(seat);
             Assert.assertEquals(entry.get("stream").getAsString(), "library_shuffle:P" + (seat + 1));
-            final long before = entry.get("before").getAsLong();
+            final long before = entry.get("before_lower_bound").getAsLong();
             final long after = entry.get("after").getAsLong();
             Assert.assertTrue(before >= previousAfter && after - before >= 98,
                     "a 99-card shuffle lies within its coordinates: " + entry);
@@ -117,9 +117,15 @@ public class B2bRulesRngTapeTest {
             Assert.assertEquals(entry.get("library_size").getAsInt(), 99);
             Assert.assertTrue(entry.get("result_digest").getAsString().matches("[0-9a-f]{64}"));
             Assert.assertEquals(entry.keySet(), new HashSet<>(Arrays.asList("operation", "stream",
-                    "sequence", "seat", "before", "after", "library_size", "result_digest")));
+                    "sequence", "seat", "before_lower_bound", "after", "library_size", "result_digest")));
         }
         Assert.assertEquals(seats, new HashSet<>(Arrays.asList(0, 1, 2, 3)));
+        Assert.assertEquals(payload.get("tape_schema").getAsString(), "forge-rules-rng-tape/2");
+        final JsonObject semantics = payload.getAsJsonObject("coordinate_semantics");
+        Assert.assertTrue(semantics.get("before_lower_bound").getAsString().contains("lower_bound"));
+        Assert.assertTrue(semantics.get("after").getAsString().endsWith("_exact"));
+        Assert.assertEquals(semantics.get("sequence").getAsString(), "global_engine_order_across_seats",
+                "one dense counter across seats, as the XMage tape");
         final String text = response.toString();
         final Set<String> names = new HashSet<>();
         for (Player player : session.registryPlayers()) {
@@ -202,6 +208,42 @@ public class B2bRulesRngTapeTest {
             Assert.fail("an event without a result was served");
         } catch (RulesRngTape.Refused expected) {
             Assert.assertEquals(expected.getMessage(), "RULES_RNG_TAPE_POISONED:SHUFFLE_WITHOUT_RESULT");
+        }
+    }
+
+    /** Kills a missing coordinate check: a 3-card shuffle that consumed fewer than 2 calls poisons. */
+    @Test
+    public void anImpossibleCoordinatePairPoisonsTheTape() {
+        OrchestrationKey.keyForTests(KEY);
+        final RulesRngTape tape = new RulesRngTape("g-coord");
+        final List<Object> before = Arrays.asList(new Object(), new Object(), new Object());
+        final List<Object> after = Arrays.asList(before.get(2), before.get(0), before.get(1));
+        tape.observeEvent(10);
+        tape.onControllerShuffle(0, before, after, 11);
+        tape.onShuffleEvent(0);
+        try {
+            tape.results();
+            Assert.fail("a coordinate pair that cannot contain the shuffle was served");
+        } catch (RulesRngTape.Refused expected) {
+            Assert.assertEquals(expected.getMessage(),
+                    "RULES_RNG_TAPE_POISONED:RNG_COORDINATE_INCONSISTENT");
+        }
+    }
+
+    /** Kills a missing seat check: a shuffle event confirming another seat's result poisons. */
+    @Test
+    public void aShuffleEventForAnotherSeatPoisonsTheTape() {
+        OrchestrationKey.keyForTests(KEY);
+        final RulesRngTape tape = new RulesRngTape("g-seat");
+        final List<Object> before = Arrays.asList(new Object(), new Object(), new Object());
+        final List<Object> after = Arrays.asList(before.get(1), before.get(2), before.get(0));
+        tape.onControllerShuffle(0, before, after, 5);
+        tape.onShuffleEvent(2);
+        try {
+            tape.results();
+            Assert.fail("a result confirmed by another seat's event was served");
+        } catch (RulesRngTape.Refused expected) {
+            Assert.assertEquals(expected.getMessage(), "RULES_RNG_TAPE_POISONED:SHUFFLE_SEAT_MISMATCH");
         }
     }
 

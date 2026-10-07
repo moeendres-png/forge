@@ -32,7 +32,7 @@ import java.util.Map;
  * and before the zone is rewritten, so the bridge controller sees both orders
  * and the Rules-RNG call count when the shuffle's randomness was consumed
  * ({@code after}). The shuffle's {@code GameEventShuffle} then confirms the
- * entry through the session's {@code ShuffleCounter}. {@code before} is the
+ * entry through the session's {@code ShuffleCounter}. {@code before_lower_bound} is the
  * call count at the last engine event dispatched before the shuffle: a lower
  * bound of the shuffle's first call (no engine event fires inside
  * {@code Player.shuffle} before its RNG use).
@@ -45,7 +45,22 @@ import java.util.Map;
  */
 final class RulesRngTape {
 
-    static final String SCHEMA = "forge-rules-rng-tape/1";
+    static final String SCHEMA = "forge-rules-rng-tape/2";
+    /**
+     * Schema /2 names the lower coordinate {@code before_lower_bound}: it is the
+     * Rules-RNG call count at the last engine event before the shuffle, never an
+     * exact call index of the shuffle's first call.
+     */
+    static final String BEFORE_SEMANTICS =
+            "rules_rng_calls_at_last_engine_event_before_the_shuffle_lower_bound_not_exact";
+    static final String AFTER_SEMANTICS =
+            "rules_rng_calls_when_the_shuffled_order_reached_the_controller_exact";
+    /**
+     * {@code sequence} is one global, dense, zero-based counter in engine order
+     * across all seats and streams, the convention of the Lab's XMage tape
+     * ({@code XmageRulesRngResultTape}: {@code results.size()} over one game list).
+     */
+    static final String SEQUENCE_SCOPE = "global_engine_order_across_seats";
     static final String OPERATION = "LIBRARY_SHUFFLE";
 
     /** The stream of a seat's library shuffles; seats are named as the Lab's records name them. */
@@ -210,7 +225,7 @@ final class RulesRngTape {
             json.addProperty("stream", entry.stream);
             json.addProperty("sequence", entry.sequence);
             json.addProperty("seat", entry.seat);
-            json.addProperty("before", entry.before);
+            json.addProperty("before_lower_bound", entry.before);
             json.addProperty("after", entry.after);
             json.addProperty("library_size", entry.permutation.size());
             json.addProperty("result_digest", resultDigest(gameId, entry.stream, entry.seat,

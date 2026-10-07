@@ -379,6 +379,38 @@ public class B2bCheckpointLibraryTest {
         session.shutdown(5000);
     }
 
+    /**
+     * Kills a missing park-time seam guard: the MAIN1 event never reaches the
+     * seam, so no checkpoint exists. The first decision at or past the seam is
+     * refused with CHECKPOINT_SEAM_MISSED, the session fails closed, and no
+     * later decision is ever offered or accepted.
+     */
+    @Test(timeOut = 360000)
+    public void aMissedSeamRefusesEveryLaterDecision() {
+        BridgeSession.checkpointFaultForTests = "suppress_seam";
+        final BridgeEngine engine = new BridgeEngine();
+        final BridgeSession session = created(engine, "b2b-missed", 56109L,
+                checkpointRequest("P1", RECORD_ORDER));
+        BridgeTestSupport.startGame(engine, "b2b-missed");
+        final String reason = driveExpectingCheckpointFailure(session);
+        Assert.assertEquals(reason, "CHECKPOINT_MATERIALIZATION_REJECTED:CHECKPOINT_SEAM_MISSED");
+        Assert.assertNull(session.checkpointResultForTests(), "nothing was materialized");
+        Assert.assertEquals(session.getGame().getPhaseHandler().getTurn(), 1,
+                "the game never advanced past the seam");
+        final DecisionFrame last = session.getCurrentFrame();
+        if (last != null) {
+            Assert.assertTrue(last.isAnswered(),
+                    "the only frame left is a pre-seam frame that was already answered");
+            final BridgeSession.SubmitOutcome outcome = session.submit(last.actorPlayerId,
+                    last.options.get(0).optionId, last.options.get(0).actionType, last.revision);
+            Assert.assertFalse(outcome.applied, "a decision was accepted after the missed seam");
+            Assert.assertEquals(outcome.errorCode, BridgeErrors.SESSION_FAILED);
+        }
+        Assert.assertEquals(session.playerById("p1").getCardsIn(ZoneType.Library).size(), 91,
+                "the library was never materialized");
+        session.shutdown(5000);
+    }
+
     // ---- C2: only declared objects ----
 
     /** A declared library object the runs leave out is refused at creation (parse level). */

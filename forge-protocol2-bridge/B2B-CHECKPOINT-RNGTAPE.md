@@ -58,8 +58,16 @@ CHECKPOINT_MATERIALIZATION_ERROR.
   the materialization lies before the first post-checkpoint frame, so 91→98 never reaches a
   tape). This batch does not implement G4-P.
 - **C5** No materialization path references an object. `StateProjection.identityVisible` now
-  hides every library card from every principal, owner included, unless the engine's
-  `mayPlayerLook` allows it (the library part of G4-C1; face-down handling stays with G4-P).
+  hides every library card from every principal in `object_refs`, owner included, unless the
+  engine's `mayPlayerLook` allows it (the library part of G4-C1; face-down handling stays with
+  G4-P). Scope of the guarantee: **`object_refs` only.** The bridge controller has no
+  `tempShowCards` override, so during a search or dig `mayPlayerLook` is false and those
+  cards' `object_refs` are `hidden` too, while the option `label` and `source_name`
+  (ExternalPlayerController's library-choice options) still name the card to the searching
+  player. That is legal (CR 701.19: the searcher may look at the searched cards), but it is a
+  wider-than-required hiding in `object_refs` and a name path outside it. **Follow-up for
+  G4-C1 / G4-P (main writer):** per-event visibility aligned with `CardView.canBeShownTo`,
+  including the searcher's temporary view. This batch adds no `tempShowCards` override.
 - **C6** Engine-direct readback: object positions, membership (no undeclared extra, none
   dropped — covers `Zone.add`'s silent drop), identity order, hand composition. Mismatch =
   code only. Published only as `get_constructed_state.payload.checkpoint_materialization`:
@@ -80,22 +88,38 @@ Orchestration-only, refused with `orchestration_channel_not_enabled` without
 
 ```json
 {"game_id": "...", "observation_scope": "orchestration_keyed_digests",
- "tape_schema": "forge-rules-rng-tape/1", "engine_state": "PARKED|CLEAN_TERMINAL|RUNNING|FAILED|CLOSED",
+ "tape_schema": "forge-rules-rng-tape/2", "engine_state": "PARKED|CLEAN_TERMINAL|RUNNING|FAILED|CLOSED",
  "rules_seed_explicit": true, "rules_random_calls": 1234,
  "rules_rng_results": [{"operation": "LIBRARY_SHUFFLE", "stream": "library_shuffle:P1",
-   "sequence": 0, "seat": 0, "before": 0, "after": 98, "library_size": 99,
+   "sequence": 0, "seat": 0, "before_lower_bound": 0, "after": 98, "library_size": 99,
    "result_digest": "<hex HMAC-SHA256>"}],
+ "coordinate_semantics": {
+   "before_lower_bound": "rules_rng_calls_at_last_engine_event_before_the_shuffle_lower_bound_not_exact",
+   "after": "rules_rng_calls_when_the_shuffled_order_reached_the_controller_exact",
+   "sequence": "global_engine_order_across_seats"},
  "privileged_state_digest": "<hex HMAC-SHA256>"}
 ```
 
 Digest fields only when PARKED or CLEAN_TERMINAL. `result_digest` = HMAC over
 `forge-rules-rng-tape/1, game_id, <id>, stream, <s>, seat, <n>, sequence, <n>,
 library_size, <n>, permutation, <pre-shuffle index per post-shuffle position>…`.
-`before` is the call count at the last engine event before the shuffle (a lower bound;
-nothing fires inside `Player.shuffle` before its RNG use), `after` the count when the
-shuffled order reached the controller. Library shuffles only; coin and die values are not
+`before_lower_bound` (schema /2; /1 called it `before`) is the call count at the last engine
+event before the shuffle: a lower bound, never an exact call index (Forge has no pre-shuffle
+hook without a Rules-Core change; nothing fires inside `Player.shuffle` before its RNG use).
+`after` is exact: the count when the shuffled order reached the controller. The payload's
+`coordinate_semantics` states both. **Divergence from XMage:** the XMage tape's `before` is
+exact (`game.getRulesRandomCalls()` before the shuffle); a Lab consumer must not compare a
+Forge `before_lower_bound` with an XMage `before` as the same quantity. Twin comparisons
+(Forge against Forge) are unaffected: the bound is deterministic per seed.
+`sequence` is one dense, zero-based counter in engine order **across all seats and
+streams** (not per stream), the same convention as the XMage tape (`XmageRulesRngResultTape`:
+`results.size()` over one per-game list); the per-seat order is recovered by filtering on
+`stream`. Library shuffles only; coin and die values are not
 recorded (they need a Rules-Core decision). Refusals: `rules_rng_tape_failed` with
 `RULES_RNG_TAPE_POISONED:<cause>` or `RULES_RNG_TAPE_INCOMPLETE`.
+Poison causes: SHUFFLE_SUBSCRIBER_ERROR, SHUFFLE_PLAYER_UNKNOWN, SHUFFLE_RESULT_UNREADABLE,
+SHUFFLE_ORDER_NOT_A_PERMUTATION, RNG_COORDINATE_INCONSISTENT (after − before_lower_bound <
+library_size − 1), SHUFFLE_WITHOUT_RESULT, SHUFFLE_SEAT_MISMATCH, RNG_OBSERVER_ERROR.
 
 ## Red tests and mutation-kill evidence (LOCAL_OBSERVED, implementation commit 9fab0856c2a)
 

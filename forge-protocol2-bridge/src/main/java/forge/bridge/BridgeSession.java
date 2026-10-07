@@ -362,6 +362,11 @@ public final class BridgeSession {
         payload.addProperty("rules_seed_explicit", forge.util.MyRandom.isExplicitSeed());
         payload.addProperty("rules_random_calls", forge.util.MyRandom.getCallCount());
         payload.add("rules_rng_results", rulesRngTape.results());
+        final JsonObject semantics = new JsonObject();
+        semantics.addProperty("before_lower_bound", RulesRngTape.BEFORE_SEMANTICS);
+        semantics.addProperty("after", RulesRngTape.AFTER_SEMANTICS);
+        semantics.addProperty("sequence", RulesRngTape.SEQUENCE_SCOPE);
+        payload.add("coordinate_semantics", semantics);
         payload.addProperty("privileged_state_digest", privilegedStateDigest());
         // The engine must still be in the same state after the digest: an
         // answered decision or an ended thread voids it.
@@ -416,7 +421,8 @@ public final class BridgeSession {
     /**
      * Test-only stimuli for the checkpoint controls. {@code null} is
      * production; {@code "swap_positions"}, {@code "extra_object"} and
-     * {@code "drop_object"} corrupt the materialized order before verification.
+     * {@code "drop_object"} corrupt the materialized order before verification;
+     * {@code "suppress_seam"} keeps the MAIN1 event from reaching the seam.
      */
     static volatile String checkpointFaultForTests;
 
@@ -469,6 +475,10 @@ public final class BridgeSession {
     void handleCheckpointSeam(final GameEventTurnPhase event) {
         final CheckpointMaterialization plan = checkpointPlan;
         if (plan == null || event == null || event.phase() != PhaseType.MAIN1) {
+            return;
+        }
+        if ("suppress_seam".equals(checkpointFaultForTests)) {
+            // Test-only stimulus: the seam event never reaches the materialization.
             return;
         }
         try {
