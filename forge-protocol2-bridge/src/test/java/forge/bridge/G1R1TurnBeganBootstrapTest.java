@@ -536,6 +536,201 @@ public class G1R1TurnBeganBootstrapTest {
         session.shutdown(5000);
     }
 
+    // ---- E-B2: face-down construction (CR 708.2, CR 701.34) ----
+
+    private static JsonObject faceDownPlacement(String card, String controller, JsonElement faceDown,
+            JsonElement faceDownType) {
+        final JsonObject entry = placement(card, controller, false);
+        if (faceDown != null) {
+            entry.add("face_down", faceDown);
+        }
+        if (faceDownType != null) {
+            entry.add("face_down_type", faceDownType);
+        }
+        return entry;
+    }
+
+    private static void expectParseRejects(JsonObject entry, String fragment) {
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(entry);
+        try {
+            planFor(battlefield);
+            throw new AssertionError("expected IllegalArgumentException containing: " + fragment);
+        } catch (IllegalArgumentException expected) {
+            Assert.assertTrue(String.valueOf(expected.getMessage()).contains(fragment),
+                    "expected fragment [" + fragment + "] in [" + expected.getMessage() + "]");
+        }
+    }
+
+    @Test
+    public void faceDownParseRejectsNonBooleanFaceDown() {
+        expectParseRejects(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive("yes"),
+                new com.google.gson.JsonPrimitive("MANIFESTED")), "face_down must be a boolean");
+        expectParseRejects(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(1),
+                new com.google.gson.JsonPrimitive("MANIFESTED")), "face_down must be a boolean");
+    }
+
+    @Test
+    public void faceDownParseRejectsMissingOrUnsupportedType() {
+        expectParseRejects(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true), null), "face_down_type unsupported: ");
+        expectParseRejects(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true),
+                new com.google.gson.JsonPrimitive("CLOAKED")),
+                "face_down_type unsupported: CLOAKED");
+        expectParseRejects(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true), com.google.gson.JsonNull.INSTANCE),
+                "face_down_type unsupported: ");
+    }
+
+    @Test
+    public void faceDownParseRejectsAttachedPlacement() {
+        final JsonObject entry = faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true),
+                new com.google.gson.JsonPrimitive("MANIFESTED"));
+        entry.addProperty("attached_to", "Forest");
+        expectParseRejects(entry, "face_down placement cannot be attached");
+    }
+
+    @Test
+    public void faceDownParseAcceptsManifestedAndDefaultsFalse() {
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true),
+                new com.google.gson.JsonPrimitive("MANIFESTED")));
+        battlefield.add(placement("Forest", "p1", false));
+        final ScenarioBootstrap.Plan plan = planFor(battlefield);
+        Assert.assertTrue(plan.battlefield.get(0).faceDown);
+        Assert.assertEquals(plan.battlefield.get(0).faceDownType, "MANIFESTED");
+        Assert.assertFalse(plan.battlefield.get(1).faceDown);
+    }
+
+    /** The first projected battlefield entry of {@code owner} matching the name, per observer. */
+    private static JsonObject readbackEntry(BridgeSession session, String ownerId,
+            String observer, String shownName) {
+        final JsonObject state = StateProjection.gameState(session, observer);
+        for (JsonElement element : state.getAsJsonArray("players")) {
+            final JsonObject player = element.getAsJsonObject();
+            if (!player.get("player_id").getAsString().equals(ownerId)) {
+                continue;
+            }
+            for (JsonElement detail : player.getAsJsonObject("zones")
+                    .getAsJsonArray("battlefield_details")) {
+                final JsonObject entry = detail.getAsJsonObject();
+                if (shownName.equals(entry.get("name").getAsString())) {
+                    return entry;
+                }
+            }
+        }
+        throw new AssertionError("no readback entry " + shownName + " on " + ownerId
+                + " for observer " + observer);
+    }
+
+    /**
+     * E-B2 real engine: a manifested Grizzly Bears placed for p1 is face down and
+     * manifested with a 2/2 face-down state; the controller sees the identity and the
+     * kind, an opponent sees only the redacted marker and a null kind (no leak); a
+     * non-face-down control reads face_down false.
+     */
+    @Test(timeOut = 300000)
+    public void manifestedFaceDownPlacementIsEngineStateAndNoLeak() {
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true),
+                new com.google.gson.JsonPrimitive("MANIFESTED")));
+        battlefield.add(placement("Runeclaw Bear", "p1", false));
+        final BridgeSession session = scenarioGame("eb2-face-down", 5701L, battlefield,
+                new JsonObject());
+        BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
+        Card faceDownCard = null;
+        for (Card card : session.playerById("p1").getCardsIn(ZoneType.Battlefield)) {
+            if (card.isFaceDown()) {
+                faceDownCard = card;
+            }
+        }
+        Assert.assertNotNull(faceDownCard, "no face-down permanent on p1's battlefield");
+        Assert.assertTrue(faceDownCard.isFaceDown());
+        Assert.assertTrue(faceDownCard.isManifested());
+        Assert.assertEquals(faceDownCard.getNetPower(), 2);
+        Assert.assertEquals(faceDownCard.getNetToughness(), 2);
+
+        final JsonObject own = readbackEntry(session, "p1", "p1", "Grizzly Bears");
+        Assert.assertTrue(own.get("face_down").getAsBoolean());
+        Assert.assertEquals(own.get("face_down_type").getAsString(), "MANIFESTED");
+
+        final JsonObject opponent = readbackEntry(session, "p1", "p2", "<face-down>");
+        Assert.assertTrue(opponent.get("face_down").getAsBoolean());
+        Assert.assertTrue(opponent.get("face_down_type").isJsonNull(),
+                "the face-down kind must not reach an observer without the identity");
+        Assert.assertTrue(opponent.get("power").isJsonNull());
+        Assert.assertFalse(opponent.toString().contains("Grizzly"),
+                "identity leaked to an opponent: " + opponent);
+
+        final JsonObject control = readbackEntry(session, "p1", "p2", "Runeclaw Bear");
+        Assert.assertFalse(control.get("face_down").getAsBoolean());
+        Assert.assertTrue(control.get("face_down_type").isJsonNull());
+        session.shutdown(5000);
+    }
+
+    /** Counters on a face-down placement keep working as before. */
+    @Test(timeOut = 300000)
+    public void faceDownPlacementKeepsCounters() {
+        final JsonArray battlefield = new JsonArray();
+        final JsonObject entry = faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true),
+                new com.google.gson.JsonPrimitive("MANIFESTED"));
+        final JsonObject counters = new JsonObject();
+        counters.addProperty("P1P1", 2);
+        entry.add("counters", counters);
+        battlefield.add(entry);
+        final BridgeSession session = scenarioGame("eb2-face-down-counters", 5702L, battlefield,
+                new JsonObject());
+        BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
+        Card faceDownCard = null;
+        for (Card card : session.playerById("p1").getCardsIn(ZoneType.Battlefield)) {
+            if (card.isFaceDown()) {
+                faceDownCard = card;
+            }
+        }
+        Assert.assertNotNull(faceDownCard);
+        Assert.assertEquals(faceDownCard.getCounters(CounterEnumType.P1P1), 2);
+        session.shutdown(5000);
+    }
+
+    /** The post-untap verification fails closed when a face-down request is no longer met. */
+    @Test(timeOut = 300000)
+    public void postUntapVerificationFailsClosedWhenNotFaceDown() {
+        final JsonArray battlefield = new JsonArray();
+        battlefield.add(faceDownPlacement("Grizzly Bears", "p1",
+                new com.google.gson.JsonPrimitive(true),
+                new com.google.gson.JsonPrimitive("MANIFESTED")));
+        final ScenarioBootstrap.Plan plan = planFor(battlefield);
+        final BridgeSession session = scenarioGame("eb2-face-down-verify", 5703L, battlefield,
+                new JsonObject());
+        BridgeTestSupport.driveStartToPriority(session, "p1", 120000);
+        Card faceDownCard = null;
+        for (Card card : session.playerById("p1").getCardsIn(ZoneType.Battlefield)) {
+            if (card.isFaceDown()) {
+                faceDownCard = card;
+            }
+        }
+        Assert.assertNotNull(faceDownCard);
+        final List<Card> placed = new ArrayList<>();
+        placed.add(faceDownCard);
+        ScenarioBootstrap.verifyRequestedFaceDown(plan, placed);
+        faceDownCard.setManifested(null);
+        expectIllegalState(() -> ScenarioBootstrap.verifyRequestedFaceDown(plan, placed),
+                "no longer a face-down manifested permanent");
+        faceDownCard.setManifested(new forge.game.spellability.SpellAbility.EmptySa(
+                forge.game.ability.ApiType.Manifest, faceDownCard));
+        faceDownCard.turnFaceUp(false, null);
+        expectIllegalState(() -> ScenarioBootstrap.verifyRequestedFaceDown(plan, placed),
+                "no longer a face-down manifested permanent");
+        session.shutdown(5000);
+    }
+
     // ---- C1: fail-closed controls ----
 
     /**

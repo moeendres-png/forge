@@ -969,6 +969,28 @@ public final class StateProjection {
             entry.addProperty("controlled_since_turn_began", !firstTurnControlled);
             final boolean redacted =
                     "<hidden>".equals(shown) || "<face-down>".equals(shown);
+            // E-B2: whether a permanent is face down is public (CR 708.2), so every
+            // observer gets face_down. The face-down kind is emitted only when this
+            // observer's shown name revealed the identity; otherwise JSON null.
+            final boolean faceDown;
+            try {
+                faceDown = card.isFaceDown();
+            } catch (Throwable t) {
+                throw new BridgeProjectionException("card.face_down", t);
+            }
+            entry.addProperty("face_down", faceDown);
+            if (faceDown && !redacted) {
+                final String faceDownType;
+                try {
+                    faceDownType = card.isManifested() ? "MANIFESTED"
+                            : card.isCloaked() ? "CLOAKED" : "FACE_DOWN";
+                } catch (Throwable t) {
+                    throw new BridgeProjectionException("card.face_down_type", t);
+                }
+                entry.addProperty("face_down_type", faceDownType);
+            } else {
+                entry.add("face_down_type", JsonNull.INSTANCE);
+            }
             if (redacted) {
                 entry.add("counters", new JsonObject());
                 entry.add("power", JsonNull.INSTANCE);
