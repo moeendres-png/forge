@@ -301,7 +301,11 @@ public final class ScenarioBootstrap {
                 throw new IllegalStateException("unknown placement player");
             }
             Card card = takeCommander(owner, placement.cardName);
-            if (card == null) {
+            // #561 B2b: a seat whose complete checkpoint library is declared
+            // keeps its whole template deck in library and hand (the record's
+            // arithmetic: template deck = template hand + template library), so
+            // its placed permanents never come out of that library.
+            if (card == null && !session.checkpointDeclaresLibrary(placement.ownerId)) {
                 card = takeFromLibrary(owner, placement.cardName);
             }
             if (card == null) {

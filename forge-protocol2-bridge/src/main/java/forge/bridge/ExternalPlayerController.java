@@ -110,6 +110,18 @@ public final class ExternalPlayerController extends PlayerController {
         this.session = session;
     }
 
+    /**
+     * G4-K: {@code Player.shuffle} hands the Rules-RNG-shuffled order to the
+     * shuffled player's controller before rewriting the library. The bridge
+     * records the shuffle's result for the keyed orchestration tape and
+     * returns the order unchanged: it never alters a shuffle.
+     */
+    @Override
+    public forge.game.card.CardCollectionView cheatShuffle(forge.game.card.CardCollectionView list) {
+        session.recordControllerShuffle(player, list);
+        return list;
+    }
+
     private String actorId() {
         // R11: registry identity only. An unregistered controller player is a corrupt
         // session and must fail explicitly, never fall back to a display name.

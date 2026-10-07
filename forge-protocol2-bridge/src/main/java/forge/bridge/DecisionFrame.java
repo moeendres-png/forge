@@ -233,6 +233,19 @@ public final class DecisionFrame {
         return true;
     }
 
+    /** Whether a submission already answered this frame (free input or a consumed option). */
+    synchronized boolean isAnswered() {
+        if (answered) {
+            return true;
+        }
+        for (Option option : options) {
+            if (option.isConsumed()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static Option passOption() {
         return new Option("pass_priority", "Pass priority", null, null, null, true, false);
     }

@@ -694,8 +694,8 @@ public final class StateProjection {
 
     /**
      * A card's identity is referenced only when the deciding player may see
-     * it: a face-up card in a public zone, or a card the actor owns (their
-     * own hand or library). Anything else (an opponent's unrevealed hand
+     * it: a face-up card in a public zone, a card in the actor's own hand, or
+     * a library card the engine lets the actor look at. Anything else (an opponent's unrevealed hand
      * card, a face-down permanent) is marked hidden, never named or numbered,
      * matching the "&lt;hidden&gt;" labels of those frames.
      */
@@ -714,6 +714,13 @@ public final class StateProjection {
             case Stack:
             case Command:
                 return true;
+            case Library:
+                // #561 B2b C5 (the library part of G4-C1): a library card is
+                // hidden from everyone, its owner included (CR 401.2), unless
+                // the engine itself lets this player look at it. Materialized
+                // checkpoint objects are therefore never referenced by name or
+                // id to any principal.
+                return actor != null && card.mayPlayerLook(actor);
             default:
                 return actor != null && actor.equals(card.getOwner());
         }

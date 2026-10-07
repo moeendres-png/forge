@@ -5,11 +5,15 @@ import forge.game.Match;
 import com.google.common.eventbus.Subscribe;
 import forge.game.card.Card;
 import forge.game.event.GameEventPlayerPriority;
+import forge.game.event.GameEvent;
 import forge.game.event.GameEventShuffle;
 import forge.game.event.GameEventTurnBegan;
+import forge.game.event.GameEventTurnPhase;
+import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerView;
 import forge.game.zone.ZoneType;
+import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -207,6 +211,7 @@ public final class BridgeSession {
     public BridgeSession(String gameId, Map<String, String> deckHandleToDeckId) {
         this.gameId = gameId;
         this.deckHandleToDeckId = Collections.unmodifiableMap(new LinkedHashMap<>(deckHandleToDeckId));
+        this.rulesRngTape = new RulesRngTape(gameId);
     }
 
     public String getGameId() {
@@ -219,14 +224,355 @@ public final class BridgeSession {
     // shuffled), read by the orchestration channel's constructed state.
     private final Map<Integer, Integer> libraryShuffles = new ConcurrentHashMap<>();
 
-    /** Subscribed to the game's event bus before the game thread starts. */
+    /**
+     * Subscribed to the game's event bus before the game thread starts. Counts
+     * the engine's library shuffles and confirms each G4-K tape entry. Guava
+     * logs and swallows subscriber exceptions, so any failure here poisons the
+     * tape instead of silently losing a shuffle.
+     */
     public final class ShuffleCounter {
         @Subscribe
         public void onShuffle(GameEventShuffle event) {
-            if (event.player() != null) {
-                libraryShuffles.merge(event.player().getId(), 1, Integer::sum);
+            try {
+                if (event.player() != null) {
+                    libraryShuffles.merge(event.player().getId(), 1, Integer::sum);
+                }
+                final Player player = registeredPlayerOf(event.player());
+                if (player == null) {
+                    rulesRngTape.poison("SHUFFLE_PLAYER_UNKNOWN");
+                    return;
+                }
+                rulesRngTape.onShuffleEvent(seatOf(player));
+                if ("throw_in_shuffle_subscriber".equals(rngTapeFaultForTests)) {
+                    throw new IllegalStateException("injected shuffle subscriber failure");
+                }
+            } catch (Throwable t) {
+                rulesRngTape.poison("SHUFFLE_SUBSCRIBER_ERROR");
             }
         }
+    }
+
+    /**
+     * G4-K: the Rules-RNG call count at every engine event, the lower bound of
+     * the next shuffle's coordinates. Subscribed on the {@link GameEvent}
+     * supertype; a failure poisons the tape.
+     */
+    public final class RngEventObserver {
+        @Subscribe
+        public void onEvent(GameEvent event) {
+            try {
+                rulesRngTape.observeEvent(forge.util.MyRandom.getCallCount());
+            } catch (Throwable t) {
+                rulesRngTape.poison("RNG_OBSERVER_ERROR");
+            }
+        }
+    }
+
+    /** The registered player behind an event's player view, by identity of the view. */
+    private Player registeredPlayerOf(PlayerView view) {
+        if (view == null) {
+            return null;
+        }
+        for (Player player : registryPlayers()) {
+            if (PlayerView.get(player) == view) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    // ---- G4-K keyed Rules-RNG tape (#561 batch 6 B2b) ----
+
+    /**
+     * Test-only stimulus for the tape's fail-closed controls. {@code null} is
+     * production; {@code "throw_in_shuffle_subscriber"} makes the shuffle
+     * subscriber throw after it has recorded its entry.
+     */
+    static volatile String rngTapeFaultForTests;
+
+    private final RulesRngTape rulesRngTape;
+
+    RulesRngTape rulesRngTapeForTests() {
+        return rulesRngTape;
+    }
+
+    /**
+     * Called by the shuffled player's controller from {@code Player.shuffle},
+     * after the Rules RNG shuffled and before the zone is rewritten: the zone
+     * still holds the order before the shuffle. Never throws into the engine.
+     */
+    void recordControllerShuffle(Player player, Iterable<Card> shuffled) {
+        try {
+            final long callsAfter = forge.util.MyRandom.getCallCount();
+            final List<Card> before = new ArrayList<>(player.getCardsIn(ZoneType.Library));
+            final List<Card> after = new ArrayList<>();
+            for (Card card : shuffled) {
+                after.add(card);
+            }
+            rulesRngTape.onControllerShuffle(seatOf(player), before, after, callsAfter);
+        } catch (Throwable t) {
+            rulesRngTape.poison("SHUFFLE_RESULT_UNREADABLE");
+        }
+    }
+
+    /**
+     * PARKED: a frame is waiting for an external answer. CLEAN_TERMINAL: the
+     * game thread ended a game that is over. FAILED / CLOSED: a failed or
+     * closed session. RUNNING: anything else (no digest of a moving engine).
+     */
+    String engineState() {
+        synchronized (this) {
+            final Status s = status;
+            if (s == Status.FAILED) {
+                return "FAILED";
+            }
+            if (s == Status.CLOSED) {
+                return "CLOSED";
+            }
+            if (s == Status.OVER) {
+                final Thread thread = gameThread;
+                return thread != null && thread.isAlive() ? "RUNNING" : "CLEAN_TERMINAL";
+            }
+            if (s == Status.RUNNING && currentFrame != null && currentHandoff != null
+                    && currentHandoff.isEmpty() && !currentFrame.isAnswered()) {
+                return "PARKED";
+            }
+            return "RUNNING";
+        }
+    }
+
+    /**
+     * The {@code get_rules_rng_tape} payload: the engine's library-shuffle
+     * results and a privileged state digest, HMACs under the orchestration key
+     * only. Read only while parked or cleanly ended; otherwise only the engine
+     * state is reported. Refuses with a code when the tape is poisoned or
+     * incomplete.
+     */
+    JsonObject rulesRngTapePayload() {
+        final JsonObject payload = new JsonObject();
+        payload.addProperty("game_id", gameId);
+        payload.addProperty("observation_scope", "orchestration_keyed_digests");
+        payload.addProperty("tape_schema", RulesRngTape.SCHEMA);
+        final String engineState = engineState();
+        payload.addProperty("engine_state", engineState);
+        if (!"PARKED".equals(engineState) && !"CLEAN_TERMINAL".equals(engineState)) {
+            return payload;
+        }
+        final DecisionFrame frame = currentFrame;
+        payload.addProperty("rules_seed_explicit", forge.util.MyRandom.isExplicitSeed());
+        payload.addProperty("rules_random_calls", forge.util.MyRandom.getCallCount());
+        payload.add("rules_rng_results", rulesRngTape.results());
+        payload.addProperty("privileged_state_digest", privilegedStateDigest());
+        // The engine must still be in the same state after the digest: an
+        // answered decision or an ended thread voids it.
+        if (!engineState.equals(engineState()) || frame != currentFrame) {
+            final JsonObject moved = new JsonObject();
+            moved.addProperty("game_id", gameId);
+            moved.addProperty("observation_scope", "orchestration_keyed_digests");
+            moved.addProperty("tape_schema", RulesRngTape.SCHEMA);
+            moved.addProperty("engine_state", "RUNNING");
+            return moved;
+        }
+        return payload;
+    }
+
+    /**
+     * HMAC under the orchestration key over the privileged game state: the
+     * constructed-state projection plus, per seat, every zone's card names
+     * (library and graveyard in order, the rest as sorted multisets) and the
+     * battlefield's tapped state. Names enter only the HMAC input.
+     */
+    String privilegedStateDigest() {
+        final List<String> tokens = new ArrayList<>();
+        tokens.add("forge-privileged-state/1");
+        tokens.add(StateProjection.constructedState(this).toString());
+        final Game current = game;
+        tokens.add("stack:" + current.getStack().size());
+        for (Player player : registryPlayers()) {
+            final String seat = "P" + (seatOf(player) + 1);
+            for (ZoneType zone : new ZoneType[] { ZoneType.Library, ZoneType.Graveyard }) {
+                tokens.add(seat + ":" + zone.name());
+                for (Card card : player.getCardsIn(zone)) {
+                    tokens.add(card.getName());
+                }
+            }
+            for (ZoneType zone : new ZoneType[] { ZoneType.Hand, ZoneType.Exile, ZoneType.Command,
+                    ZoneType.Battlefield }) {
+                tokens.add(seat + ":" + zone.name());
+                final List<String> names = new ArrayList<>();
+                for (Card card : player.getCardsIn(zone)) {
+                    names.add(card.getName() + (zone == ZoneType.Battlefield
+                            ? (card.isTapped() ? "|T" : "|U") : ""));
+                }
+                Collections.sort(names);
+                tokens.addAll(names);
+            }
+        }
+        return OrchestrationKey.digest(tokens);
+    }
+
+    // ---- B2b checkpoint library materialization (C1, C2, C4-C8) ----
+
+    /**
+     * Test-only stimuli for the checkpoint controls. {@code null} is
+     * production; {@code "swap_positions"}, {@code "extra_object"} and
+     * {@code "drop_object"} corrupt the materialized order before verification.
+     */
+    static volatile String checkpointFaultForTests;
+
+    private volatile CheckpointMaterialization checkpointPlan;
+    private final java.util.concurrent.atomic.AtomicInteger checkpointInvocations =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private volatile String checkpointFailure;
+    private volatile CheckpointMaterialization.Result checkpointResult;
+    private volatile long firstPostCheckpointRevision = -1;
+
+    CheckpointMaterialization getCheckpointPlan() {
+        return checkpointPlan;
+    }
+
+    synchronized void setCheckpointPlan(CheckpointMaterialization plan) {
+        this.checkpointPlan = plan;
+    }
+
+    /** Whether a declared complete checkpoint library covers {@code playerId}. */
+    boolean checkpointDeclaresLibrary(String playerId) {
+        final CheckpointMaterialization plan = checkpointPlan;
+        return plan != null && plan.declaresLibrary(CheckpointMaterialization.principalId(playerId));
+    }
+
+    String checkpointFailureForTests() {
+        return checkpointFailure;
+    }
+
+    CheckpointMaterialization.Result checkpointResultForTests() {
+        return checkpointResult;
+    }
+
+    long firstPostCheckpointRevision() {
+        return firstPostCheckpointRevision;
+    }
+
+    /**
+     * The C1 seam: subscribed before the game thread starts, runs when turn
+     * one enters its precombat main phase ({@code PhaseHandler} fires the
+     * phase event before the phase's turn-based actions and before its first
+     * priority).
+     */
+    public final class CheckpointSeamSubscriber {
+        @Subscribe
+        public void onPhase(GameEventTurnPhase event) {
+            handleCheckpointSeam(event);
+        }
+    }
+
+    void handleCheckpointSeam(final GameEventTurnPhase event) {
+        final CheckpointMaterialization plan = checkpointPlan;
+        if (plan == null || event == null || event.phase() != PhaseType.MAIN1) {
+            return;
+        }
+        try {
+            final Game intended = game;
+            if (intended == null || intended.getPhaseHandler().getTurn() != 1) {
+                return;
+            }
+            final Player active = intended.getPhaseHandler().getPlayerTurn();
+            if (active == null || PlayerView.get(active) != event.playerTurn()) {
+                recordCheckpointFailure("CHECKPOINT_SEAM_MISMATCH");
+                return;
+            }
+            if (checkpointInvocations.incrementAndGet() > 1) {
+                recordCheckpointFailure("CHECKPOINT_SEAM_REENTERED");
+                return;
+            }
+            final CheckpointMaterialization.Result result =
+                    plan.apply(this, intended, checkpointFaultForTests);
+            synchronized (this) {
+                checkpointResult = result;
+                // C8: every frame parked so far showed the state before the
+                // checkpoint; tapes start at the next revision.
+                firstPostCheckpointRevision = frameSeq.get() + 1;
+            }
+            audit("checkpoint_materialized",
+                    detail("first_post_checkpoint_revision", Long.toString(firstPostCheckpointRevision)));
+        } catch (CheckpointMaterialization.Rejected rejected) {
+            recordCheckpointFailure(rejected.code);
+        } catch (Throwable t) {
+            recordCheckpointFailure("CHECKPOINT_MATERIALIZATION_ERROR");
+        }
+    }
+
+    private void recordCheckpointFailure(final String code) {
+        final String reason = "CHECKPOINT_MATERIALIZATION_REJECTED:" + code;
+        synchronized (this) {
+            if (checkpointFailure == null) {
+                checkpointFailure = code;
+            }
+            if (status == Status.RUNNING || status == Status.CREATED) {
+                status = Status.FAILED;
+                failReason = reason;
+            }
+        }
+        audit("checkpoint_failed", detail("code", code));
+        abortParkedFrame();
+    }
+
+    /**
+     * Park-time guard: no decision is ever offered after a failed checkpoint,
+     * or at or past the seam without a completed checkpoint (a seam that never
+     * fired fails closed here).
+     */
+    private void requireCheckpointIntact() {
+        final CheckpointMaterialization plan = checkpointPlan;
+        if (plan == null) {
+            return;
+        }
+        if (checkpointFailure == null && checkpointResult == null) {
+            final Game current = game;
+            if (current != null) {
+                final int turn = current.getPhaseHandler().getTurn();
+                final PhaseType phase = current.getPhaseHandler().getPhase();
+                final boolean pastSeam = turn > 1 || (turn == 1 && phase != null
+                        && !phase.isBefore(PhaseType.MAIN1));
+                if (pastSeam) {
+                    recordCheckpointFailure("CHECKPOINT_SEAM_MISSED");
+                }
+            }
+        }
+        if (checkpointFailure != null) {
+            throw new SessionAbortedException("checkpoint materialization failed");
+        }
+    }
+
+    /**
+     * The orchestration channel's checkpoint report: status, the first
+     * post-checkpoint frame revision (C8) and coded per-kind check counts (C6).
+     * Never a card name, never a position, never an object reference.
+     */
+    JsonObject checkpointPayload() {
+        final JsonObject payload = new JsonObject();
+        final CheckpointMaterialization plan = checkpointPlan;
+        if (plan == null) {
+            payload.addProperty("status", "NOT_DECLARED");
+            return payload;
+        }
+        final String failure = checkpointFailure;
+        final CheckpointMaterialization.Result result = checkpointResult;
+        if (failure != null) {
+            payload.addProperty("status", "FAILED");
+            payload.addProperty("failure_code", failure);
+        } else if (result == null) {
+            payload.addProperty("status", "PENDING");
+        } else {
+            payload.addProperty("status", "MATERIALIZED");
+            payload.addProperty("first_post_checkpoint_revision", firstPostCheckpointRevision);
+            final JsonObject checks = new JsonObject();
+            for (Map.Entry<String, Integer> entry : result.checksByKind.entrySet()) {
+                checks.addProperty(entry.getKey(), entry.getValue());
+            }
+            payload.add("lossless_hidden_checks", checks);
+        }
+        return payload;
     }
 
     /** The engine's library shuffles of {@code player} so far. */
@@ -648,6 +994,11 @@ public final class BridgeSession {
         }
         if (capturedGame != null) {
             capturedGame.subscribeToEvents(new ShuffleCounter());
+            capturedGame.subscribeToEvents(new RngEventObserver());
+            if (checkpointPlan != null) {
+                capturedGame.subscribeToEvents(new CheckpointSeamSubscriber());
+                audit("checkpoint_seam_subscribed", detail("game_id", gameId));
+            }
         }
         if (capturedPlan == null) {
             launchStarter(() -> capturedMatch.startGame(capturedGame));
@@ -756,6 +1107,7 @@ public final class BridgeSession {
      */
     public FrameAnswer parkFrame(DecisionFrame.Kind kind, Player actor,
             DecisionFrame.Status frameStatus, String reason, List<DecisionFrame.Option> options) {
+        requireCheckpointIntact();
         final long revision = frameSeq.incrementAndGet();
         final String actorId = playerIdOf(actor);
         final int seat = seatOf(actor);
@@ -790,6 +1142,7 @@ public final class BridgeSession {
     public FrameAnswer parkDividedAllocation(Player actor,
             List<DecisionFrame.Option> targetOptions, int total, int minPerTarget,
             boolean dividedUpTo) {
+        requireCheckpointIntact();
         final long revision = frameSeq.incrementAndGet();
         final String actorId = playerIdOf(actor);
         final int seat = seatOf(actor);
@@ -824,6 +1177,7 @@ public final class BridgeSession {
      */
     public FrameAnswer parkFreeInput(DecisionFrame.Kind kind, Player actor, String actionType,
             String title, long min, long max, List<DecisionFrame.Option> sentinel) {
+        requireCheckpointIntact();
         final long revision = frameSeq.incrementAndGet();
         final String actorId = playerIdOf(actor);
         final int seat = seatOf(actor);

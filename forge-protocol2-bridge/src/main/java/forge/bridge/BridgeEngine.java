@@ -137,6 +137,8 @@ public final class BridgeEngine {
                     return getLegalActions(request);
                 case BridgeProtocol.GET_CONSTRUCTED_STATE:
                     return getConstructedState(request);
+                case BridgeProtocol.GET_RULES_RNG_TAPE:
+                    return getRulesRngTape(request);
                 case BridgeProtocol.SUBMIT_ACTION:
                     return submitAction(request);
                 case BridgeProtocol.PASS_PRIORITY:
@@ -258,6 +260,12 @@ public final class BridgeEngine {
         caps.addProperty("constructed_state_supported", true);
         caps.addProperty("constructed_state_scope",
                 "orchestration_keyed_digests_refused_without_launch_key");
+        // G4-K (#561 batch 6 B2b): library-shuffle results only, keyed.
+        caps.addProperty("rules_rng_tape_supported", true);
+        caps.addProperty("rules_rng_tape_scope",
+                "orchestration_keyed_library_shuffle_results_refused_without_launch_key");
+        // B2b: lossless checkpoint library at turn one precombat main.
+        caps.addProperty("checkpoint_library_materialization_supported", true);
         caps.addProperty("concede_supported", true);
         caps.addProperty("game_shutdown_supported", true);
         caps.addProperty("engine_shutdown_supported", true);
@@ -529,6 +537,25 @@ public final class BridgeEngine {
             }
             session.setScenarioPlan(plan);
         }
+        // #561 batch 6 B2b: lossless checkpoint library (the record's own
+        // deck_state + semantic_objects). Refusals carry a code and at most a
+        // semantic or player id, never a card name.
+        CheckpointMaterialization checkpoint = null;
+        if (gameRequest.has("checkpoint_materialization")
+                && !gameRequest.get("checkpoint_materialization").isJsonNull()) {
+            if (!gameRequest.get("checkpoint_materialization").isJsonObject()) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.MALFORMED_REQUEST,
+                        "checkpoint_materialization must be an object", (int) session.auditSize());
+            }
+            try {
+                checkpoint = CheckpointMaterialization.parse(
+                        gameRequest.getAsJsonObject("checkpoint_materialization"));
+            } catch (CheckpointMaterialization.Rejected e) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
+                        "checkpoint materialization rejected: " + e.getMessage(),
+                        (int) session.auditSize());
+            }
+        }
         final List<RegisteredPlayer> players = new ArrayList<>(handles.size());
         for (int i = 0; i < handles.size(); i++) {
             final ImportedDeck deck = pod.get(i);
@@ -548,6 +575,26 @@ public final class BridgeEngine {
                     "engine rejected game creation", 0);
         }
         session.attach(match, game);
+        if (checkpoint != null) {
+            final Map<String, List<String>> mainboards = new LinkedHashMap<>();
+            for (int i = 0; i < pod.size(); i++) {
+                final List<String> names = new ArrayList<>();
+                for (Map.Entry<PaperCard, Integer> entry : pod.get(i).forgeDeck.getMain()) {
+                    for (int n = 0; n < entry.getValue(); n++) {
+                        names.add(entry.getKey().getName());
+                    }
+                }
+                mainboards.put("p" + (i + 1), names);
+            }
+            try {
+                checkpoint.validate(session, mainboards, session.getScenarioPlan());
+            } catch (CheckpointMaterialization.Rejected e) {
+                return BridgeProtocol.error(request.requestId, BridgeErrors.GAME_CREATION_FAILED,
+                        "checkpoint materialization rejected: " + e.getMessage(),
+                        (int) session.auditSize());
+            }
+            session.setCheckpointPlan(checkpoint);
+        }
         // WSR30: the creation transaction installs the requested seed into the
         // engine and acknowledges from the engine's own accepted state. A field
         // populated only from the request would prove what the caller sent, not
@@ -683,6 +730,46 @@ public final class BridgeEngine {
         } catch (BridgeProjectionException e) {
             return BridgeProtocol.error(request.requestId, BridgeErrors.PROJECTION_FAILED,
                     "authoritative state unreadable: " + e.getField(), (int) session.auditSize());
+        }
+        // B2b C6/C8: coded per-kind verification counts and the first frame
+        // revision after the checkpoint; never a name, position or object ref.
+        payload.add("checkpoint_materialization", session.checkpointPayload());
+        return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
+    }
+
+    /**
+     * G4-K keyed Rules-RNG tape (Commander-Lab #561 batch 6 B2b): the
+     * engine's library-shuffle results and a privileged state digest for the
+     * Lab's clean-process replay twin. An orchestration channel, never a
+     * principal observation: refused on every launch without an orchestration
+     * key, exactly as {@link #getConstructedState}; every result leaves only as
+     * an HMAC under that key, with no card name and no native id.
+     */
+    private String getRulesRngTape(BridgeProtocol.Request request) {
+        if (!OrchestrationKey.enabled()) {
+            final String problem = OrchestrationKey.problem();
+            return BridgeProtocol.error(request.requestId,
+                    BridgeErrors.ORCHESTRATION_CHANNEL_NOT_ENABLED,
+                    problem == null ? "this launch carries no orchestration key" : problem, 0);
+        }
+        final BridgeSession session = requireSession(request);
+        if (session == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.UNKNOWN_GAME,
+                    "unknown game_id: " + request.gameId, 0);
+        }
+        if (session.getGame() == null) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.INTERNAL_ERROR,
+                    "game object missing", (int) session.auditSize());
+        }
+        final JsonObject payload;
+        try {
+            payload = session.rulesRngTapePayload();
+        } catch (RulesRngTape.Refused e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.RULES_RNG_TAPE_FAILED,
+                    e.getMessage(), (int) session.auditSize());
+        } catch (BridgeProjectionException e) {
+            return BridgeProtocol.error(request.requestId, BridgeErrors.RULES_RNG_TAPE_FAILED,
+                    "PRIVILEGED_STATE_UNREADABLE", (int) session.auditSize());
         }
         return BridgeProtocol.ok(request.requestId, payload, (int) session.auditSize());
     }

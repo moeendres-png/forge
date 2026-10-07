@@ -38,5 +38,7 @@ public final class BridgeErrors {
     public static final String EVENT_LOG_UNSUPPORTED = "event_log_unsupported";
     public static final String PROJECTION_FAILED = "projection_failed";
     public static final String ORCHESTRATION_CHANNEL_NOT_ENABLED = "orchestration_channel_not_enabled";
+    /** The keyed Rules-RNG tape is poisoned, incomplete or unreadable (message is a code). */
+    public static final String RULES_RNG_TAPE_FAILED = "rules_rng_tape_failed";
     public static final String INTERNAL_ERROR = "internal_error";
 }
