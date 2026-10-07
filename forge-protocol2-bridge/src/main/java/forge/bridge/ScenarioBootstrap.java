@@ -4,9 +4,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import forge.StaticData;
+import forge.card.CardStateName;
 import forge.game.Game;
+import forge.game.ability.ApiType;
 import forge.game.card.Card;
 import forge.game.player.Player;
+import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 import forge.item.PaperCard;
 
@@ -75,15 +78,22 @@ public final class ScenarioBootstrap {
         public final boolean tapped;
         public final Map<String, Integer> counters;
         public final String attachedTo;
+        /** E-B2: place the permanent face down (CR 708.2); false by default. */
+        public final boolean faceDown;
+        /** E-B2: face-down kind; only {@code MANIFESTED} (CR 701.34) is supported. */
+        public final String faceDownType;
 
         Placement(String cardName, String controllerId, String ownerId, boolean tapped,
-                Map<String, Integer> counters, String attachedTo) {
+                Map<String, Integer> counters, String attachedTo, boolean faceDown,
+                String faceDownType) {
             this.cardName = cardName;
             this.controllerId = controllerId;
             this.ownerId = ownerId;
             this.tapped = tapped;
             this.counters = counters;
             this.attachedTo = attachedTo;
+            this.faceDown = faceDown;
+            this.faceDownType = faceDownType;
         }
     }
 
@@ -164,8 +174,35 @@ public final class ScenarioBootstrap {
                 if (entry.has("attached_to") && !entry.get("attached_to").isJsonNull()) {
                     attachedTo = cleanCardName(optString(entry, "attached_to", ""));
                 }
+                boolean faceDown = false;
+                if (entry.has("face_down") && !entry.get("face_down").isJsonNull()) {
+                    final JsonElement faceDownElement = entry.get("face_down");
+                    if (!faceDownElement.isJsonPrimitive()
+                            || !faceDownElement.getAsJsonPrimitive().isBoolean()) {
+                        throw new IllegalArgumentException("face_down must be a boolean");
+                    }
+                    faceDown = faceDownElement.getAsBoolean();
+                }
+                String faceDownType = "";
+                if (faceDown) {
+                    if (!attachedTo.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "face_down placement cannot be attached");
+                    }
+                    final JsonElement typeElement = entry.has("face_down_type")
+                            ? entry.get("face_down_type") : null;
+                    final String typeText = typeElement != null && typeElement.isJsonPrimitive()
+                            && typeElement.getAsJsonPrimitive().isString()
+                            ? typeElement.getAsString() : null;
+                    if (!"MANIFESTED".equals(typeText)) {
+                        throw new IllegalArgumentException("face_down_type unsupported: "
+                                + (typeText == null ? "<missing>" : typeText));
+                    }
+                    faceDownType = typeText;
+                }
                 plan.battlefield.add(new Placement(name, controller, owner.isEmpty()
-                        ? controller : owner, tapped, counters, attachedTo));
+                        ? controller : owner, tapped, counters, attachedTo, faceDown,
+                        faceDownType));
             }
         }
         if (neutral.has("hands") && neutral.get("hands").isJsonObject()) {
@@ -317,6 +354,9 @@ public final class ScenarioBootstrap {
                 throw new IllegalStateException("battlefield placement failed");
             }
             placed.add(card);
+            if (placement.faceDown) {
+                placeFaceDown(session, placement, card);
+            }
             final Map<String, String> details = new LinkedHashMap<>();
             details.put("card", placement.cardName);
             details.put("controller", placement.controllerId);
@@ -361,6 +401,62 @@ public final class ScenarioBootstrap {
             session.audit("scenario_attached", details);
         }
         return placed;
+    }
+
+    /**
+     * E-B2: places a requested face-down permanent the way the engine's own
+     * state setup does ({@code GameState.java} FaceDown/Manifested branch):
+     * {@code turnFaceDown(true)}, {@code setManifested(EmptySa(Manifest))},
+     * {@code updateStateForView()}. Face-down status is public (CR 708.2);
+     * manifest is CR 701.34. Fails closed if the card did not turn face down.
+     */
+    private static void placeFaceDown(BridgeSession session, Placement placement, Card card) {
+        final boolean turned;
+        try {
+            turned = card.turnFaceDown(true);
+            card.setManifested(new SpellAbility.EmptySa(ApiType.Manifest, card));
+            // The engine view update reads the manifest ability's card state (the
+            // face-down image key); GameState's bare EmptySa leaves it null, so the
+            // true (original) state is recorded here before the view refresh.
+            card.getManifestedSA().setCardState(card.getState(CardStateName.Original));
+            card.updateStateForView();
+        } catch (Throwable t) {
+            throw new IllegalStateException("face-down placement failed", t);
+        }
+        if (!turned && !card.isFaceDown()) {
+            throw new IllegalStateException(
+                    "face-down placement did not turn face down: " + placement.cardName);
+        }
+        final Map<String, String> details = new LinkedHashMap<>();
+        details.put("card", placement.cardName);
+        details.put("controller", placement.controllerId);
+        details.put("type", placement.faceDownType);
+        session.audit("scenario_placed_face_down", details);
+    }
+
+    /**
+     * Post-untap verification of requested face-down placements: the card must
+     * still be on the battlefield, face down and manifested; anything else
+     * fails closed. Read-only (no state is changed).
+     */
+    static void verifyRequestedFaceDown(Plan plan, List<Card> placed) {
+        if (plan == null) {
+            return;
+        }
+        requireCompletePlacement(plan, placed);
+        for (int i = 0; i < plan.battlefield.size(); i++) {
+            final Placement placement = plan.battlefield.get(i);
+            if (!placement.faceDown) {
+                continue;
+            }
+            final Card card = placed.get(i);
+            if (card == null || !card.isInZone(ZoneType.Battlefield)
+                    || !card.isFaceDown() || !card.isManifested()) {
+                throw new IllegalStateException(
+                        "requested face-down permanent is no longer a face-down manifested "
+                                + "permanent at the post-untap hook: " + placement.cardName);
+            }
+        }
     }
 
     /**
@@ -465,6 +561,7 @@ public final class ScenarioBootstrap {
         }
         requireCompletePlacement(plan, placed);
         applyRequestedTapped(session, plan, placed);
+        verifyRequestedFaceDown(plan, placed);
         // Return natural opening hands to libraries (order hidden; counts natural).
         for (Player player : session.registryPlayers()) {
             final String playerId = session.playerIdOf(player);
