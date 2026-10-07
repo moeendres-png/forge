@@ -401,8 +401,12 @@ public class B2bCheckpointLibraryTest {
         if (last != null) {
             Assert.assertTrue(last.isAnswered(),
                     "the only frame left is a pre-seam frame that was already answered");
+            // Re-submit the answer the pilot already gave (chosen by content):
+            // even a well-formed submission is refused once the seam is missed.
+            final DecisionFrame.Option answered = find(last, DecisionFrame.Option::isConsumed,
+                    "the answered option");
             final BridgeSession.SubmitOutcome outcome = session.submit(last.actorPlayerId,
-                    last.options.get(0).optionId, last.options.get(0).actionType, last.revision);
+                    answered.optionId, answered.actionType, last.revision);
             Assert.assertFalse(outcome.applied, "a decision was accepted after the missed seam");
             Assert.assertEquals(outcome.errorCode, BridgeErrors.SESSION_FAILED);
         }
