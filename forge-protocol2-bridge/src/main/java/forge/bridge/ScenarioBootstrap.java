@@ -417,7 +417,7 @@ public final class ScenarioBootstrap {
             card.getManifestedSA().setCardState(card.getState(CardStateName.Original));
             card.updateStateForView();
         } catch (Throwable t) {
-            throw new IllegalStateException("face-down placement failed");
+            throw new IllegalStateException("face-down placement failed", t);
         }
         if (!turned && !card.isFaceDown()) {
             throw new IllegalStateException(
